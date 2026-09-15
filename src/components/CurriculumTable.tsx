@@ -1,0 +1,774 @@
+import React, { useEffect, useState } from 'react';
+import { 
+  CurriculumStructure, 
+  AppSettings, 
+  Discipline,
+  ModuleData, 
+  PeriodData,
+  getDisciplineChBreakdown 
+} from '../types/curriculum';
+import { 
+  FileText, 
+  Download, 
+  Printer, 
+  Share2, 
+  ChevronDown, 
+  ChevronUp, 
+  Sparkles, 
+  Edit3, 
+  Check, 
+  BookOpen, 
+  Clock, 
+  Layers, 
+  Award,
+  GitBranch,
+  Eye,
+  EyeOff
+} from 'lucide-react';
+import { exportToXLSX, exportToInteractiveHTML, exportToPNG, exportElementToPDF } from '../services/exportService';
+import { RegulatoryValidator } from './RegulatoryValidator';
+import { DcnViewerModal } from './DcnViewerModal';
+import { WorkloadSummaryCard } from './WorkloadSummaryCard';
+import { StructureOfficialHeader } from './StructureOfficialHeader';
+import { getSaberesLabels } from '../utils/nomenclature';
+
+interface CurriculumTableProps {
+  structure: CurriculumStructure;
+  settings: AppSettings;
+  onEdit: (structure: CurriculumStructure) => void;
+  onSwitchToGraph: () => void;
+}
+
+export const CurriculumTable: React.FC<CurriculumTableProps> = ({
+  structure,
+  settings,
+  onEdit,
+  onSwitchToGraph,
+}) => {
+  const [expandedModules, setExpandedModules] = useState<{ [key: string]: boolean }>({});
+  const [activeTab, setActiveTab] = useState<'matrix' | 'regulatory'>('matrix');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('all');
+  const [isExportingPng, setIsExportingPng] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isDcnModalOpen, setIsDcnModalOpen] = useState(false);
+  const [exportToast, setExportToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const [hideCompetenciesInReport, setHideCompetenciesInReport] = useState(
+    structure.hideCompetenciesInReport ?? false
+  );
+  const [hideKnowledgesInReport, setHideKnowledgesInReport] = useState(
+    structure.hideKnowledgesInReport ?? false
+  );
+  const [hideWorkloadSummaryInReport, setHideWorkloadSummaryInReport] = useState(
+    structure.hideWorkloadSummaryInReport ?? false
+  );
+
+  useEffect(() => {
+    setHideCompetenciesInReport(structure.hideCompetenciesInReport ?? false);
+    setHideKnowledgesInReport(structure.hideKnowledgesInReport ?? false);
+    setHideWorkloadSummaryInReport(structure.hideWorkloadSummaryInReport ?? false);
+  }, [structure.id, structure.hideCompetenciesInReport, structure.hideKnowledgesInReport, structure.hideWorkloadSummaryInReport]);
+
+  const structureForExport: CurriculumStructure = {
+    ...structure,
+    hideCompetenciesInReport,
+    hideKnowledgesInReport,
+    hideWorkloadSummaryInReport,
+  };
+
+  const chaTitle = getSaberesLabels(settings.pedagogicalNomenclature);
+
+  const toggleModule = (id: string) => {
+    setExpandedModules((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const expandAll = () => {
+    if (structure.modules) {
+      const all: { [key: string]: boolean } = {};
+      structure.modules.forEach((m) => (all[m.id] = true));
+      setExpandedModules(all);
+    }
+  };
+
+  const collapseAll = () => {
+    setExpandedModules({});
+  };
+
+  const prepareMatrixForCapture = async () => {
+    setActiveTab('matrix');
+    if (structure.modules) {
+      const all: { [key: string]: boolean } = {};
+      structure.modules.forEach((m) => (all[m.id] = true));
+      setExpandedModules(all);
+    }
+    // Aguarda o React pintar o conteúdo expandido
+    await new Promise((r) => setTimeout(r, 120));
+  };
+
+  const handleExportPNG = async () => {
+    setIsExportingPng(true);
+    setExportToast({ message: 'Renderizando e gerando imagem PNG em alta resolução...', type: 'info' });
+    try {
+      await prepareMatrixForCapture();
+      await exportToPNG('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`);
+      setExportToast({ message: 'Imagem PNG gerada com sucesso e download iniciado!', type: 'success' });
+      setTimeout(() => setExportToast(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      setExportToast({ message: 'Erro ao gerar PNG: ' + (err?.message || 'Falha na renderização'), type: 'error' });
+      setTimeout(() => setExportToast(null), 5000);
+    } finally {
+      setIsExportingPng(false);
+    }
+  };
+
+  const handleExportPDF = async () => {
+    setIsExportingPdf(true);
+    setExportToast({ message: 'Gerando PDF com o mesmo visual da tabela...', type: 'info' });
+    try {
+      await prepareMatrixForCapture();
+      await exportElementToPDF('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`);
+      setExportToast({ message: 'PDF gerado com sucesso e download iniciado!', type: 'success' });
+      setTimeout(() => setExportToast(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      setExportToast({ message: 'Erro ao gerar PDF: ' + (err?.message || 'Falha na renderização'), type: 'error' });
+      setTimeout(() => setExportToast(null), 5000);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  // Check unique branches for modular structures
+  const availableBranches = structure.modules
+    ? Array.from(new Set(structure.modules.map((m) => m.branch).filter(Boolean))) as string[]
+    : [];
+
+  const filteredModules = structure.modules?.filter((m) => {
+    if (selectedBranchFilter !== 'all' && m.branch && m.branch !== selectedBranchFilter) {
+      return false;
+    }
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    const titleMatch = m.title.toLowerCase().includes(term);
+    const codeMatch = m.code.toLowerCase().includes(term);
+    const discMatch = m.disciplines?.some((d) => d.name.toLowerCase().includes(term) || d.code.toLowerCase().includes(term));
+    const compMatch = m.competencies?.some((c) => c.name.toLowerCase().includes(term));
+    return titleMatch || codeMatch || discMatch || compMatch;
+  });
+
+  const filteredPeriods = structure.periods?.map((period) => {
+    if (!searchTerm) return period;
+    const term = searchTerm.toLowerCase();
+    const matchingDiscs = period.disciplines.filter(
+      (d) => d.name.toLowerCase().includes(term) || d.code.toLowerCase().includes(term)
+    );
+    return { ...period, disciplines: matchingDiscs };
+  }).filter((p) => p.disciplines.length > 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Top Action Bar */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold text-slate-900">{structure.courseName}</h2>
+              <span className="text-xs font-semibold text-slate-500">
+                Código: <strong className="text-[#002B49] font-mono">{structure.code}</strong>
+              </span>
+              {!structure.hideStatus && (
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                  structure.status === 'Ativa'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : structure.status === 'Em Desativação'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-slate-100 text-slate-700'
+                }`}>
+                  {structure.status}
+                </span>
+              )}
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-[#002B49]">
+                {structure.modality}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Ano/Semestre: <strong className="text-slate-800">{structure.activeYearSemester}</strong>
+              {!structure.hideValidity && structure.validityStart && (
+                <> • Vigência a partir de: <strong className="text-slate-800">{structure.validityStart}</strong></>
+              )}
+              {structure.hideValidity && (
+                <span className="ml-2 text-[11px] text-slate-400 italic">(Vigência oculta no relatório)</span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* Action Buttons: Edit, Switch to Graph, and Exports */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={onSwitchToGraph}
+            className="px-3.5 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs transition flex items-center gap-1.5 border border-indigo-200 shadow-xs"
+          >
+            <GitBranch className="w-4 h-4 text-indigo-600" />
+            Visualização Gráfica / Mapa
+          </button>
+
+          <button
+            onClick={() => setIsDcnModalOpen(true)}
+            className="px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-[#002B49] font-bold text-xs transition flex items-center gap-1.5 border border-blue-200 shadow-xs"
+            title="Visualizar e gerenciar arquivos PDF das DCNs vinculadas a este curso"
+          >
+            <BookOpen className="w-4 h-4 text-[#FF6B00]" />
+            DCNs do Curso {structure.dcns?.length ? `(${structure.dcns.length})` : ''}
+          </button>
+
+          <button
+            onClick={() => onEdit(structure)}
+            className="px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition flex items-center gap-1.5 border border-slate-300"
+          >
+            <Edit3 className="w-4 h-4 text-slate-600" />
+            Editar Estrutura
+          </button>
+
+          {/* Export Dropdown / Buttons */}
+          <div className="flex flex-col items-end gap-2 border-l border-slate-200 pl-2">
+            <div className="flex flex-wrap items-center justify-end gap-3 text-[11px] text-slate-600">
+              <span className="font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                <Eye className="w-3 h-3 text-[#FF6B00]" />
+                Relatório:
+              </span>
+              {structure.structureType === 'modular' && (
+                <>
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={!hideCompetenciesInReport}
+                      onChange={(e) => setHideCompetenciesInReport(!e.target.checked)}
+                      className="rounded text-[#002B49]"
+                    />
+                    <span className="flex items-center gap-1">
+                      {hideCompetenciesInReport ? <EyeOff className="w-3 h-3 text-slate-400" /> : <Eye className="w-3 h-3 text-emerald-600" />}
+                      Saberes
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={!hideKnowledgesInReport}
+                      onChange={(e) => setHideKnowledgesInReport(!e.target.checked)}
+                      className="rounded text-[#002B49]"
+                    />
+                    <span className="flex items-center gap-1">
+                      {hideKnowledgesInReport ? <EyeOff className="w-3 h-3 text-slate-400" /> : <Eye className="w-3 h-3 text-emerald-600" />}
+                      Conhecimentos
+                    </span>
+                  </label>
+                </>
+              )}
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!hideWorkloadSummaryInReport}
+                  onChange={(e) => setHideWorkloadSummaryInReport(!e.target.checked)}
+                  className="rounded text-[#002B49]"
+                />
+                <span className="flex items-center gap-1">
+                  {hideWorkloadSummaryInReport ? <EyeOff className="w-3 h-3 text-slate-400" /> : <Eye className="w-3 h-3 text-emerald-600" />}
+                  Resumo de Carga Horária
+                </span>
+              </label>
+            </div>
+            <div className="flex items-center gap-1">
+            <button
+              onClick={handleExportPDF}
+              disabled={isExportingPdf || isExportingPng}
+              title="Baixar PDF com o mesmo visual da tabela"
+              className="px-3 py-2 rounded-lg bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-semibold transition flex items-center gap-1 shadow-xs disabled:opacity-50"
+            >
+              <FileText className="w-3.5 h-3.5 text-[#FF6B00]" />
+              {isExportingPdf ? 'Gerando...' : 'PDF'}
+            </button>
+
+            <button
+              onClick={() => exportToXLSX(structureForExport, settings)}
+              title="Baixar Planilha Excel XLSX completa"
+              className="px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold transition flex items-center gap-1 shadow-xs"
+            >
+              <Download className="w-3.5 h-3.5" />
+              XLS
+            </button>
+
+            <button
+              onClick={handleExportPNG}
+              disabled={isExportingPng || isExportingPdf}
+              title="Gerar Imagem PNG em Alta Resolução"
+              className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition flex items-center gap-1 shadow-xs disabled:opacity-50"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              {isExportingPng ? 'Gerando...' : 'PNG'}
+            </button>
+
+            <button
+              onClick={() => exportToInteractiveHTML(structureForExport, settings)}
+              title="Exportar HTML Navegável Autônomo"
+              className="px-3 py-2 rounded-lg bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-bold transition flex items-center gap-1 shadow-xs"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              HTML Navegável
+            </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+        {/* Regulatory Constraints Card */}
+        <RegulatoryValidator structure={structure} />
+
+        {/* Feedback Toast for PNG Export */}
+        {exportToast && (
+          <div className={`p-3 rounded-xl border flex items-center gap-2 text-xs font-bold transition animate-in fade-in duration-150 ${
+            exportToast.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+              : exportToast.type === 'error'
+              ? 'bg-rose-50 text-rose-800 border-rose-300'
+              : 'bg-blue-50 text-blue-800 border-blue-300'
+          }`}>
+            <Sparkles className="w-4 h-4 shrink-0 text-[#FF6B00]" />
+            <span>{exportToast.message}</span>
+          </div>
+        )}
+
+      {/* Navigation Sub-Tabs & Filters */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveTab('matrix')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
+              activeTab === 'matrix'
+                ? 'bg-[#002B49] text-white shadow-sm'
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            Matriz Curricular ({structure.structureType === 'modular' ? 'Módulos' : 'Períodos'})
+          </button>
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2">
+          {structure.structureType === 'modular' && availableBranches.length > 0 && (
+            <select
+              value={selectedBranchFilter}
+              onChange={(e) => setSelectedBranchFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-700 focus:ring-2 focus:ring-[#002B49]"
+            >
+              <option value="all">Todas as Trilhas / Ramificações</option>
+              {availableBranches.map((b) => (
+                <option key={b} value={b}>
+                  Trilha {b}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <input
+            type="text"
+            placeholder="Buscar por nome ou código..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#002B49] w-52"
+          />
+
+          {structure.structureType === 'modular' && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={expandAll}
+                className="px-2.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium"
+              >
+                Expandir CHA
+              </button>
+              <button
+                onClick={collapseAll}
+                className="px-2.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium"
+              >
+                Recolher
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main Printable / Capture Area */}
+      <div id="curriculum-print-area" className="space-y-6 bg-slate-50/50 p-2 sm:p-4 rounded-xl border border-slate-100">
+        <StructureOfficialHeader structure={structure} />
+
+        {/* TAB 1: Matriz Curricular */}
+        {activeTab === 'matrix' && (
+          <>
+            {/* Disciplinar View */}
+            {structure.structureType === 'disciplinar' && (
+              <div className="space-y-6">
+                {filteredPeriods?.map((period) => (
+                  <div 
+                    key={period.id} 
+                    className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
+                  >
+                    {/* Period Header */}
+                    <div className="bg-[#002B49] text-white px-5 py-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-7 h-7 rounded-lg bg-[#FF6B00] font-black text-xs flex items-center justify-center text-white shadow-xs">
+                          {period.number}
+                        </span>
+                        <h4 className="font-bold text-sm tracking-wide">
+                          {period.number}º Período - Disciplinas Obrigatórias / Eletivas
+                        </h4>
+                      </div>
+                      <div className="text-xs font-semibold bg-white/10 px-3 py-1 rounded-full text-blue-100 flex items-center gap-2">
+                        <span>{period.totalCredits} Créditos</span>
+                        <span>•</span>
+                        <span className="text-[#FF7A00] font-bold">{period.totalHours} Horas</span>
+                      </div>
+                    </div>
+
+                    {/* Table */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[900px] text-left text-xs">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[11px]">
+                          <tr>
+                            <th className="px-3 py-3 w-20">Código</th>
+                            <th className="px-3 py-3 min-w-[200px]">Nome da Disciplina</th>
+                            <th className="px-2.5 py-3 text-center w-24">Tipo</th>
+                            <th className="px-2.5 py-3 text-center w-28">Avaliação</th>
+                            <th className="px-2 py-3 text-center w-16">Créditos</th>
+                            <th className="px-2.5 py-3 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">
+                              <span className="block font-bold">CH Presencial</span>
+                            </th>
+                            <th className="px-2.5 py-3 text-center w-24 bg-sky-50/70 text-sky-900 border-l border-slate-200">
+                              <span className="block font-bold">CH Síncrona</span>
+                            </th>
+                            <th className="px-2.5 py-3 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200">
+                              <span className="block font-bold whitespace-nowrap">CH Síncrona-Mediada</span>
+                            </th>
+                            <th className="px-2.5 py-3 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">
+                              <span className="block font-bold">CH Assíncrona</span>
+                            </th>
+                            <th className="px-2.5 py-3 text-center w-20 border-l border-slate-200">
+                              <span className="block font-bold">Total</span>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {period.disciplines.map((disc) => {
+                            const chBd = getDisciplineChBreakdown(disc);
+                            return (
+                              <tr key={disc.id} className="hover:bg-blue-50/40 transition">
+                                <td className="px-3 py-2.5 font-mono font-bold text-[#002B49] text-xs whitespace-nowrap">
+                                  {disc.code}
+                                </td>
+                                <td className="px-3 py-2.5 font-medium text-slate-900 text-xs">
+                                  {disc.name}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-slate-600">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                    disc.type === 'Obrigatória' ? 'bg-slate-100 text-slate-800' : 'bg-purple-100 text-purple-800'
+                                  }`}>
+                                    {disc.type}
+                                  </span>
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-slate-500 text-xs">
+                                  {disc.evaluationForm || 'Nota Oficial'}
+                                </td>
+                                <td className="px-2 py-2.5 text-center font-bold text-slate-700 text-xs">
+                                  {disc.credits}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
+                                  {chBd.presential > 0 ? (
+                                    <span className="text-blue-900 font-black">{chBd.presential}h</span>
+                                  ) : (
+                                    <span className="text-slate-300 font-normal">0h</span>
+                                  )}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-sky-50/20 border-l border-slate-100">
+                                  {chBd.sync > 0 ? (
+                                    <span className="text-sky-800 font-black">{chBd.sync}h</span>
+                                  ) : (
+                                    <span className="text-slate-300 font-normal">0h</span>
+                                  )}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-indigo-50/20 border-l border-slate-100">
+                                  {chBd.syncMediated > 0 ? (
+                                    <span className="text-indigo-800 font-black">{chBd.syncMediated}h</span>
+                                  ) : (
+                                    <span className="text-slate-300 font-normal">0h</span>
+                                  )}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-purple-50/20 border-l border-slate-100">
+                                  {chBd.async > 0 ? (
+                                    <span className="text-purple-800 font-black">{chBd.async}h</span>
+                                  ) : (
+                                    <span className="text-slate-300 font-normal">0h</span>
+                                  )}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center font-black text-xs text-[#FF6B00] border-l border-slate-100">
+                                  {chBd.total}h
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot className="bg-slate-50 border-t border-slate-200 text-xs font-bold text-slate-700">
+                          {(() => {
+                            const pPres = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
+                            const pSync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).sync, 0);
+                            const pSyncMed = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).syncMediated, 0);
+                            const pAsync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
+                            const pTot = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).total, 0);
+                            return (
+                              <tr>
+                                <td colSpan={4} className="px-3 py-2.5 text-slate-600 text-right">
+                                  Subtotal do {period.number}º Período
+                                </td>
+                                <td className="px-2 py-2.5 text-center text-slate-900 font-bold">
+                                  {period.totalCredits}
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                  {pPres}h
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-sky-900 font-black border-l border-slate-200 bg-sky-50/50">
+                                  {pSync}h
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
+                                  {pSyncMed}h
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
+                                  {pAsync}h
+                                </td>
+                                <td className="px-2.5 py-2.5 text-center text-[#FF6B00] font-black border-l border-slate-200 bg-orange-50/60">
+                                  {pTot || period.totalHours}h
+                                </td>
+                              </tr>
+                            );
+                          })()}
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Modular View */}
+            {structure.structureType === 'modular' && (
+              <div className="space-y-6">
+                {filteredModules?.map((mod) => {
+                  const isExpanded = expandedModules[mod.id] ?? true;
+                  const isBranch = !!mod.branch;
+
+                  return (
+                    <div 
+                      key={mod.id} 
+                      className={`bg-white rounded-xl border transition shadow-sm overflow-hidden ${
+                        isBranch ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'
+                      }`}
+                    >
+                      {/* Module Header */}
+                      <div className="bg-[#002B49] text-white px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <span className="px-2.5 py-1 rounded bg-[#FF6B00] text-xs font-black text-white shadow-xs">
+                            Módulo {mod.number}
+                            {mod.branch ? mod.branch : ''}
+                          </span>
+                          {mod.branch && (
+                            <span className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-400/40 text-xs font-bold flex items-center gap-1">
+                              <GitBranch className="w-3.5 h-3.5" />
+                              Trilha {mod.branch}
+                            </span>
+                          )}
+                          <div>
+                            <h4 className="font-bold text-base text-white">{mod.title}</h4>
+                            {mod.competence && (
+                              <p className="text-xs text-blue-200 mt-0.5 whitespace-normal">{mod.competence}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <span className="text-xs text-blue-200 block">Carga Horária:</span>
+                            <span className="text-sm font-black text-[#FF6B00] bg-white/10 px-2.5 py-0.5 rounded">
+                              {mod.hours}h
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() => toggleModule(mod.id)}
+                            className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                            title={isExpanded ? 'Recolher detalhes de CHA' : 'Expandir detalhes de CHA'}
+                          >
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Conhecimentos do Módulo (em estrutura modular) */}
+                      {mod.disciplines && mod.disciplines.length > 0 && (
+                        <div className="p-4 border-b border-slate-100 overflow-x-auto">
+                          <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                            Conhecimentos do Módulo ({mod.disciplines.length})
+                          </h5>
+                          <table className="w-full min-w-[760px] text-left text-xs bg-slate-50/50 rounded-lg border border-slate-200 overflow-hidden">
+                            <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
+                              <tr>
+                                <th className="px-3 py-2 w-20">Código</th>
+                                <th className="px-3 py-2 min-w-[180px]">Conhecimento</th>
+                                <th className="px-2 py-2 text-center w-24">Tipo</th>
+                                <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
+                                <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
+                                <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200/60 bg-white">
+                              {mod.disciplines.map((d) => {
+                                const chBd = getDisciplineChBreakdown(d);
+                                return (
+                                  <tr key={d.id} className="hover:bg-blue-50/30 transition">
+                                    <td className="px-3 py-2 font-mono font-bold text-[#002B49]">{d.code}</td>
+                                    <td className="px-3 py-2 font-medium text-slate-900">{d.name}</td>
+                                    <td className="px-2 py-2 text-center text-slate-600">
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100">{d.type}</span>
+                                    </td>
+                                    <td className="px-2.5 py-2 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
+                                      {chBd.presential > 0 ? <span className="text-blue-900 font-black">{chBd.presential}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                    </td>
+                                    <td className="px-2.5 py-2 text-center font-bold text-xs bg-indigo-50/20 border-l border-slate-100">
+                                      {chBd.syncMediated > 0 ? <span className="text-indigo-800 font-black">{chBd.syncMediated}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                    </td>
+                                    <td className="px-2.5 py-2 text-center font-bold text-xs bg-purple-50/20 border-l border-slate-100">
+                                      {chBd.async > 0 ? <span className="text-purple-800 font-black">{chBd.async}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot className="bg-slate-100/90 border-t border-slate-200 text-xs font-bold text-slate-700">
+                              {(() => {
+                                const mPres = mod.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
+                                const mSyncMed = mod.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).syncMediated, 0);
+                                const mAsync = mod.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
+                                return (
+                                  <tr>
+                                    <td colSpan={3} className="px-3 py-2.5 text-slate-600 text-right">
+                                      Subtotal dos Conhecimentos
+                                    </td>
+                                    <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                      {mPres}h
+                                    </td>
+                                    <td className="px-2.5 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
+                                      {mSyncMed}h
+                                    </td>
+                                    <td className="px-2.5 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
+                                      {mAsync}h
+                                    </td>
+                                  </tr>
+                                );
+                              })()}
+                            </tfoot>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Conhecimentos, Habilidades e Atitudes (CHA / Zabala) */}
+                      {isExpanded && (
+                        <div className="p-5 bg-gradient-to-br from-orange-50/40 to-blue-50/30 space-y-3">
+                          <div className="flex items-center justify-between border-b border-orange-200/60 pb-2">
+                            <div className="flex items-center gap-2">
+                              <Sparkles className="w-4 h-4 text-[#FF6B00]" />
+                              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                                {chaTitle.sectionTitle}
+                              </h5>
+                            </div>
+                            <span className="text-[11px] font-semibold text-orange-700 bg-orange-100 px-2 py-0.5 rounded">
+                              {mod.competencies?.length || 0} saberes mapeados
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            {/* Conhecimento / Conceitual */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-1.5 text-xs font-bold text-blue-900 border-b border-blue-200 pb-1">
+                                <div className="w-2 h-2 rounded-full bg-blue-600"></div>
+                                {chaTitle.c}
+                              </div>
+                              <div className="space-y-1.5">
+                                {mod.competencies
+                                  ?.filter((c) => c.category === 'conhecimento' || c.category === 'conceitual')
+                                  .map((comp) => (
+                                    <div key={comp.id} className="bg-white p-2.5 rounded-lg border border-blue-100 shadow-2xs text-xs">
+                                      <p className="font-medium text-slate-800 leading-relaxed">{comp.name}</p>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+
+                            {/* Habilidade / Procedimental */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900 border-b border-emerald-200 pb-1">
+                                <div className="w-2 h-2 rounded-full bg-emerald-600"></div>
+                                {chaTitle.h}
+                              </div>
+                              <div className="space-y-1.5">
+                                {mod.competencies
+                                  ?.filter((c) => c.category === 'habilidade' || c.category === 'procedimental')
+                                  .map((comp) => (
+                                    <div key={comp.id} className="bg-white p-2.5 rounded-lg border border-emerald-100 shadow-2xs text-xs">
+                                      <p className="font-medium text-slate-800 leading-relaxed">{comp.name}</p>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+
+                            {/* Atitude / Atitudinal */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 border-b border-amber-200 pb-1">
+                                <div className="w-2 h-2 rounded-full bg-amber-600"></div>
+                                {chaTitle.a}
+                              </div>
+                              <div className="space-y-1.5">
+                                {mod.competencies
+                                  ?.filter((c) => c.category === 'atitude' || c.category === 'atitudinal')
+                                  .map((comp) => (
+                                    <div key={comp.id} className="bg-white p-2.5 rounded-lg border border-amber-100 shadow-2xs text-xs">
+                                      <p className="font-medium text-slate-800 leading-relaxed">{comp.name}</p>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {!hideWorkloadSummaryInReport && (
+          <div className="flex justify-center">
+            <WorkloadSummaryCard structure={structure} />
+          </div>
+        )}
+      </div>
+
+      {/* Modal de Visualização e Cadastro de DCNs */}
+      {isDcnModalOpen && (
+        <DcnViewerModal
+          isOpen={isDcnModalOpen}
+          onClose={() => setIsDcnModalOpen(false)}
+          structure={structure}
+        />
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,22 @@
+dist/
+build/
+coverage/
+node_modules/
+.DS_Store
+*.log
+
+# Secrets e ambiente local
+.env
+.env.*
+!.env.example
+
+# Credenciais / chaves
+*.pem
+*.p12
+*serviceAccount*.json
+firebase-adminsdk*.json
+firebase-applet-config.json
+
+# Artefatos locais
+.vscode/
+.idea/
