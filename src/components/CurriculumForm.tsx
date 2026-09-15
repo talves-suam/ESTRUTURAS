@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CurriculumStructure, 
   Course, 
@@ -229,6 +229,19 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     const selected = courses.find((c) => c.id === courseId);
     if (selected) applyCourseData(selected);
   };
+
+  // Após uma carga em lote a lista de cursos muda: revalida a seleção e, em
+  // estruturas novas, traz os valores importados no lugar dos que estão em tela.
+  useEffect(() => {
+    if (courses.length === 0) return;
+    const selected = courses.find((c) => c.id === selectedCourseId);
+    if (!selected) {
+      setSelectedCourseId(courses[0].id);
+      applyCourseData(courses[0]);
+      return;
+    }
+    if (!initialData) applyCourseData(selected);
+  }, [courses]);
 
   // Quick course modal submit
   const handleCreateCourse = async (e: React.FormEvent) => {

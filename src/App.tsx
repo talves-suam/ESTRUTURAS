@@ -292,8 +292,9 @@ export default function App() {
             )}
 
             {/* View: Cadastro / Editor de Estrutura */}
-            {(activeTab === 'new' || currentViewMode === 'form') && (
+            {activeTab === 'new' && currentViewMode === 'form' && (
               <CurriculumForm
+                key={editingStructure?.id || 'nova-estrutura'}
                 initialData={editingStructure}
                 courses={courses}
                 settings={settings}
