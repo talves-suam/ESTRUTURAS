@@ -1,0 +1,6 @@
+{
+  "name": "Gestão de Estruturas Curriculares",
+  "description": "Sistema para cadastro, gerenciamento, validação e exportação de estruturas curriculares disciplinares e modulares com suporte a DCNs, CINE Brasil e diretrizes acadêmicas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
