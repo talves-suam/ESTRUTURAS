@@ -1104,8 +1104,11 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           </select>
                         </div>
 
-                        <div className="lg:col-span-1 flex items-center gap-1 pt-3">
-                          <label className="text-[10px] text-slate-700 flex items-center gap-1 cursor-pointer">
+                        <div className="lg:col-span-1 flex items-center justify-between gap-1 pt-3">
+                          <label
+                            className="text-[10px] text-slate-700 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            title="Disciplina de Extensão"
+                          >
                             <input
                               type="checkbox"
                               checked={disc.isExtension}
@@ -1115,11 +1118,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                 setPeriods(updated);
                               }}
                             />
-                            <span>Extensão</span>
+                            <span>Ext.</span>
                           </label>
-                        </div>
-
-                        <div className="lg:col-span-1 text-right pt-3">
                           <button
                             type="button"
                             onClick={() => {
@@ -1128,6 +1128,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               setPeriods(updated);
                             }}
                             className="text-red-500 hover:text-red-700 p-1"
+                            title="Remover disciplina"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
