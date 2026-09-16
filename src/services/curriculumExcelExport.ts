@@ -4,6 +4,9 @@ import {
   AppSettings,
   Discipline,
   getDisciplineChBreakdown,
+  structureHasPresentialSplit,
+  getPresentialSplitFlags,
+  withStructurePresentialFlags,
 } from '../types/curriculum';
 import { buildWorkloadSummary } from './workloadSummary';
 import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
@@ -72,22 +75,34 @@ function styleRange(
 }
 
 function getModuleComponents(
-  mod: NonNullable<CurriculumStructure['modules']>[number]
+  mod: NonNullable<CurriculumStructure['modules']>[number],
+  structure: Pick<CurriculumStructure, 'hasLaboratory' | 'hasClinical'>
 ): Discipline[] {
-  if (mod.disciplines && mod.disciplines.length > 0) return mod.disciplines;
+  if (mod.disciplines && mod.disciplines.length > 0) {
+    return mod.disciplines.map((d) => withStructurePresentialFlags(d, structure));
+  }
   return (mod.knowledges || []).map(
-    (k): Discipline => ({
-      id: k.id,
-      code: mod.code || '',
-      name: k.name,
-      type: 'Obrigatória',
-      credits: 0,
-      hours: k.hours || 0,
-      modalityDelivery: k.modalityDelivery,
-      chPresential: k.chPresential,
-      chSyncMediated: k.chSyncMediated,
-      chAsync: k.chAsync,
-    })
+    (k): Discipline =>
+      withStructurePresentialFlags(
+        {
+          id: k.id,
+          code: mod.code || '',
+          name: k.name,
+          type: 'Obrigatória',
+          credits: 0,
+          hours: k.hours || 0,
+          modalityDelivery: k.modalityDelivery,
+          hasLaboratory: k.hasLaboratory,
+          hasClinical: k.hasClinical,
+          chTheoretical: k.chTheoretical,
+          chLaboratory: k.chLaboratory,
+          chClinical: k.chClinical,
+          chPresential: k.chPresential,
+          chSyncMediated: k.chSyncMediated,
+          chAsync: k.chAsync,
+        },
+        structure
+      )
   );
 }
 
@@ -106,16 +121,32 @@ async function buildCurriculumIdentificationSheet(
   structure: CurriculumStructure
 ): Promise<void> {
   const isModular = structure.structureType === 'modular';
-  // Colunas: A Código | B Unidade | C.. CH fields | last Total
-  // Modular: Presencial, Síncrona-Mediada, Assíncrona, Total  => cols 3-6 (total col 6)
-  // Disciplinar: Créditos, Presencial, Síncrona, Síncrona-Mediada, Assíncrona, Total => 3-8
-  const chCols = isModular
-    ? ['CH Presencial', 'CH Síncrona-Mediada', 'CH Assíncrona']
-    : ['Créditos', 'CH Presencial', 'CH Síncrona', 'CH Síncrona-Mediada', 'CH Assíncrona'];
-  const totalCol = 2 + chCols.length + 1; // after code+name+ch
+  const splitFlags = getPresentialSplitFlags(structure);
+  const useSplit = splitFlags.enabled;
+  // Colunas CH (após Código + Unidade [+ Créditos no disciplinar]):
+  // Com split: Teórico | [Laboratório] | [Clínica] | Síncrono-Mediado | Assíncrono
+  // Sem split: Presencial | Síncrono-Mediado | Assíncrono
+  const prefixCols = isModular ? ([] as string[]) : (['Créditos'] as string[]);
+  const presentialCols = useSplit
+    ? ([
+        'Teórico',
+        ...(splitFlags.hasLaboratory ? (['Laboratório'] as string[]) : []),
+        ...(splitFlags.hasClinical ? (['Clínica'] as string[]) : []),
+      ] as string[])
+    : (['Presencial'] as string[]);
+  const distanceCols = ['Síncrono-Mediado', 'Assíncrono'];
+  const chDetailCols = [...presentialCols, ...distanceCols];
+  const allMidCols = [...prefixCols, ...chDetailCols];
+  const totalCol = 2 + allMidCols.length + 1; // code + name + mid + total
   const lastCol = totalCol;
   const sidePeriodCol = lastCol + 2;
   const sidePubCol = lastCol + 3;
+  const midStart = 3;
+  const midEnd = 2 + allMidCols.length;
+  const presStart = midStart + prefixCols.length;
+  const presEnd = presStart + presentialCols.length - 1;
+  const syncMedCol = presEnd + 1;
+  const asyncCol = syncMedCol + 1;
 
   const ws = wb.addWorksheet('Estrutura Curricular', {
     views: [{ showGridLines: false }],
@@ -123,7 +154,7 @@ async function buildCurriculumIdentificationSheet(
 
   ws.getColumn(1).width = 12;
   ws.getColumn(2).width = 42;
-  for (let c = 3; c < totalCol; c++) ws.getColumn(c).width = 14;
+  for (let c = 3; c < totalCol; c++) ws.getColumn(c).width = 13;
   ws.getColumn(totalCol).width = 10;
   ws.getColumn(lastCol + 1).width = 3;
   ws.getColumn(sidePeriodCol).width = 10;
@@ -186,12 +217,14 @@ async function buildCurriculumIdentificationSheet(
     ? (structure.modules || []).map((mod) => ({
         label: `Módulo ${toRoman(mod.number)} - ${mod.title}`,
         subtitle: mod.competence || undefined,
-        components: getModuleComponents(mod),
+        components: getModuleComponents(mod, structure),
         fallbackHours: mod.hours,
       }))
     : (structure.periods || []).map((period) => ({
         label: `${period.number}º Período`,
-        components: period.disciplines || [],
+        components: (period.disciplines || []).map((d) =>
+          withStructurePresentialFlags(d, structure)
+        ),
         fallbackHours: period.totalHours,
       }));
 
@@ -220,51 +253,88 @@ async function buildCurriculumIdentificationSheet(
     ws.getRow(row).height = block.subtitle ? 28 : 18;
     row++;
 
-    // Header row 1: Código | Unidade | Carga Horária (merged) | Total
-    const chStart = 3;
-    const chEnd = 2 + chCols.length;
-    ws.mergeCells(row, 1, row + 1, 1);
-    ws.mergeCells(row, 2, row + 1, 2);
-    if (chEnd > chStart) ws.mergeCells(row, chStart, row, chEnd);
-    ws.mergeCells(row, totalCol, row + 1, totalCol);
+    // Header: with split → 2 rows (Presencial spanning); without → single CH Presencial
+    if (useSplit) {
+      ws.mergeCells(row, 1, row + 1, 1);
+      ws.mergeCells(row, 2, row + 1, 2);
+      if (!isModular) {
+        ws.mergeCells(row, midStart, row + 1, midStart);
+      }
+      ws.mergeCells(row, totalCol, row + 1, totalCol);
+      ws.mergeCells(row, syncMedCol, row + 1, syncMedCol);
+      ws.mergeCells(row, asyncCol, row + 1, asyncCol);
+      if (presEnd > presStart) ws.mergeCells(row, presStart, row, presEnd);
 
-    ws.getCell(row, 1).value = 'Código';
-    ws.getCell(row, 2).value = 'Unidade Curricular';
-    ws.getCell(row, chStart).value = 'Carga Horária';
-    ws.getCell(row, totalCol).value = 'Total';
-    styleRange(ws, row, 1, row, lastCol, {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
-      font: { bold: true, size: 9, color: { argb: C.white } },
-      alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
-    });
-    row++;
+      ws.getCell(row, 1).value = 'Código';
+      ws.getCell(row, 2).value = 'Unidade Curricular';
+      if (!isModular) ws.getCell(row, midStart).value = 'Créditos';
+      ws.getCell(row, presStart).value = 'Presencial';
+      ws.getCell(row, syncMedCol).value = 'Síncrono-Mediado';
+      ws.getCell(row, asyncCol).value = 'Assíncrono';
+      ws.getCell(row, totalCol).value = 'Total';
+      styleRange(ws, row, 1, row, lastCol, {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
+        font: { bold: true, size: 9, color: { argb: C.white } },
+        alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+      });
+      row++;
 
-    // Header row 2: individual CH columns
-    chCols.forEach((label, i) => {
-      const cell = ws.getCell(row, chStart + i);
-      cell.value = label;
-      cell.font = { bold: true, size: 8, color: { argb: C.navy } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: i % 2 === 0 ? C.navySoft : C.orangeSoft },
-      };
-      cell.border = thinBorder();
-    });
-    styleRange(ws, row, 1, row, 2, {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
-    });
-    styleRange(ws, row, totalCol, row, totalCol, {
-      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
-    });
-    ws.getRow(row).height = 28;
-    row++;
+      presentialCols.forEach((label, i) => {
+        const cell = ws.getCell(row, presStart + i);
+        cell.value = label;
+        cell.font = { bold: true, size: 8, color: { argb: C.navy } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: i % 2 === 0 ? C.navySoft : C.orangeSoft },
+        };
+        cell.border = thinBorder();
+      });
+      styleRange(ws, row, 1, row, 2, {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
+      });
+      if (!isModular) {
+        styleRange(ws, row, midStart, row, midStart, {
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
+        });
+      }
+      styleRange(ws, row, syncMedCol, row, asyncCol, {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
+      });
+      styleRange(ws, row, totalCol, row, totalCol, {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
+      });
+      ws.getRow(row).height = 28;
+      row++;
+    } else {
+      ws.getCell(row, 1).value = 'Código';
+      ws.getCell(row, 2).value = 'Unidade Curricular';
+      allMidCols.forEach((label, i) => {
+        ws.getCell(row, midStart + i).value = label.startsWith('Presencial')
+          ? 'CH Presencial'
+          : label === 'Síncrono-Mediado'
+          ? 'CH Síncrona-Mediada'
+          : label === 'Assíncrono'
+          ? 'CH Assíncrona'
+          : label;
+      });
+      ws.getCell(row, totalCol).value = 'Total';
+      styleRange(ws, row, 1, row, lastCol, {
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
+        font: { bold: true, size: 9, color: { argb: C.white } },
+        alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+      });
+      ws.getRow(row).height = 22;
+      row++;
+    }
 
     const sums = {
       credits: 0,
+      theoretical: 0,
+      laboratory: 0,
+      clinical: 0,
       presential: 0,
-      sync: 0,
       syncMediated: 0,
       async: 0,
       total: 0,
@@ -283,27 +353,34 @@ async function buildCurriculumIdentificationSheet(
     } else {
       for (const disc of block.components) {
         const bd = getDisciplineChBreakdown(disc);
+        const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
         sums.credits += Number(disc.credits) || 0;
+        sums.theoretical += bd.theoretical;
+        sums.laboratory += bd.laboratory;
+        sums.clinical += bd.clinical;
         sums.presential += bd.presential;
-        sums.sync += bd.sync;
-        sums.syncMediated += bd.syncMediated;
+        sums.syncMediated += syncMed;
         sums.async += bd.async;
         sums.total += bd.total;
 
-        const chValues = isModular
-          ? [bd.presential || null, bd.syncMediated || null, bd.async || null]
-          : [
-              disc.credits || null,
-              bd.presential || null,
-              bd.sync || null,
-              bd.syncMediated || null,
-              bd.async || null,
-            ];
+        const midValues = (() => {
+          const presentialVals = useSplit
+            ? [
+                bd.theoretical || null,
+                ...(splitFlags.hasLaboratory ? [bd.laboratory || null] : []),
+                ...(splitFlags.hasClinical ? [bd.clinical || null] : []),
+              ]
+            : [bd.presential || null];
+          const tail = [syncMed || null, bd.async || null];
+          return isModular
+            ? [...presentialVals, ...tail]
+            : [disc.credits || null, ...presentialVals, ...tail];
+        })();
 
         ws.getCell(row, 1).value = disc.code || '';
         ws.getCell(row, 2).value = disc.name;
-        chValues.forEach((v, i) => {
-          ws.getCell(row, chStart + i).value = v;
+        midValues.forEach((v, i) => {
+          ws.getCell(row, midStart + i).value = v;
         });
         ws.getCell(row, totalCol).value = bd.total || null;
 
@@ -316,8 +393,8 @@ async function buildCurriculumIdentificationSheet(
             vertical: 'middle',
             wrapText: c === 2,
           };
-          if (c >= chStart && c < totalCol) {
-            const idx = c - chStart;
+          if (c >= midStart && c < totalCol) {
+            const idx = c - midStart;
             cell.fill = {
               type: 'pattern',
               pattern: 'solid',
@@ -332,11 +409,21 @@ async function buildCurriculumIdentificationSheet(
     // SUBTOTAL
     ws.mergeCells(row, 1, row, 2);
     ws.getCell(row, 1).value = 'SUBTOTAL';
-    const subVals = isModular
-      ? [sums.presential, sums.syncMediated, sums.async]
-      : [sums.credits, sums.presential, sums.sync, sums.syncMediated, sums.async];
+    const subVals = (() => {
+      const presentialVals = useSplit
+        ? [
+            sums.theoretical,
+            ...(splitFlags.hasLaboratory ? [sums.laboratory] : []),
+            ...(splitFlags.hasClinical ? [sums.clinical] : []),
+          ]
+        : [sums.presential];
+      const tail = [sums.syncMediated, sums.async];
+      return isModular
+        ? [...presentialVals, ...tail]
+        : [sums.credits, ...presentialVals, ...tail];
+    })();
     subVals.forEach((v, i) => {
-      ws.getCell(row, chStart + i).value = v || null;
+      ws.getCell(row, midStart + i).value = v || null;
     });
     ws.getCell(row, totalCol).value = sums.total || null;
     styleRange(ws, row, 1, row, lastCol, {
@@ -349,14 +436,22 @@ async function buildCurriculumIdentificationSheet(
     // Total
     ws.mergeCells(row, 1, row, 2);
     ws.getCell(row, 1).value = 'Total';
-    if (chEnd > chStart) ws.mergeCells(row, chStart, row, chEnd);
+    if (midEnd > midStart) ws.mergeCells(row, midStart, row, midEnd);
     const grand = sums.total || block.fallbackHours || 0;
-    ws.getCell(row, chStart).value = isModular
-      ? `Presencial ${sums.presential}h · Sínc.-Med. ${sums.syncMediated}h · Assínc. ${sums.async}h`
-      : `Presencial ${sums.presential}h · Distância ${sums.sync + sums.syncMediated + sums.async}h`;
+    ws.getCell(row, midStart).value = useSplit
+      ? [
+          `Teór. ${sums.theoretical}h`,
+          splitFlags.hasLaboratory ? `Lab. ${sums.laboratory}h` : null,
+          splitFlags.hasClinical ? `Clín. ${sums.clinical}h` : null,
+          `Sínc.-Med. ${sums.syncMediated}h`,
+          `Assínc. ${sums.async}h`,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : `Presencial ${sums.presential}h · Sínc.-Med. ${sums.syncMediated}h · Assínc. ${sums.async}h`;
     ws.getCell(row, totalCol).value = grand || null;
 
-    styleRange(ws, row, 1, row, chEnd, {
+    styleRange(ws, row, 1, row, midEnd, {
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navySoft } },
       font: { bold: true, size: 9, color: { argb: C.navy } },
       alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
@@ -406,6 +501,10 @@ export async function exportCurriculumToXlsx(
   settings?: AppSettings
 ): Promise<void> {
   const labels = getSaberesLabels(settings?.pedagogicalNomenclature);
+  const workload = buildWorkloadSummary(structure);
+  const hoursOf = (id: string) => workload.rows.find((r) => r.id === id)?.hours || 0;
+  const splitFlags = getPresentialSplitFlags(structure);
+  const useSplit = splitFlags.enabled;
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'UNISUAM Estruturas Curriculares';
@@ -459,6 +558,17 @@ export async function exportCurriculumToXlsx(
       `${structure.minPresentialHoursPercent}%`,
       `${Math.round((structure.calculatedPresentialHours / (structure.calculatedTotalHours || 1)) * 100)}%`,
     ],
+    ...(useSplit
+      ? ([
+          ['  └ Teórico', hoursOf('teorico'), 'Frações da presencial', '-'],
+          ...(splitFlags.hasLaboratory
+            ? ([['  └ Laboratório', hoursOf('laboratorio'), 'Frações da presencial', '-']] as (string | number)[][])
+            : []),
+          ...(splitFlags.hasClinical
+            ? ([['  └ Clínica', hoursOf('clinica'), 'Frações da presencial', '-']] as (string | number)[][])
+            : []),
+        ] as (string | number)[][])
+      : []),
     [
       'Carga Horária a Distância',
       structure.calculatedEadHours,

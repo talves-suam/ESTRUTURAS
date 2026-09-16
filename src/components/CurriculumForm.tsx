@@ -6,10 +6,14 @@ import {
   PeriodData, 
   ModuleData, 
   Discipline, 
+  KnowledgeItem,
   CompetencyCHA,
   DeliveryModalityFlag,
   ComponentDeliveryFlags,
-  DcnDocument
+  DcnDocument,
+  applyExplicitChBreakdown,
+  getDisciplineChBreakdown,
+  ExplicitChPart,
 } from '../types/curriculum';
 import { 
   Save, 
@@ -23,12 +27,13 @@ import {
   HelpCircle,
   Clock,
   Layers,
-  FileText
+  FileText,
+  Eraser,
 } from 'lucide-react';
 import { calculateStructureTotals } from '../services/curriculumService';
 import { DcnViewerModal } from './DcnViewerModal';
 import { getSaberesLabels } from '../utils/nomenclature';
-import { summarizeCourseDcns } from '../utils/courseBatch';
+import { summarizeCourseDcns, generateCourseCodeFromName, uniqueCourseOptions, resolveCourseByNameAndModality, courseBaseName, normalizeCourseName } from '../utils/courseBatch';
 import type { RequirementLevel } from '../types/curriculum';
 
 interface CurriculumFormProps {
@@ -38,6 +43,165 @@ interface CurriculumFormProps {
   onSave: (structure: CurriculumStructure) => Promise<void>;
   onCancel: () => void;
   onAddCourse: (newCourse: Course) => Promise<void>;
+}
+
+type SplitFlags = { hasLaboratory: boolean; hasClinical: boolean };
+
+function knowledgeAsDiscipline(know: KnowledgeItem, flags: SplitFlags): Discipline {
+  return {
+    id: know.id,
+    code: '',
+    name: know.name,
+    type: 'Obrigatória',
+    credits: 0,
+    hours: know.hours,
+    modalityDelivery: know.modalityDelivery,
+    hasLaboratory: flags.hasLaboratory,
+    hasClinical: flags.hasClinical,
+    chTheoretical: know.chTheoretical,
+    chLaboratory: know.chLaboratory,
+    chClinical: know.chClinical,
+    chPresential: know.chPresential,
+    chSyncMediated: know.chSyncMediated,
+    chAsync: know.chAsync,
+  };
+}
+
+function knowledgeFromDiscipline(know: KnowledgeItem, next: Discipline): KnowledgeItem {
+  return {
+    ...know,
+    hours: next.hours,
+    modalityDelivery: next.modalityDelivery,
+    hasLaboratory: next.hasLaboratory,
+    hasClinical: next.hasClinical,
+    chTheoretical: next.chTheoretical,
+    chLaboratory: next.chLaboratory,
+    chClinical: next.chClinical,
+    chPresential: next.chPresential,
+    chSyncMediated: next.chSyncMediated,
+    chAsync: next.chAsync,
+  };
+}
+
+function ChSplitFields({
+  disc,
+  flags,
+  onChange,
+  compact = false,
+}: {
+  disc: Discipline;
+  flags: SplitFlags;
+  onChange: (next: Discipline) => void;
+  compact?: boolean;
+}) {
+  const bd = getDisciplineChBreakdown({
+    ...disc,
+    hasLaboratory: flags.hasLaboratory,
+    hasClinical: flags.hasClinical,
+  });
+  const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
+  const inputCls = compact
+    ? 'w-full min-w-[3.25rem] px-1 py-0.5 border rounded text-xs text-center font-bold bg-white'
+    : 'w-full px-2 py-1 border rounded text-xs text-center font-bold bg-white';
+
+  const patch = (part: ExplicitChPart, raw: string) => {
+    onChange(
+      applyExplicitChBreakdown(
+        { ...disc, hasLaboratory: flags.hasLaboratory, hasClinical: flags.hasClinical },
+        flags,
+        { [part]: Number(raw) }
+      )
+    );
+  };
+
+  return (
+    <div className="space-y-1">
+      {!compact && (
+        <span className="text-[10px] font-bold uppercase tracking-wide text-[#002B49]">
+          Carga horária
+        </span>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        <div className="flex-1 min-w-[7rem] rounded-lg border border-blue-100 bg-blue-50/70 px-2 py-1.5 space-y-1">
+          <span className="text-[9px] font-bold uppercase tracking-wide text-[#002B49] block text-center">
+            Presencial
+          </span>
+          <div className={`grid gap-1.5 ${flags.hasLaboratory && flags.hasClinical ? 'grid-cols-3' : flags.hasLaboratory || flags.hasClinical ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <label className="block">
+              <span className="text-[9px] text-slate-500 block text-center">Teórico</span>
+              <input
+                type="number"
+                min={0}
+                value={bd.theoretical}
+                onChange={(e) => patch('theoretical', e.target.value)}
+                className={`${inputCls} text-blue-900`}
+              />
+            </label>
+            {flags.hasLaboratory && (
+              <label className="block">
+                <span className="text-[9px] text-slate-500 block text-center">Laboratório</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={bd.laboratory}
+                  onChange={(e) => patch('laboratory', e.target.value)}
+                  className={`${inputCls} text-teal-800`}
+                />
+              </label>
+            )}
+            {flags.hasClinical && (
+              <label className="block">
+                <span className="text-[9px] text-slate-500 block text-center">Clínica</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={bd.clinical}
+                  onChange={(e) => patch('clinical', e.target.value)}
+                  className={`${inputCls} text-rose-800`}
+                />
+              </label>
+            )}
+          </div>
+        </div>
+        <label className="flex-1 min-w-[5.5rem] rounded-lg border border-indigo-100 bg-indigo-50/70 px-2 py-1.5">
+          <span className="text-[9px] font-bold uppercase tracking-wide text-indigo-900 block text-center">
+            Síncrono-Mediado
+          </span>
+          <input
+            type="number"
+            min={0}
+            value={syncMed}
+            onChange={(e) => patch('syncMediated', e.target.value)}
+            className={`${inputCls} text-indigo-900 mt-1`}
+          />
+        </label>
+        <label className="flex-1 min-w-[5rem] rounded-lg border border-purple-100 bg-purple-50/70 px-2 py-1.5">
+          <span className="text-[9px] font-bold uppercase tracking-wide text-purple-900 block text-center">
+            Assíncrono
+          </span>
+          <input
+            type="number"
+            min={0}
+            value={bd.async}
+            onChange={(e) => patch('async', e.target.value)}
+            className={`${inputCls} text-purple-900 mt-1`}
+          />
+        </label>
+        <label className="w-[4.75rem] rounded-lg border border-orange-100 bg-orange-50/60 px-2 py-1.5">
+          <span className="text-[9px] font-bold uppercase tracking-wide text-slate-600 block text-center">
+            Total
+          </span>
+          <input
+            type="number"
+            readOnly
+            value={bd.total}
+            className={`${inputCls} text-[#FF6B00] mt-1 bg-slate-50 cursor-default`}
+            title="Total = soma das colunas"
+          />
+        </label>
+      </div>
+    </div>
+  );
 }
 
 export const CurriculumForm: React.FC<CurriculumFormProps> = ({
@@ -140,93 +304,76 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [extensionModality, setExtensionModality] = useState<DeliveryModalityFlag>(
     initialData?.extensionModality ?? currentCourse?.extensionModality ?? 'presencial'
   );
+  const [hasLaboratory, setHasLaboratory] = useState<boolean>(
+    initialData?.hasLaboratory ?? currentCourse?.hasLaboratory ?? false
+  );
+  const [hasClinical, setHasClinical] = useState<boolean>(
+    initialData?.hasClinical ?? currentCourse?.hasClinical ?? false
+  );
+  const splitFlags: SplitFlags = { hasLaboratory, hasClinical };
+  const useChSplit = hasLaboratory || hasClinical;
 
-  // Periods (for disciplinar)
+  // Periods (for disciplinar) — nova estrutura começa vazia (dados do curso vêm da planilha)
   const [periods, setPeriods] = useState<PeriodData[]>(
-    initialData?.periods || [
-      {
-        id: 'p-1',
-        number: 1,
-        totalCredits: 20,
-        totalHours: 400,
-        disciplines: [
-          {
-            id: 'd-1',
-            code: 'DISC001',
-            name: 'Introdução ao Campo Profissional',
-            type: 'Obrigatória',
-            credits: 4,
-            hours: 80,
-            evaluationForm: 'Resultado Final',
-            modalityDelivery: 'presencial',
-            flags: { classroom: 'presencial', internship: 'presencial', complementaryActivity: 'presencial', extension: 'presencial' },
-          },
-        ],
-      },
-    ]
+    initialData?.periods || []
   );
 
   // Modules (for modular)
   const [modules, setModules] = useState<ModuleData[]>(
-    initialData?.modules || [
-      {
-        id: 'm-1',
-        number: 1,
-        code: 'MOD-01',
-        title: 'Módulo Fundamental e Integrador',
-        hours: 325,
-        disciplines: [
-          {
-            id: 'md-1',
-            code: 'COMP001',
-            name: 'Fundamentos e Prática Profissional',
-            type: 'Obrigatória',
-            credits: 4,
-            hours: 80,
-            modalityDelivery: 'presencial',
-            flags: { classroom: 'presencial', internship: 'presencial', complementaryActivity: 'presencial', extension: 'presencial' },
-          },
-        ],
-        competencies: [
-          { id: 'c-1', category: 'conhecimento', name: 'Compreender conceitos teóricos fundamentais' },
-          { id: 'c-2', category: 'habilidade', name: 'Aplicar metodologia de resolução de problemas' },
-          { id: 'c-3', category: 'atitude', name: 'Atuar com responsabilidade ética e visão crítica' },
-        ],
-      },
-    ]
+    initialData?.modules || []
   );
 
   // State for Add Course Modal
   const [showAddCourseModal, setShowAddCourseModal] = useState(false);
   const [newCourseName, setNewCourseName] = useState('');
-  const [newCourseCode, setNewCourseCode] = useState('');
   const [newCourseHours, setNewCourseHours] = useState(3000);
   const [newCourseDcn, setNewCourseDcn] = useState('');
   const [newCourseCine, setNewCourseCine] = useState('');
   const [newCourseAuthorizationAct, setNewCourseAuthorizationAct] = useState('');
 
   // Update linked fields when course changes
-  const applyCourseData = (selected: Course) => {
+  const applyCourseData = (selected: Course, opts?: { skipModality?: boolean }) => {
     setRequiredTotalHours(selected.minTotalHours);
     setDcnRef(selected.activeDcn || '');
     setCineBrasilRef(selected.cineBrasilCode || '');
     setAuthorizationAct(selected.authorizationAct || '');
     setStructureDcns(selected.dcns || []);
-    if (selected.modality) setModality(selected.modality);
+    if (selected.modality && !opts?.skipModality) setModality(selected.modality);
     setDegrees(selected.degrees || 'Bacharelado');
     setInternshipRequirement(selected.internshipRequirement || 'Não Informado');
     setMinInternshipHours(selected.minInternshipHours);
     setComplementaryRequirement(selected.complementaryRequirement || 'Não Informado');
     setComplementaryTotalHours(selected.complementaryTotalHours ?? 0);
+    setComplementaryModality(selected.complementaryModality ?? 'assincrono');
     setExtensionTotalHours(selected.extensionTotalHours ?? 0);
+    setExtensionModality(selected.extensionModality ?? 'presencial');
     setFinalPaperRequirement(selected.finalPaperRequirement || 'Não Informado');
     setCoordinatorName(selected.coordinatorName || '');
     setCoordinatorEmail(selected.coordinatorEmail || '');
+    setHasLaboratory(!!selected.hasLaboratory);
+    setHasClinical(!!selected.hasClinical);
+    setMinPresentialHoursPercent(
+      selected.minPresentialPercent ?? (selected.modality === 'EAD' ? 10 : 60)
+    );
+    setMaxEadHoursPercent(selected.maxEadPercent ?? (selected.modality === 'EAD' ? 90 : 40));
   };
 
-  const handleCourseChange = (courseId: string) => {
-    setSelectedCourseId(courseId);
-    const selected = courses.find((c) => c.id === courseId);
+  const handleCourseChange = (courseKeyOrId: string) => {
+    const selected = resolveCourseByNameAndModality(courses, courseKeyOrId, modality);
+    if (!selected) return;
+    setSelectedCourseId(selected.id);
+    applyCourseData(selected, { skipModality: true });
+  };
+
+  /** Zera períodos/módulos e reaplica só os dados do curso (planilha em lote). */
+  const handleClearAndStartFresh = () => {
+    setPeriods([]);
+    setModules([]);
+    setCode('');
+    setActiveYearSemester('');
+    setValidityStart('');
+    setStatus('Em Elaboração');
+    const selected = courses.find((c) => c.id === selectedCourseId) || courses[0];
     if (selected) applyCourseData(selected);
   };
 
@@ -246,10 +393,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   // Quick course modal submit
   const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCourseName || !newCourseCode) return;
+    if (!newCourseName) return;
     const newCourse: Course = {
       id: `course-${Date.now()}`,
-      code: newCourseCode.toUpperCase(),
+      code: generateCourseCodeFromName(newCourseName),
       name: newCourseName,
       modality,
       activeDcn: newCourseDcn || 'Diretriz Curricular Nacional 2026',
@@ -269,7 +416,6 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setAuthorizationAct(newCourse.authorizationAct || '');
     setShowAddCourseModal(false);
     setNewCourseName('');
-    setNewCourseCode('');
     setNewCourseAuthorizationAct('');
   };
 
@@ -278,7 +424,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     id: initialData?.id || `struct-${Date.now()}`,
     code,
     courseId: selectedCourseId,
-    courseName: currentCourse?.name || 'Curso Selecionado',
+    courseName: courseBaseName(currentCourse?.name || '') || 'Curso Selecionado',
     modality,
     activeYearSemester,
     structureType,
@@ -304,6 +450,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     degrees,
     coordinatorName,
     coordinatorEmail,
+    hasLaboratory,
+    hasClinical,
     calculatedTotalHours: 0,
     calculatedPresentialHours: 0,
     calculatedEadHours: 0,
@@ -311,8 +459,33 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     calculatedComplementaryHours: initialData?.calculatedComplementaryHours || 0,
     calculatedInternshipHours: 0,
     totalCredits: 0,
-    periods: structureType === 'disciplinar' ? periods : undefined,
-    modules: structureType === 'modular' ? modules : undefined,
+    periods:
+      structureType === 'disciplinar'
+        ? periods.map((p) => ({
+            ...p,
+            disciplines: p.disciplines.map((d) => ({
+              ...d,
+              hasLaboratory,
+              hasClinical,
+            })),
+          }))
+        : undefined,
+    modules:
+      structureType === 'modular'
+        ? modules.map((m) => ({
+            ...m,
+            disciplines: (m.disciplines || []).map((d) => ({
+              ...d,
+              hasLaboratory,
+              hasClinical,
+            })),
+            knowledges: (m.knowledges || []).map((k) => ({
+              ...k,
+              hasLaboratory,
+              hasClinical,
+            })),
+          }))
+        : undefined,
     dcnRef,
     dcns: structureDcns,
     cineBrasilRef,
@@ -369,6 +542,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           hours: 80,
           evaluationForm: modality === 'EAD' ? 'Nota (EAD)' : 'Resultado Final',
           modalityDelivery: modality === 'EAD' ? 'assincrono' : 'presencial',
+          hasLaboratory,
+          hasClinical,
           flags: { classroom: 'presencial', internship: 'presencial', complementaryActivity: 'presencial', extension: 'presencial' },
         };
         return { ...p, disciplines: [...p.disciplines, newD] };
@@ -517,13 +692,13 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               </label>
               <div className="flex gap-2">
                 <select
-                  value={selectedCourseId}
+                  value={normalizeCourseName(courseBaseName(currentCourse?.name || ''))}
                   onChange={(e) => handleCourseChange(e.target.value)}
                   className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
                 >
-                  {courses.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      [{c.code}] {c.name} - Mín. {c.minTotalHours}h
+                  {uniqueCourseOptions(courses).map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.name}
                     </option>
                   ))}
                 </select>
@@ -559,7 +734,15 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               </label>
               <select
                 value={modality}
-                onChange={(e) => setModality(e.target.value as any)}
+                onChange={(e) => {
+                  const next = e.target.value as 'Presencial' | 'Semipresencial' | 'EAD';
+                  setModality(next);
+                  const resolved = resolveCourseByNameAndModality(courses, selectedCourseId, next);
+                  if (resolved && resolved.id !== selectedCourseId) {
+                    setSelectedCourseId(resolved.id);
+                    applyCourseData(resolved, { skipModality: true });
+                  }
+                }}
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
               >
                 <option value="Presencial">Presencial</option>
@@ -939,6 +1122,33 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             </div>
           </div>
 
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+            <label className="block text-xs font-bold text-slate-800">
+              Divisão da CH Presencial (Laboratório e/ou Clínica)
+            </label>
+            <p className="text-[10px] text-slate-500">
+              Marque o que este curso usa. Vale para toda a estrutura: cada disciplina (ou conhecimento) informa a CH nas mesmas colunas do relatório — Teórico, Laboratório e/ou Clínica, Síncrono-Mediado e Assíncrono.
+            </p>
+            <div className="flex flex-wrap items-center gap-6 pt-1">
+              <label className="text-xs text-slate-800 font-semibold flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hasLaboratory}
+                  onChange={(e) => setHasLaboratory(e.target.checked)}
+                />
+                Laboratório
+              </label>
+              <label className="text-xs text-slate-800 font-semibold flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hasClinical}
+                  onChange={(e) => setHasClinical(e.target.checked)}
+                />
+                Clínica
+              </label>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -980,24 +1190,43 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         {structureType === 'disciplinar' ? (
           /* Editor Disciplinar */
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+            <div className="flex flex-wrap items-center justify-between border-b border-slate-200 pb-3 gap-2">
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-wider text-[#002B49]">
                   3. Períodos Letivos & Disciplinas
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Gerencie as disciplinas de cada período com código, créditos, horas e flags de oferta.
+                  Gerencie as disciplinas de cada período. Dados regulatórios vêm do curso (planilha em lote).
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={addPeriod}
-                className="px-3.5 py-1.5 rounded-lg bg-[#002B49] text-white text-xs font-bold flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Adicionar Período
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleClearAndStartFresh}
+                  className="px-3.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold flex items-center gap-1 hover:bg-slate-50"
+                  title="Limpa períodos/módulos e reaplica só os dados do curso"
+                >
+                  <Eraser className="w-3.5 h-3.5" />
+                  Limpar e começar do zero
+                </button>
+                <button
+                  type="button"
+                  onClick={addPeriod}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#002B49] text-white text-xs font-bold flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Adicionar Período
+                </button>
+              </div>
             </div>
+
+            {periods.length === 0 && (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+                Nenhum período cadastrado. Os dados do curso já estão carregados acima — clique em{' '}
+                <strong>Adicionar Período</strong> para montar a matriz, ou use{' '}
+                <strong>Limpar e começar do zero</strong> para reiniciar.
+              </div>
+            )}
 
             <div className="space-y-6">
               {periods.map((period, pIdx) => (
@@ -1075,7 +1304,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           <label className="text-[10px] text-slate-400 block">Créditos</label>
                           <input
                             type="number"
-                            value={disc.credits}
+                            value={disc.credits || ''}
                             onChange={(e) => {
                               const updated = [...periods];
                               updated[pIdx].disciplines[dIdx].credits = Number(e.target.value);
@@ -1085,39 +1314,66 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           />
                         </div>
 
-                        <div className="lg:col-span-1">
-                          <label className="text-[10px] text-slate-400 block">Horas (h)</label>
-                          <input
-                            type="number"
-                            value={disc.hours}
-                            onChange={(e) => {
-                              const updated = [...periods];
-                              updated[pIdx].disciplines[dIdx].hours = Number(e.target.value);
-                              setPeriods(updated);
-                            }}
-                            className="w-full px-2 py-1 border rounded text-xs text-center font-bold text-[#FF6B00]"
-                          />
-                        </div>
+                        {!useChSplit && (
+                          <>
+                            <div className="lg:col-span-1">
+                              <label className="text-[10px] text-slate-400 block">Horas (h)</label>
+                              <input
+                                type="number"
+                                value={disc.hours || ''}
+                                onChange={(e) => {
+                                  const updated = [...periods];
+                                  const hours = Number(e.target.value);
+                                  const current = updated[pIdx].disciplines[dIdx];
+                                  updated[pIdx].disciplines[dIdx] = {
+                                    ...current,
+                                    hours,
+                                    chPresential:
+                                      current.modalityDelivery === 'presencial' ? hours : current.chPresential,
+                                    chTheoretical:
+                                      current.modalityDelivery === 'presencial' ? hours : current.chTheoretical,
+                                  };
+                                  setPeriods(updated);
+                                }}
+                                className="w-full px-2 py-1 border rounded text-xs text-center font-bold text-[#FF6B00]"
+                              />
+                            </div>
 
-                        <div className="lg:col-span-2">
-                          <label className="text-[10px] text-slate-400 block">Oferta</label>
-                          <select
-                            value={disc.modalityDelivery}
-                            onChange={(e) => {
-                              const updated = [...periods];
-                              updated[pIdx].disciplines[dIdx].modalityDelivery = e.target.value as any;
-                              setPeriods(updated);
-                            }}
-                            className="w-full px-2 py-1 border rounded text-xs font-medium"
-                          >
-                            <option value="presencial">Presencial (padrão)</option>
-                            <option value="sincrono">Síncrono</option>
-                            <option value="sincrono-mediado">Síncrono-Mediado</option>
-                            <option value="assincrono">Assíncrono</option>
-                          </select>
-                        </div>
+                            <div className="lg:col-span-2">
+                              <label className="text-[10px] text-slate-400 block">Oferta</label>
+                              <select
+                                value={disc.modalityDelivery}
+                                onChange={(e) => {
+                                  const updated = [...periods];
+                                  const modalityDelivery = e.target.value as Discipline['modalityDelivery'];
+                                  let next: Discipline = {
+                                    ...updated[pIdx].disciplines[dIdx],
+                                    modalityDelivery,
+                                  };
+                                  if (modalityDelivery !== 'presencial') {
+                                    next.chTheoretical = undefined;
+                                    next.chLaboratory = undefined;
+                                    next.chClinical = undefined;
+                                    next.chPresential = undefined;
+                                  } else {
+                                    next.chTheoretical = next.hours;
+                                    next.chPresential = next.hours;
+                                  }
+                                  updated[pIdx].disciplines[dIdx] = next;
+                                  setPeriods(updated);
+                                }}
+                                className="w-full px-2 py-1 border rounded text-xs font-medium"
+                              >
+                                <option value="presencial">Presencial (padrão)</option>
+                                <option value="sincrono">Síncrono</option>
+                                <option value="sincrono-mediado">Síncrono-Mediado</option>
+                                <option value="assincrono">Assíncrono</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
 
-                        <div className="lg:col-span-1 flex items-center justify-between gap-1 pt-3">
+                        <div className={`${useChSplit ? 'lg:col-span-4' : 'lg:col-span-1'} flex items-center justify-between gap-1 pt-3`}>
                           <label
                             className="text-[10px] text-slate-700 flex items-center gap-1 cursor-pointer whitespace-nowrap"
                             title="Disciplina de Extensão"
@@ -1146,6 +1402,20 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
+
+                        {useChSplit && (
+                          <div className="lg:col-span-12 mt-1">
+                            <ChSplitFields
+                              disc={{ ...disc, hasLaboratory, hasClinical }}
+                              flags={splitFlags}
+                              onChange={(next) => {
+                                const updated = [...periods];
+                                updated[pIdx].disciplines[dIdx] = next;
+                                setPeriods(updated);
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1162,11 +1432,19 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   3. Módulos Temáticos, Ramificações, Conhecimentos & Saberes ({isZabala ? 'Zabala' : 'CHA'})
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Cadastre os módulos do tronco comum e ramificações (ex: 9A/9B, 10A/10B) com conhecimentos e saberes.
+                  Cadastre os módulos do tronco comum e ramificações com conhecimentos e saberes. Dados do curso já carregados.
                 </p>
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleClearAndStartFresh}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold flex items-center gap-1 hover:bg-slate-50"
+                >
+                  <Eraser className="w-3.5 h-3.5" />
+                  Limpar e começar do zero
+                </button>
                 <button
                   type="button"
                   onClick={() => addModule()}
@@ -1193,6 +1471,12 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 </button>
               </div>
             </div>
+
+            {modules.length === 0 && (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500">
+                Nenhum módulo cadastrado. Use os botões acima para iniciar a estrutura.
+              </div>
+            )}
 
             <div className="space-y-6">
               {modules.map((mod, mIdx) => (
@@ -1439,6 +1723,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               category: 'saber-conceitual',
                               hours: 20,
                               modalityDelivery: 'presencial',
+                              hasLaboratory,
+                              hasClinical,
                             });
                             setModules(updated);
                           }}
@@ -1481,38 +1767,78 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               className="flex-1 min-w-[180px] px-2 py-1 border rounded text-xs"
                             />
 
-                            <select
-                              value={know.modalityDelivery}
-                              onChange={(e) => {
-                                const updated = [...modules];
-                                if (updated[mIdx].knowledges) {
-                                  updated[mIdx].knowledges[kIdx].modalityDelivery = e.target.value as any;
-                                  setModules(updated);
-                                }
-                              }}
-                              className="px-2 py-1 rounded border text-[11px] font-medium bg-white"
-                            >
-                              <option value="presencial">Presencial</option>
-                              <option value="sincrono">Síncrono</option>
-                              <option value="sincrono-mediado">Síncrono-Mediado</option>
-                              <option value="assincrono">Assíncrono</option>
-                            </select>
+                            {!useChSplit && (
+                              <>
+                                <select
+                                  value={know.modalityDelivery}
+                                  onChange={(e) => {
+                                    const updated = [...modules];
+                                    if (updated[mIdx].knowledges) {
+                                      const modalityDelivery = e.target.value as KnowledgeItem['modalityDelivery'];
+                                      const k = { ...updated[mIdx].knowledges[kIdx], modalityDelivery };
+                                      if (modalityDelivery !== 'presencial') {
+                                        k.chTheoretical = undefined;
+                                        k.chLaboratory = undefined;
+                                        k.chClinical = undefined;
+                                        k.chPresential = undefined;
+                                      }
+                                      updated[mIdx].knowledges[kIdx] = k;
+                                      setModules(updated);
+                                    }
+                                  }}
+                                  className="px-2 py-1 rounded border text-[11px] font-medium bg-white"
+                                >
+                                  <option value="presencial">Presencial</option>
+                                  <option value="sincrono">Síncrono</option>
+                                  <option value="sincrono-mediado">Síncrono-Mediado</option>
+                                  <option value="assincrono">Assíncrono</option>
+                                </select>
 
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                value={know.hours}
-                                onChange={(e) => {
-                                  const updated = [...modules];
-                                  if (updated[mIdx].knowledges) {
-                                    updated[mIdx].knowledges[kIdx].hours = Number(e.target.value);
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number"
+                                    value={know.hours}
+                                    onChange={(e) => {
+                                      const updated = [...modules];
+                                      if (updated[mIdx].knowledges) {
+                                        const hours = Number(e.target.value);
+                                        updated[mIdx].knowledges[kIdx] = {
+                                          ...updated[mIdx].knowledges[kIdx],
+                                          hours,
+                                          chPresential:
+                                            updated[mIdx].knowledges[kIdx].modalityDelivery === 'presencial'
+                                              ? hours
+                                              : updated[mIdx].knowledges[kIdx].chPresential,
+                                          chTheoretical:
+                                            updated[mIdx].knowledges[kIdx].modalityDelivery === 'presencial'
+                                              ? hours
+                                              : updated[mIdx].knowledges[kIdx].chTheoretical,
+                                        };
+                                        setModules(updated);
+                                      }
+                                    }}
+                                    className="w-14 px-1.5 py-1 border rounded text-xs text-center font-bold text-sky-900"
+                                  />
+                                  <span className="text-[10px] text-slate-500">h</span>
+                                </div>
+                              </>
+                            )}
+
+                            {useChSplit && (
+                              <div className="w-full">
+                                <ChSplitFields
+                                  compact
+                                  disc={knowledgeAsDiscipline(know, splitFlags)}
+                                  flags={splitFlags}
+                                  onChange={(next) => {
+                                    const updated = [...modules];
+                                    if (!updated[mIdx].knowledges) return;
+                                    updated[mIdx].knowledges[kIdx] = knowledgeFromDiscipline(know, next);
                                     setModules(updated);
-                                  }
-                                }}
-                                className="w-14 px-1.5 py-1 border rounded text-xs text-center font-bold text-sky-900"
-                              />
-                              <span className="text-[10px] text-slate-500">h</span>
-                            </div>
+                                  }}
+                                />
+                              </div>
+                            )}
 
                             <button
                               type="button"
@@ -1581,27 +1907,14 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   className="w-full px-3 py-2 border rounded"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Código da Sigla *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: MED-VET"
-                    value={newCourseCode}
-                    onChange={(e) => setNewCourseCode(e.target.value.toUpperCase())}
-                    className="w-full px-3 py-2 border rounded font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">CH Mínima Total (h)</label>
-                  <input
-                    type="number"
-                    value={newCourseHours}
-                    onChange={(e) => setNewCourseHours(Number(e.target.value))}
-                    className="w-full px-3 py-2 border rounded"
-                  />
-                </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">CH Mínima Total (h)</label>
+                <input
+                  type="number"
+                  value={newCourseHours}
+                  onChange={(e) => setNewCourseHours(Number(e.target.value))}
+                  className="w-full px-3 py-2 border rounded"
+                />
               </div>
               <div>
                 <label className="font-bold text-slate-700 block mb-1">Ato Autorizativo</label>

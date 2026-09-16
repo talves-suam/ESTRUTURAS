@@ -116,7 +116,7 @@ export const initialCourses: Course[] = [
   {
     id: 'course-adm-ead',
     code: 'ADM-EAD',
-    name: 'Administração (EAD)',
+    name: 'Administração',
     modality: 'EAD',
     cineBrasilCode: '0413A01',
     cineBrasilArea: 'Negócios, administração e direito (0413 - Gestão e administração)',
@@ -266,7 +266,7 @@ export const templateDisciplinarTAM242: CurriculumStructure = {
   id: 'struct-tam242',
   code: 'TAM242',
   courseId: 'course-adm-ead',
-  courseName: 'Administração (EAD)',
+  courseName: 'Administração',
   modality: 'EAD',
   activeYearSemester: '2024.2',
   structureType: 'disciplinar',

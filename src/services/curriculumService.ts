@@ -1,6 +1,6 @@
 import { doc, getDoc, getDocs, setDoc, deleteDoc, collection } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../firebase/config';
-import { CurriculumStructure, Course, AppSettings, getDisciplineChBreakdown } from '../types/curriculum';
+import { CurriculumStructure, Course, AppSettings, getDisciplineChBreakdown, withStructurePresentialFlags } from '../types/curriculum';
 import { initialCourses, initialStructures, initialSettings } from '../data/initialData';
 
 const STRUCTURES_COLLECTION = 'curriculum_structures';
@@ -30,7 +30,7 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
       let pHours = 0;
 
       period.disciplines.forEach((disc) => {
-        const bd = getDisciplineChBreakdown(disc);
+        const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
         const hours = bd.total;
         const credits = Number(disc.credits) || 0;
         totalHours += hours;
@@ -65,7 +65,8 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
       let modHours = 0;
       if (mod.disciplines && mod.disciplines.length > 0) {
         mod.disciplines.forEach((disc) => {
-          const hours = Number(disc.hours) || 0;
+          const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
+          const hours = bd.total;
           const credits = Number(disc.credits) || 0;
           modHours += hours;
           totalCredits += credits;
@@ -75,11 +76,8 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
             coreHours += hours;
           }
 
-          if (disc.modalityDelivery === 'presencial') {
-            presentialHours += hours;
-          } else {
-            eadHours += hours;
-          }
+          presentialHours += bd.presential;
+          eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
 
           if (disc.isExtension) {
             extensionHours += hours;
@@ -87,6 +85,33 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
           if (disc.isInternship) {
             internshipHours += hours;
           }
+        });
+      } else if (mod.knowledges && mod.knowledges.length > 0) {
+        mod.knowledges.forEach((k) => {
+          const asDisc = {
+            id: k.id,
+            code: mod.code || '',
+            name: k.name,
+            type: 'Obrigatória' as const,
+            credits: 0,
+            hours: k.hours || 0,
+            modalityDelivery: k.modalityDelivery,
+            hasLaboratory: k.hasLaboratory,
+            hasClinical: k.hasClinical,
+            chTheoretical: k.chTheoretical,
+            chLaboratory: k.chLaboratory,
+            chClinical: k.chClinical,
+            chPresential: k.chPresential,
+            chSyncMediated: k.chSyncMediated,
+            chAsync: k.chAsync,
+          };
+          const bd = getDisciplineChBreakdown(
+            withStructurePresentialFlags(asDisc, structure)
+          );
+          modHours += bd.total;
+          coreHours += bd.total;
+          presentialHours += bd.presential;
+          eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
         });
       } else {
         modHours = Number(mod.hours) || 0;

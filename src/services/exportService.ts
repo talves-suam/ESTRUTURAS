@@ -8,6 +8,7 @@ import {
   Course,
   Discipline,
   getDisciplineChBreakdown,
+  structureHasPresentialSplit,
 } from '../types/curriculum';
 import {
   buildWorkloadSummary,
@@ -314,6 +315,7 @@ export async function exportToXLSX(
 export function exportToPDF(structure: CurriculumStructure, settings?: AppSettings): void {
   // Use landscape A4 (297 x 210 mm) for academic matrixes with granular CH columns
   const doc = new jsPDF('l', 'mm', 'a4');
+  const usePresentialSplit = structureHasPresentialSplit(structure);
   const saberes = getSaberesLabels(settings?.pedagogicalNomenclature);
   const chaTitle =
     settings?.pedagogicalNomenclature === 'zabala' ? saberes.full : saberes.sectionTitle;
@@ -392,12 +394,18 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
 
   const summaryPreview = buildWorkloadSummary(structure);
   const findRow = (id: string) => summaryPreview.rows.find((r) => r.id === id);
-  const syncH = findRow('sincrono')?.hours || 0;
+  const theoH = findRow('teorico')?.hours || 0;
+  const labH = findRow('laboratorio')?.hours || 0;
+  const clinH = findRow('clinica')?.hours || 0;
   const syncMedH = findRow('sincrono-mediado')?.hours || 0;
   const asyncH = findRow('assincrono')?.hours || 0;
 
-  doc.text(`CH Presencial: ${structure.calculatedPresentialHours} horas`, col2, y + 9);
-  doc.text(`Síncrono / Síncrono-Mediado / Assíncrono: ${syncH} / ${syncMedH} / ${asyncH}`, col2, y + 14);
+  if (usePresentialSplit) {
+    doc.text(`CH Presencial: ${structure.calculatedPresentialHours}h (Teór. ${theoH} · Lab. ${labH} · Clín. ${clinH})`, col2, y + 9);
+  } else {
+    doc.text(`CH Presencial: ${structure.calculatedPresentialHours} horas`, col2, y + 9);
+  }
+  doc.text(`Síncrono-Mediado / Assíncrono: ${syncMedH} / ${asyncH}`, col2, y + 14);
 
   doc.text(`Extensão (Mínimo 10%): ${structure.calculatedExtensionHours} horas`, col3, y + 9);
   doc.text(`Estágio Supervisionado: ${structure.calculatedInternshipHours} horas`, col3, y + 14);
@@ -428,24 +436,33 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFillColor(235, 240, 245);
       doc.rect(margin, y, contentWidth, 5, 'F');
       doc.setTextColor(0, 43, 73);
-      doc.setFontSize(6.8);
+      doc.setFontSize(6.2);
       doc.text('Código', margin + 2, y + 3.5);
-      doc.text('Nome da Disciplina', margin + 22, y + 3.5);
-      doc.text('Tipo', margin + 110, y + 3.5);
-      doc.text('Avaliação', margin + 132, y + 3.5);
-      doc.text('Créditos', margin + 158, y + 3.5);
-      doc.text('CH Presencial', margin + 170, y + 3.5);
-      doc.text('CH Síncrona', margin + 196, y + 3.5);
-      doc.text('CH Síncrona-Mediada', margin + 218, y + 3.5);
-      doc.text('CH Assíncrona', margin + 246, y + 3.5);
-      doc.text('Total', margin + 268, y + 3.5);
+      doc.text('Nome da Disciplina', margin + 20, y + 3.5);
+      doc.text('Tipo', margin + 100, y + 3.5);
+      doc.text('Créd.', margin + 120, y + 3.5);
+      if (usePresentialSplit) {
+        doc.text('Teór.', margin + 136, y + 3.5);
+        doc.text('Lab.', margin + 156, y + 3.5);
+        doc.text('Clín.', margin + 174, y + 3.5);
+        doc.text('Sínc.-Med.', margin + 194, y + 3.5);
+        doc.text('Assínc.', margin + 226, y + 3.5);
+        doc.text('Total', margin + 258, y + 3.5);
+      } else {
+        doc.text('CH Presencial', margin + 140, y + 3.5);
+        doc.text('Sínc.-Mediada', margin + 180, y + 3.5);
+        doc.text('Assíncrona', margin + 220, y + 3.5);
+        doc.text('Total', margin + 258, y + 3.5);
+      }
       y += 5;
 
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(30, 30, 30);
 
+      let pTheo = 0;
+      let pLab = 0;
+      let pClin = 0;
       let pPres = 0;
-      let pSync = 0;
       let pSyncMed = 0;
       let pAsync = 0;
       let pTot = 0;
@@ -456,9 +473,12 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
           y = 12;
         }
         const bd = getDisciplineChBreakdown(disc);
+        const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
+        pTheo += bd.theoretical;
+        pLab += bd.laboratory;
+        pClin += bd.clinical;
         pPres += bd.presential;
-        pSync += bd.sync;
-        pSyncMed += bd.syncMediated;
+        pSyncMed += syncMed;
         pAsync += bd.async;
         pTot += bd.total;
 
@@ -468,15 +488,22 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setFont('helvetica', 'bold');
         doc.text(disc.code, margin + 2, y + 3.2);
         doc.setFont('helvetica', 'normal');
-        doc.text(disc.name.substring(0, 48), margin + 22, y + 3.2);
-        doc.text(disc.type.substring(0, 12), margin + 110, y + 3.2);
-        doc.text((disc.evaluationForm || 'Nota').substring(0, 12), margin + 132, y + 3.2);
-        doc.text(`${disc.credits}`, margin + 158, y + 3.2);
-        doc.text(`${bd.presential}`, margin + 174, y + 3.2);
-        doc.text(`${bd.sync}`, margin + 200, y + 3.2);
-        doc.text(`${bd.syncMediated}`, margin + 226, y + 3.2);
-        doc.text(`${bd.async}`, margin + 250, y + 3.2);
-        doc.text(`${bd.total}`, margin + 270, y + 3.2);
+        doc.text(disc.name.substring(0, 42), margin + 20, y + 3.2);
+        doc.text(disc.type.substring(0, 10), margin + 100, y + 3.2);
+        doc.text(`${disc.credits}`, margin + 122, y + 3.2);
+        if (usePresentialSplit) {
+          doc.text(`${bd.theoretical}`, margin + 138, y + 3.2);
+          doc.text(`${bd.laboratory}`, margin + 158, y + 3.2);
+          doc.text(`${bd.clinical}`, margin + 176, y + 3.2);
+          doc.text(`${syncMed}`, margin + 200, y + 3.2);
+          doc.text(`${bd.async}`, margin + 230, y + 3.2);
+          doc.text(`${bd.total}`, margin + 260, y + 3.2);
+        } else {
+          doc.text(`${bd.presential}`, margin + 150, y + 3.2);
+          doc.text(`${syncMed}`, margin + 190, y + 3.2);
+          doc.text(`${bd.async}`, margin + 230, y + 3.2);
+          doc.text(`${bd.total}`, margin + 260, y + 3.2);
+        }
 
         y += 4.5;
       });
@@ -486,9 +513,11 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.rect(margin, y, contentWidth, 5, 'F');
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(255, 107, 0); // Laranja UNISUAM
-      doc.setFontSize(7);
+      doc.setFontSize(6.5);
       doc.text(
-        `Subtotal ${period.number}º Período: ${period.totalCredits} | CH Presencial: ${pPres}h | CH Síncrona: ${pSync}h | CH Síncrona-Mediada: ${pSyncMed}h | CH Assíncrona: ${pAsync}h | Total: ${pTot || period.totalHours}h`,
+        usePresentialSplit
+          ? `Subtotal ${period.number}º Período: ${period.totalCredits} créd. | Teór. ${pTheo}h | Lab. ${pLab}h | Clín. ${pClin}h | Sínc.-Med. ${pSyncMed}h | Assínc. ${pAsync}h | Total: ${pTot || period.totalHours}h`
+          : `Subtotal ${period.number}º Período: ${period.totalCredits} créd. | CH Presencial: ${pPres}h | Sínc.-Med. ${pSyncMed}h | Assínc. ${pAsync}h | Total: ${pTot || period.totalHours}h`,
         margin + 3,
         y + 3.5
       );
@@ -526,15 +555,26 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setFontSize(6.8);
         doc.text('Código', margin + 2, y + 3.2);
         doc.text('Conhecimento', margin + 22, y + 3.2);
-        doc.text('Tipo', margin + 130, y + 3.2);
-        doc.text('Presencial', margin + 170, y + 3.2);
-        doc.text('Síncrona-Mediada', margin + 200, y + 3.2);
-        doc.text('Assíncrona', margin + 245, y + 3.2);
+        doc.text('Tipo', margin + 110, y + 3.2);
+        if (usePresentialSplit) {
+          doc.text('Teór.', margin + 140, y + 3.2);
+          doc.text('Lab.', margin + 160, y + 3.2);
+          doc.text('Clín.', margin + 178, y + 3.2);
+          doc.text('Sínc.-Med.', margin + 198, y + 3.2);
+          doc.text('Assínc.', margin + 230, y + 3.2);
+        } else {
+          doc.text('Presencial', margin + 150, y + 3.2);
+          doc.text('Sínc.-Mediada', margin + 190, y + 3.2);
+          doc.text('Assíncrona', margin + 235, y + 3.2);
+        }
         y += 4.5;
 
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(30, 30, 30);
 
+        let mTheo = 0;
+        let mLab = 0;
+        let mClin = 0;
         let mPres = 0;
         let mSyncMed = 0;
         let mAsync = 0;
@@ -545,16 +585,28 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
             y = 12;
           }
           const bd = getDisciplineChBreakdown(d);
+          const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
+          mTheo += bd.theoretical;
+          mLab += bd.laboratory;
+          mClin += bd.clinical;
           mPres += bd.presential;
-          mSyncMed += bd.syncMediated;
+          mSyncMed += syncMed;
           mAsync += bd.async;
 
           doc.text(d.code, margin + 2, y + 3.2);
-          doc.text(d.name.substring(0, 55), margin + 22, y + 3.2);
-          doc.text(d.type.substring(0, 14), margin + 130, y + 3.2);
-          doc.text(`${bd.presential}`, margin + 172, y + 3.2);
-          doc.text(`${bd.syncMediated}`, margin + 205, y + 3.2);
-          doc.text(`${bd.async}`, margin + 247, y + 3.2);
+          doc.text(d.name.substring(0, 48), margin + 22, y + 3.2);
+          doc.text(d.type.substring(0, 12), margin + 110, y + 3.2);
+          if (usePresentialSplit) {
+            doc.text(`${bd.theoretical}`, margin + 142, y + 3.2);
+            doc.text(`${bd.laboratory}`, margin + 162, y + 3.2);
+            doc.text(`${bd.clinical}`, margin + 180, y + 3.2);
+            doc.text(`${syncMed}`, margin + 205, y + 3.2);
+            doc.text(`${bd.async}`, margin + 234, y + 3.2);
+          } else {
+            doc.text(`${bd.presential}`, margin + 158, y + 3.2);
+            doc.text(`${syncMed}`, margin + 200, y + 3.2);
+            doc.text(`${bd.async}`, margin + 242, y + 3.2);
+          }
           y += 4.2;
         });
 
@@ -566,9 +618,11 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.rect(margin, y, contentWidth, 5, 'F');
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(255, 107, 0);
-        doc.setFontSize(7);
+        doc.setFontSize(6.5);
         doc.text(
-          `Subtotal dos Conhecimentos: CH Presencial: ${mPres}h | CH Síncrona-Mediada: ${mSyncMed}h | CH Assíncrona: ${mAsync}h`,
+          usePresentialSplit
+            ? `Subtotal: Teór. ${mTheo}h | Lab. ${mLab}h | Clín. ${mClin}h | Sínc.-Med. ${mSyncMed}h | Assínc. ${mAsync}h`
+            : `Subtotal: CH Presencial: ${mPres}h | Sínc.-Med. ${mSyncMed}h | Assínc. ${mAsync}h`,
           margin + 3,
           y + 3.5
         );
@@ -726,6 +780,7 @@ export async function generateInteractiveHtml(
     settings?.pedagogicalNomenclature === 'zabala' ? saberes.full : saberes.sectionTitle;
   const workload = buildWorkloadSummary(structure);
   const hoursOf = (id: string) => workload.rows.find((r) => r.id === id)?.hours || 0;
+  const usePresentialSplit = structureHasPresentialSplit(structure);
   const logoDataUrl = await getLogoDataUrl().catch(() => '');
 
   const dataJson = JSON.stringify(structure);
@@ -796,9 +851,20 @@ export async function generateInteractiveHtml(
             <div class="bg-[#FF6B00] h-2 rounded-full" style="width: ${Math.min(100, Math.round((structure.calculatedTotalHours / (structure.requiredTotalHours || 1)) * 100))}%"></div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-1 pt-1 text-[11px] text-slate-600">
-            <div>Presencial: <span class="font-bold text-slate-800">${structure.calculatedPresentialHours} horas</span></div>
-            <div>Síncrono-Mediado: <span class="font-bold text-slate-800">${hoursOf('sincrono-mediado')} horas</span></div>
-            <div>Assíncrono: <span class="font-bold text-slate-800">${hoursOf('assincrono')} horas</span></div>
+            ${
+              usePresentialSplit
+                ? `<div>Teórico: <span class="font-bold text-slate-800">${hoursOf('teorico')}h</span></div>
+            <div>Laboratório: <span class="font-bold text-slate-800">${hoursOf('laboratorio')}h</span></div>
+            <div>Clínica: <span class="font-bold text-slate-800">${hoursOf('clinica')}h</span></div>`
+                : `<div>Presencial: <span class="font-bold text-slate-800">${structure.calculatedPresentialHours}h</span></div>`
+            }
+            <div>Síncrono-Mediado: <span class="font-bold text-slate-800">${hoursOf('sincrono-mediado')}h</span></div>
+            <div>Assíncrono: <span class="font-bold text-slate-800">${hoursOf('assincrono')}h</span></div>
+            ${
+              usePresentialSplit
+                ? `<div>Presencial total: <span class="font-bold text-slate-800">${structure.calculatedPresentialHours}h</span></div>`
+                : ''
+            }
           </div>
         </div>
       </div>
@@ -832,37 +898,71 @@ export async function generateInteractiveHtml(
             <span class="text-xs font-semibold px-2.5 py-1 rounded bg-white/10 text-white">${period.totalCredits} · ${period.totalHours} horas</span>
           </button>
           <div data-period-body class="overflow-x-auto">
-            <table class="w-full text-left text-sm min-w-[900px]">
+            <table class="w-full text-left text-sm ${usePresentialSplit ? 'min-w-[980px]' : 'min-w-[860px]'}">
               <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                ${
+                  usePresentialSplit
+                    ? `<tr>
+                  <th rowspan="2" class="px-3 py-2 align-bottom">Código</th>
+                  <th rowspan="2" class="px-3 py-2 min-w-[180px] align-bottom">Disciplina</th>
+                  <th rowspan="2" class="px-2.5 py-2 align-bottom">Tipo</th>
+                  <th rowspan="2" class="px-2.5 py-2 align-bottom">Avaliação</th>
+                  <th rowspan="2" class="px-2 py-2 text-center align-bottom">Créditos</th>
+                  <th colspan="3" class="px-2 py-1 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
+                  <th rowspan="2" class="px-2 py-2 text-center bg-indigo-50/50 text-indigo-900 align-bottom">Síncrono-Mediado</th>
+                  <th rowspan="2" class="px-2 py-2 text-center bg-purple-50/50 text-purple-900 align-bottom">Assíncrono</th>
+                  <th rowspan="2" class="px-2.5 py-2 text-center align-bottom">Total</th>
+                </tr>
                 <tr>
+                  <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Teórico</th>
+                  <th class="px-1.5 py-1 text-center bg-blue-50/30 text-[#002B49]">Laboratório</th>
+                  <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Clínica</th>
+                </tr>`
+                    : `<tr>
                   <th class="px-3 py-3">Código</th>
                   <th class="px-3 py-3 min-w-[200px]">Disciplina</th>
                   <th class="px-2.5 py-3">Tipo</th>
                   <th class="px-2.5 py-3">Avaliação</th>
                   <th class="px-2 py-3 text-center">Créditos</th>
                   <th class="px-2.5 py-3 text-center bg-blue-50/50 text-[#002B49]">CH Presencial</th>
-                  <th class="px-2.5 py-3 text-center bg-sky-50/50 text-sky-900">CH Síncrona</th>
                   <th class="px-2.5 py-3 text-center bg-indigo-50/50 text-indigo-900">CH Síncrona-Mediada</th>
                   <th class="px-2.5 py-3 text-center bg-purple-50/50 text-purple-900">CH Assíncrona</th>
                   <th class="px-2.5 py-3 text-center">Total</th>
-                </tr>
+                </tr>`
+                }
               </thead>
               <tbody class="divide-y divide-slate-100">
                 ${period.disciplines
                   .map((disc) => {
                     const chBd = getDisciplineChBreakdown(disc);
-                    return `
+                    const syncMed = (chBd.syncMediated || 0) + (chBd.sync || 0);
+                    return usePresentialSplit
+                      ? `
                   <tr class="item-row hover:bg-blue-50/50 transition">
                     <td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>
                     <td class="px-3 py-3 font-medium text-slate-900">${disc.name}</td>
                     <td class="px-2.5 py-3 text-xs text-slate-600">${disc.type}</td>
                     <td class="px-2.5 py-3 text-xs text-slate-500">${disc.evaluationForm || 'Nota'}</td>
                     <td class="px-2 py-3 text-xs text-center font-semibold">${disc.credits}</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-blue-950">${chBd.presential > 0 ? chBd.presential + ' horas' : '0 horas'}</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-sky-900">${chBd.sync > 0 ? chBd.sync + ' horas' : '0 horas'}</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-indigo-900">${chBd.syncMediated > 0 ? chBd.syncMediated + ' horas' : '0 horas'}</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-purple-900">${chBd.async > 0 ? chBd.async + ' horas' : '0 horas'}</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-black text-[#FF6B00]">${chBd.total} horas</td>
+                    <td class="px-1.5 py-3 text-xs text-center font-bold text-blue-950">${chBd.theoretical}h</td>
+                    <td class="px-1.5 py-3 text-xs text-center font-bold text-teal-800">${chBd.laboratory}h</td>
+                    <td class="px-1.5 py-3 text-xs text-center font-bold text-rose-800">${chBd.clinical}h</td>
+                    <td class="px-2 py-3 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
+                    <td class="px-2 py-3 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
+                    <td class="px-2.5 py-3 text-xs text-center font-black text-[#FF6B00]">${chBd.total}h</td>
+                  </tr>
+                `
+                      : `
+                  <tr class="item-row hover:bg-blue-50/50 transition">
+                    <td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>
+                    <td class="px-3 py-3 font-medium text-slate-900">${disc.name}</td>
+                    <td class="px-2.5 py-3 text-xs text-slate-600">${disc.type}</td>
+                    <td class="px-2.5 py-3 text-xs text-slate-500">${disc.evaluationForm || 'Nota'}</td>
+                    <td class="px-2 py-3 text-xs text-center font-semibold">${disc.credits}</td>
+                    <td class="px-2.5 py-3 text-xs text-center font-bold text-blue-950">${chBd.presential}h</td>
+                    <td class="px-2.5 py-3 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
+                    <td class="px-2.5 py-3 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
+                    <td class="px-2.5 py-3 text-xs text-center font-black text-[#FF6B00]">${chBd.total}h</td>
                   </tr>
                 `;
                   })
@@ -871,19 +971,35 @@ export async function generateInteractiveHtml(
               <tfoot class="bg-slate-50 border-t border-slate-200 text-xs font-bold">
                 ${(() => {
                   const pPres = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
-                  const pSync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).sync, 0);
-                  const pSyncMed = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).syncMediated, 0);
+                  const pTheo = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
+                  const pLab = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
+                  const pClin = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).clinical, 0);
+                  const pSyncMed = period.disciplines.reduce((acc, d) => {
+                    const bd = getDisciplineChBreakdown(d);
+                    return acc + bd.syncMediated + (bd.sync || 0);
+                  }, 0);
                   const pAsync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
                   const pTot = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).total, 0);
-                  return `
+                  return usePresentialSplit
+                    ? `
                 <tr>
                   <td colspan="4" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
                   <td class="px-2 py-2.5 text-center text-slate-900">${period.totalCredits}</td>
-                  <td class="px-2.5 py-2.5 text-center text-blue-900">${pPres} horas</td>
-                  <td class="px-2.5 py-2.5 text-center text-sky-900">${pSync} horas</td>
-                  <td class="px-2.5 py-2.5 text-center text-indigo-900">${pSyncMed} horas</td>
-                  <td class="px-2.5 py-2.5 text-center text-purple-900">${pAsync} horas</td>
-                  <td class="px-2.5 py-2.5 text-center text-[#FF6B00]">${pTot || period.totalHours} horas</td>
+                  <td class="px-1.5 py-2.5 text-center text-blue-900">${pTheo}h</td>
+                  <td class="px-1.5 py-2.5 text-center text-teal-800">${pLab}h</td>
+                  <td class="px-1.5 py-2.5 text-center text-rose-800">${pClin}h</td>
+                  <td class="px-2 py-2.5 text-center text-indigo-900">${pSyncMed}h</td>
+                  <td class="px-2 py-2.5 text-center text-purple-900">${pAsync}h</td>
+                  <td class="px-2.5 py-2.5 text-center text-[#FF6B00]">${pTot || period.totalHours}h</td>
+                </tr>`
+                    : `
+                <tr>
+                  <td colspan="4" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
+                  <td class="px-2 py-2.5 text-center text-slate-900">${period.totalCredits}</td>
+                  <td class="px-2.5 py-2.5 text-center text-blue-900">${pPres}h</td>
+                  <td class="px-2.5 py-2.5 text-center text-indigo-900">${pSyncMed}h</td>
+                  <td class="px-2.5 py-2.5 text-center text-purple-900">${pAsync}h</td>
+                  <td class="px-2.5 py-2.5 text-center text-[#FF6B00]">${pTot || period.totalHours}h</td>
                 </tr>`;
                 })()}
               </tfoot>
@@ -926,43 +1042,88 @@ export async function generateInteractiveHtml(
                 ? (() => {
                     const discs = mod.disciplines || [];
                     const mPres = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
-                    const mSyncMed = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).syncMediated, 0);
+                    const mTheo = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
+                    const mLab = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
+                    const mClin = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).clinical, 0);
+                    const mSyncMed = discs.reduce((acc, d) => {
+                      const bd = getDisciplineChBreakdown(d);
+                      return acc + bd.syncMediated + (bd.sync || 0);
+                    }, 0);
                     const mAsync = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
                     return `<h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Conhecimentos</h4>
             <div class="overflow-x-auto mb-4">
-              <table class="w-full text-left text-sm min-w-[700px] border border-slate-200 rounded-lg overflow-hidden">
+              <table class="w-full text-left text-sm ${usePresentialSplit ? 'min-w-[820px]' : 'min-w-[700px]'} border border-slate-200 rounded-lg overflow-hidden">
                 <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                  ${
+                    usePresentialSplit
+                      ? `<tr>
+                    <th rowspan="2" class="px-3 py-2 align-bottom">Código</th>
+                    <th rowspan="2" class="px-3 py-2 align-bottom">Conhecimento</th>
+                    <th rowspan="2" class="px-2 py-2 text-center align-bottom">Tipo</th>
+                    <th colspan="3" class="px-2 py-1 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
+                    <th rowspan="2" class="px-2 py-2 text-center bg-indigo-50/50 text-indigo-900 align-bottom">Síncrono-Mediado</th>
+                    <th rowspan="2" class="px-2 py-2 text-center bg-purple-50/50 text-purple-900 align-bottom">Assíncrono</th>
+                  </tr>
                   <tr>
+                    <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Teórico</th>
+                    <th class="px-1.5 py-1 text-center bg-blue-50/30 text-[#002B49]">Laboratório</th>
+                    <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Clínica</th>
+                  </tr>`
+                      : `<tr>
                     <th class="px-3 py-2.5">Código</th>
                     <th class="px-3 py-2.5">Conhecimento</th>
                     <th class="px-2 py-2.5 text-center">Tipo</th>
                     <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]">CH Presencial</th>
                     <th class="px-2.5 py-2.5 text-center bg-indigo-50/50 text-indigo-900">CH Síncrona-Mediada</th>
                     <th class="px-2.5 py-2.5 text-center bg-purple-50/50 text-purple-900">CH Assíncrona</th>
-                  </tr>
+                  </tr>`
+                  }
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                   ${discs
                     .map((d) => {
                       const chBd = getDisciplineChBreakdown(d);
-                      return `<tr class="item-row">
+                      const syncMed = (chBd.syncMediated || 0) + (chBd.sync || 0);
+                      return usePresentialSplit
+                        ? `<tr class="item-row">
                     <td class="px-3 py-2.5 font-mono text-xs font-semibold text-[#002B49]">${d.code}</td>
                     <td class="px-3 py-2.5 font-medium text-slate-900">${d.name}</td>
                     <td class="px-2 py-2.5 text-xs text-center text-slate-600">${d.type}</td>
-                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.presential} horas</td>
-                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-indigo-900">${chBd.syncMediated} horas</td>
-                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-purple-900">${chBd.async} horas</td>
+                    <td class="px-1.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.theoretical}h</td>
+                    <td class="px-1.5 py-2.5 text-xs text-center font-bold text-teal-800">${chBd.laboratory}h</td>
+                    <td class="px-1.5 py-2.5 text-xs text-center font-bold text-rose-800">${chBd.clinical}h</td>
+                    <td class="px-2 py-2.5 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
+                    <td class="px-2 py-2.5 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
+                  </tr>`
+                        : `<tr class="item-row">
+                    <td class="px-3 py-2.5 font-mono text-xs font-semibold text-[#002B49]">${d.code}</td>
+                    <td class="px-3 py-2.5 font-medium text-slate-900">${d.name}</td>
+                    <td class="px-2 py-2.5 text-xs text-center text-slate-600">${d.type}</td>
+                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.presential}h</td>
+                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
+                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
                   </tr>`;
                     })
                     .join('')}
                 </tbody>
                 <tfoot class="bg-slate-50 border-t border-slate-200 text-xs font-bold">
-                  <tr>
+                  ${
+                    usePresentialSplit
+                      ? `<tr>
                     <td colspan="3" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
-                    <td class="px-2.5 py-2.5 text-center text-blue-900">${mPres} horas</td>
-                    <td class="px-2.5 py-2.5 text-center text-indigo-900">${mSyncMed} horas</td>
-                    <td class="px-2.5 py-2.5 text-center text-purple-900">${mAsync} horas</td>
-                  </tr>
+                    <td class="px-1.5 py-2.5 text-center text-blue-900">${mTheo}h</td>
+                    <td class="px-1.5 py-2.5 text-center text-teal-800">${mLab}h</td>
+                    <td class="px-1.5 py-2.5 text-center text-rose-800">${mClin}h</td>
+                    <td class="px-2 py-2.5 text-center text-indigo-900">${mSyncMed}h</td>
+                    <td class="px-2 py-2.5 text-center text-purple-900">${mAsync}h</td>
+                  </tr>`
+                      : `<tr>
+                    <td colspan="3" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
+                    <td class="px-2.5 py-2.5 text-center text-blue-900">${mPres}h</td>
+                    <td class="px-2.5 py-2.5 text-center text-indigo-900">${mSyncMed}h</td>
+                    <td class="px-2.5 py-2.5 text-center text-purple-900">${mAsync}h</td>
+                  </tr>`
+                  }
                 </tfoot>
               </table>
             </div>`;

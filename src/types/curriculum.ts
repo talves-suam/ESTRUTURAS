@@ -33,7 +33,17 @@ export interface Discipline {
   hours: number; // Carga Horária em horas-relógio (60 min) ou créditos * 20h
   modalityDelivery: DeliveryModalityFlag; // 'presencial' | 'sincrono' | 'sincrono-mediado' | 'assincrono'
   pedagogicalNature?: 'teorica' | 'pratica' | 'teorico-pratica';
-  chPresential?: number; // Carga Horária Presencial
+  /** Marca divisão da CH presencial em Laboratório */
+  hasLaboratory?: boolean;
+  /** Marca divisão da CH presencial em Clínica */
+  hasClinical?: boolean;
+  /** Fração teórica da CH presencial (sempre presente quando presencial) */
+  chTheoretical?: number;
+  /** Fração laboratorial da CH presencial */
+  chLaboratory?: number;
+  /** Fração clínica da CH presencial */
+  chClinical?: number;
+  chPresential?: number; // Carga Horária Presencial (total = teórico + lab + clínica)
   chSync?: number; // Carga Horária Síncrona
   chSyncMediated?: number; // Carga Horária Síncrona-Mediada
   chAsync?: number; // Carga Horária Assíncrona
@@ -46,42 +56,329 @@ export interface Discipline {
 }
 
 export interface DisciplineChBreakdown {
+  /** Total presencial (teórico + laboratório + clínica) — usado em % MEC */
   presential: number;
+  theoretical: number;
+  laboratory: number;
+  clinical: number;
   sync: number;
   syncMediated: number;
   async: number;
   total: number;
 }
 
+function resolvePresentialSplit(
+  presentialTotal: number,
+  disc: Pick<Discipline, 'hasLaboratory' | 'hasClinical' | 'chTheoretical' | 'chLaboratory' | 'chClinical'>
+): { theoretical: number; laboratory: number; clinical: number; presential: number } {
+  const hasLab = !!disc.hasLaboratory;
+  const hasClin = !!disc.hasClinical;
+  const hasAnySplit = hasLab || hasClin;
+
+  if (!hasAnySplit) {
+    return {
+      theoretical: presentialTotal,
+      laboratory: 0,
+      clinical: 0,
+      presential: presentialTotal,
+    };
+  }
+
+  const laboratory = hasLab ? Number(disc.chLaboratory) || 0 : 0;
+  const clinical = hasClin ? Number(disc.chClinical) || 0 : 0;
+  const theoreticalExplicit = disc.chTheoretical;
+  const theoretical =
+    theoreticalExplicit !== undefined
+      ? Number(theoreticalExplicit) || 0
+      : Math.max(0, presentialTotal - laboratory - clinical);
+
+  const presential = theoretical + laboratory + clinical;
+  return { theoretical, laboratory, clinical, presential };
+}
+
+/**
+ * Redistribui a CH presencial ao marcar/desmarcar Lab e/ou Clínica.
+ * Sem flags: tudo em teórico. Com flags: mantém partes ativas e o restante em teórico.
+ */
+export function applyPresentialSplitFlags(
+  disc: Discipline,
+  flags: { hasLaboratory?: boolean; hasClinical?: boolean }
+): Discipline {
+  const hasLaboratory = flags.hasLaboratory ?? !!disc.hasLaboratory;
+  const hasClinical = flags.hasClinical ?? !!disc.hasClinical;
+  const hours = Number(disc.hours) || 0;
+  const isPresencial = disc.modalityDelivery === 'presencial';
+
+  const prevLab = Number(disc.chLaboratory) || 0;
+  const prevClin = Number(disc.chClinical) || 0;
+  const prevTheo =
+    disc.chTheoretical !== undefined
+      ? Number(disc.chTheoretical) || 0
+      : Math.max(0, hours - prevLab - prevClin);
+
+  if (!hasLaboratory && !hasClinical) {
+    const theoretical = isPresencial ? hours : prevTheo + prevLab + prevClin;
+    return {
+      ...disc,
+      hasLaboratory: false,
+      hasClinical: false,
+      chTheoretical: theoretical || undefined,
+      chLaboratory: undefined,
+      chClinical: undefined,
+      chPresential: isPresencial ? hours : theoretical || disc.chPresential,
+    };
+  }
+
+  let theoretical = prevTheo;
+  let laboratory = hasLaboratory ? prevLab : 0;
+  let clinical = hasClinical ? prevClin : 0;
+
+  // Horas de partes desmarcadas voltam para teórico
+  if (!hasLaboratory && prevLab > 0) theoretical += prevLab;
+  if (!hasClinical && prevClin > 0) theoretical += prevClin;
+
+  // Ao marcar pela primeira vez sem valores, teórico absorve o total presencial
+  if (hasLaboratory && disc.chLaboratory === undefined && !disc.hasLaboratory) {
+    laboratory = 0;
+  }
+  if (hasClinical && disc.chClinical === undefined && !disc.hasClinical) {
+    clinical = 0;
+  }
+  if (disc.chTheoretical === undefined && !disc.hasLaboratory && !disc.hasClinical) {
+    theoretical = Math.max(0, hours - laboratory - clinical);
+  }
+
+  const sum = theoretical + laboratory + clinical;
+  return {
+    ...disc,
+    hasLaboratory,
+    hasClinical,
+    chTheoretical: theoretical,
+    chLaboratory: hasLaboratory ? laboratory : undefined,
+    chClinical: hasClinical ? clinical : undefined,
+    hours: isPresencial ? sum : disc.hours,
+    chPresential: sum,
+  };
+}
+
+/** Atualiza uma fração presencial e recalcula hours/chPresential. */
+export function setPresentialPart(
+  disc: Discipline,
+  part: 'theoretical' | 'laboratory' | 'clinical',
+  value: number
+): Discipline {
+  return applyExplicitChBreakdown(disc, {
+    hasLaboratory: part === 'laboratory' ? true : !!disc.hasLaboratory,
+    hasClinical: part === 'clinical' ? true : !!disc.hasClinical,
+  }, { [part]: Math.max(0, Number(value) || 0) });
+}
+
+export type ExplicitChPart = 'theoretical' | 'laboratory' | 'clinical' | 'syncMediated' | 'async';
+
+/**
+ * Grava as frações de CH (como no relatório) e recalcula total/hours.
+ * Sem valores explícitos, parte do breakdown atual.
+ */
+export function applyExplicitChBreakdown(
+  disc: Discipline,
+  flags: { hasLaboratory: boolean; hasClinical: boolean },
+  patch: Partial<Record<ExplicitChPart, number>> = {}
+): Discipline {
+  const current = getDisciplineChBreakdown({
+    ...disc,
+    hasLaboratory: flags.hasLaboratory,
+    hasClinical: flags.hasClinical,
+  });
+  const theoretical = patch.theoretical !== undefined ? Math.max(0, Number(patch.theoretical) || 0) : current.theoretical;
+  const laboratory = flags.hasLaboratory
+    ? patch.laboratory !== undefined
+      ? Math.max(0, Number(patch.laboratory) || 0)
+      : current.laboratory
+    : 0;
+  const clinical = flags.hasClinical
+    ? patch.clinical !== undefined
+      ? Math.max(0, Number(patch.clinical) || 0)
+      : current.clinical
+    : 0;
+  const syncMediated =
+    patch.syncMediated !== undefined
+      ? Math.max(0, Number(patch.syncMediated) || 0)
+      : current.syncMediated + (current.sync || 0);
+  const asyncH =
+    patch.async !== undefined ? Math.max(0, Number(patch.async) || 0) : current.async;
+
+  const presential = theoretical + laboratory + clinical;
+  const total = presential + syncMediated + asyncH;
+
+  let modalityDelivery: DeliveryModalityFlag = disc.modalityDelivery;
+  if (presential > 0 && syncMediated === 0 && asyncH === 0) modalityDelivery = 'presencial';
+  else if (syncMediated > 0 && presential === 0 && asyncH === 0) modalityDelivery = 'sincrono-mediado';
+  else if (asyncH > 0 && presential === 0 && syncMediated === 0) modalityDelivery = 'assincrono';
+  else if (presential > 0) modalityDelivery = 'presencial';
+  else if (syncMediated > 0) modalityDelivery = 'sincrono-mediado';
+  else modalityDelivery = 'assincrono';
+
+  return {
+    ...disc,
+    hasLaboratory: flags.hasLaboratory,
+    hasClinical: flags.hasClinical,
+    chTheoretical: theoretical,
+    chLaboratory: flags.hasLaboratory ? laboratory : undefined,
+    chClinical: flags.hasClinical ? clinical : undefined,
+    chPresential: presential,
+    chSync: 0,
+    chSyncMediated: syncMediated,
+    chAsync: asyncH,
+    hours: total,
+    modalityDelivery,
+  };
+}
+
 export function getDisciplineChBreakdown(disc: Discipline): DisciplineChBreakdown {
-  const hasExplicit =
+  const hasExplicitModality =
     disc.chPresential !== undefined ||
     disc.chSync !== undefined ||
     disc.chSyncMediated !== undefined ||
     disc.chAsync !== undefined;
 
-  if (hasExplicit) {
-    const presential = Number(disc.chPresential) || 0;
+  const hasPresentialParts =
+    disc.chTheoretical !== undefined ||
+    disc.chLaboratory !== undefined ||
+    disc.chClinical !== undefined;
+
+  if (hasExplicitModality || hasPresentialParts) {
     const sync = Number(disc.chSync) || 0;
     const syncMediated = Number(disc.chSyncMediated) || 0;
     const async = Number(disc.chAsync) || 0;
-    const total = disc.hours || presential + sync + syncMediated + async;
-    return { presential, sync, syncMediated, async, total };
+
+    let presentialBase =
+      disc.chPresential !== undefined
+        ? Number(disc.chPresential) || 0
+        : disc.modalityDelivery === 'presencial'
+        ? Number(disc.hours) || Number(disc.credits || 0) * 20 || 0
+        : 0;
+
+    if (hasPresentialParts && disc.chPresential === undefined) {
+      const theo = Number(disc.chTheoretical) || 0;
+      const lab = disc.hasLaboratory ? Number(disc.chLaboratory) || 0 : 0;
+      const clin = disc.hasClinical ? Number(disc.chClinical) || 0 : 0;
+      if (theo + lab + clin > 0) presentialBase = theo + lab + clin;
+    }
+
+    const split = resolvePresentialSplit(presentialBase, disc);
+    const total =
+      disc.hours ||
+      split.presential + sync + syncMediated + async;
+
+    return {
+      presential: split.presential,
+      theoretical: split.theoretical,
+      laboratory: split.laboratory,
+      clinical: split.clinical,
+      sync,
+      syncMediated,
+      async,
+      total,
+    };
   }
 
   const hours = Number(disc.hours) || Number(disc.credits || 0) * 20 || 0;
   switch (disc.modalityDelivery) {
-    case 'presencial':
-      return { presential: hours, sync: 0, syncMediated: 0, async: 0, total: hours };
+    case 'presencial': {
+      const split = resolvePresentialSplit(hours, disc);
+      return {
+        presential: split.presential,
+        theoretical: split.theoretical,
+        laboratory: split.laboratory,
+        clinical: split.clinical,
+        sync: 0,
+        syncMediated: 0,
+        async: 0,
+        total: hours,
+      };
+    }
     case 'sincrono':
-      return { presential: 0, sync: hours, syncMediated: 0, async: 0, total: hours };
+      return {
+        presential: 0,
+        theoretical: 0,
+        laboratory: 0,
+        clinical: 0,
+        sync: hours,
+        syncMediated: 0,
+        async: 0,
+        total: hours,
+      };
     case 'sincrono-mediado':
-      return { presential: 0, sync: 0, syncMediated: hours, async: 0, total: hours };
+      return {
+        presential: 0,
+        theoretical: 0,
+        laboratory: 0,
+        clinical: 0,
+        sync: 0,
+        syncMediated: hours,
+        async: 0,
+        total: hours,
+      };
     case 'assincrono':
-      return { presential: 0, sync: 0, syncMediated: 0, async: hours, total: hours };
-    default:
-      return { presential: hours, sync: 0, syncMediated: 0, async: 0, total: hours };
+      return {
+        presential: 0,
+        theoretical: 0,
+        laboratory: 0,
+        clinical: 0,
+        sync: 0,
+        syncMediated: 0,
+        async: hours,
+        total: hours,
+      };
+    default: {
+      const split = resolvePresentialSplit(hours, disc);
+      return {
+        presential: split.presential,
+        theoretical: split.theoretical,
+        laboratory: split.laboratory,
+        clinical: split.clinical,
+        sync: 0,
+        syncMediated: 0,
+        async: 0,
+        total: hours,
+      };
+    }
   }
+}
+
+/** Flags de divisão da CH presencial herdadas do curso / gravadas na estrutura. */
+export function getPresentialSplitFlags(structure: Pick<CurriculumStructure, 'hasLaboratory' | 'hasClinical'>): {
+  enabled: boolean;
+  hasLaboratory: boolean;
+  hasClinical: boolean;
+} {
+  const hasLaboratory = !!structure.hasLaboratory;
+  const hasClinical = !!structure.hasClinical;
+  return {
+    enabled: hasLaboratory || hasClinical,
+    hasLaboratory,
+    hasClinical,
+  };
+}
+
+/** True se o curso/estrutura marca Laboratório e/ou Clínica. */
+export function structureHasPresentialSplit(
+  structure: Pick<CurriculumStructure, 'hasLaboratory' | 'hasClinical'>
+): boolean {
+  return getPresentialSplitFlags(structure).enabled;
+}
+
+/** Aplica as flags do curso/estrutura no componente para o breakdown de CH. */
+export function withStructurePresentialFlags(
+  disc: Discipline,
+  structure: Pick<CurriculumStructure, 'hasLaboratory' | 'hasClinical'>
+): Discipline {
+  const flags = getPresentialSplitFlags(structure);
+  return {
+    ...disc,
+    hasLaboratory: flags.hasLaboratory,
+    hasClinical: flags.hasClinical,
+  };
 }
 
 export interface PeriodData {
@@ -98,6 +395,11 @@ export interface KnowledgeItem {
   category: 'saber-conceitual' | 'saber-procedimental' | 'saber-atitudinal' | 'conceitual' | 'procedimental' | 'atitudinal' | 'conhecimento' | 'habilidade' | 'atitude';
   hours: number;
   modalityDelivery: DeliveryModalityFlag; // 'presencial' | 'sincrono-mediado' | 'assincrono'
+  hasLaboratory?: boolean;
+  hasClinical?: boolean;
+  chTheoretical?: number;
+  chLaboratory?: number;
+  chClinical?: number;
   chPresential?: number;
   chSyncMediated?: number;
   chAsync?: number;
@@ -174,6 +476,10 @@ export interface Course {
   coordinatorName?: string;
   coordinatorEmail?: string;
   totalSemesters?: number;
+  /** Curso usa CH presencial de Laboratório (vale para toda estrutura) */
+  hasLaboratory?: boolean;
+  /** Curso usa CH presencial de Clínica (vale para toda estrutura) */
+  hasClinical?: boolean;
 }
 
 export interface CurriculumStructure {
@@ -208,6 +514,10 @@ export interface CurriculumStructure {
   degrees?: Course['degrees'];
   coordinatorName?: string;
   coordinatorEmail?: string;
+  /** Herdado do curso: estrutura usa Laboratório na CH presencial */
+  hasLaboratory?: boolean;
+  /** Herdado do curso: estrutura usa Clínica na CH presencial */
+  hasClinical?: boolean;
 
   // Totais Calculados em Tempo Real
   calculatedTotalHours: number;

@@ -26,6 +26,9 @@ export default defineConfig(({ mode }) => {
       assetsDir: 'assets',
       sourcemap: false,
     },
+    optimizeDeps: {
+      include: ['pdfjs-dist'],
+    },
     server: {
       host: 'localhost',
       port: 3000,

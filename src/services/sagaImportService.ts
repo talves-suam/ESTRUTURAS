@@ -1,214 +1,436 @@
-import { CurriculumStructure, Discipline, PeriodData, ModuleData } from '../types/curriculum';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import * as XLSX from 'xlsx';
+import {
+  CurriculumStructure,
+  Discipline,
+  DeliveryModalityFlag,
+  ModalityType,
+  PeriodData,
+  ModuleData,
+} from '../types/curriculum';
 
-export function parseSagaReportText(
-  rawText: string,
-  params: {
-    courseName: string;
-    courseId: string;
-    modality: 'Presencial' | 'Semipresencial' | 'EAD';
-    code: string;
-    activeYearSemester: string;
-    structureType: 'disciplinar' | 'modular';
-    requiredTotalHours?: number;
+GlobalWorkerOptions.workerSrc = pdfWorker;
+
+export interface SagaParseParams {
+  courseName: string;
+  courseId: string;
+  modality: ModalityType;
+  code: string;
+  activeYearSemester: string;
+  structureType: 'disciplinar' | 'modular';
+  requiredTotalHours?: number;
+}
+
+export interface SagaHeaderHints {
+  courseName?: string;
+  structureCode?: string;
+  semester?: string;
+  modality?: ModalityType;
+}
+
+export interface SagaParseResult {
+  structure: CurriculumStructure;
+  hints: SagaHeaderHints;
+  warnings: string[];
+  stats: {
+    periods: number;
+    disciplines: number;
+    withoutHours: number;
+    withoutCredits: number;
+    withoutName: number;
+    textChars: number;
+  };
+}
+
+type TextContentItem = {
+  str?: string;
+  transform?: number[];
+};
+
+export async function extractTextFromPdf(data: ArrayBuffer): Promise<string> {
+  const pdf = await getDocument({ data: new Uint8Array(data) }).promise;
+  const pages: string[] = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const content = await page.getTextContent();
+    pages.push(rebuildPageLines(content.items as TextContentItem[]));
   }
-): CurriculumStructure {
+
+  return pages.join('\n');
+}
+
+export async function extractTextFromSpreadsheet(data: ArrayBuffer): Promise<string> {
+  const workbook = XLSX.read(data, { type: 'array' });
+  const lines: string[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+      header: 1,
+      raw: false,
+      defval: '',
+    });
+    for (const row of rows) {
+      const line = (row || [])
+        .map((cell) => String(cell ?? '').trim())
+        .filter(Boolean)
+        .join(' ');
+      if (line) lines.push(line);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/** Reconstrói linhas a partir dos itens de texto do PDF (agrupa pelo eixo Y). */
+function rebuildPageLines(items: TextContentItem[]): string {
+  const rows = new Map<number, { x: number; str: string }[]>();
+
+  for (const item of items) {
+    const str = (item.str || '').replace(/\s+/g, ' ');
+    if (!str.trim() || !item.transform) continue;
+    const x = item.transform[4] ?? 0;
+    const y = item.transform[5] ?? 0;
+    const bucket = Math.round(y / 3) * 3;
+    const row = rows.get(bucket) || [];
+    row.push({ x, str });
+    rows.set(bucket, row);
+  }
+
+  return [...rows.keys()]
+    .sort((a, b) => b - a)
+    .map((y) =>
+      (rows.get(y) || [])
+        .sort((a, b) => a.x - b.x)
+        .map((c) => c.str)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
+  const hints: SagaHeaderHints = {};
+  const head = rawText.slice(0, 2500);
+
+  const courseMatch = head.match(
+    /(?:curso|nome do curso)\s*[:\-]\s*([A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç0-9][^\n]{2,80})/i
+  );
+  if (courseMatch) {
+    hints.courseName = courseMatch[1].replace(/\s+/g, ' ').trim();
+  }
+
+  const codeMatch = head.match(
+    /(?:c[oó]digo(?: da estrutura)?|estrutura)\s*[:\-]\s*([A-Z]{2,6}\d{2,4}[A-Z]?)/i
+  );
+  if (codeMatch) {
+    hints.structureCode = codeMatch[1].toUpperCase();
+  } else {
+    const loose = head.match(/\b([A-Z]{3}\d{3})\b/);
+    if (loose) hints.structureCode = loose[1];
+  }
+
+  const semMatch = head.match(/\b(20\d{2}\s*[./]\s*[12])\b/);
+  if (semMatch) {
+    hints.semester = semMatch[1].replace(/\s+/g, '').replace('/', '.');
+  }
+
+  if (/\b(semipresencial|semi[\s-]?presencial)\b/i.test(head)) {
+    hints.modality = 'Semipresencial';
+  } else if (/\b(ead|a dist[aâ]ncia|educa[cç][aã]o a dist[aâ]ncia)\b/i.test(head)) {
+    hints.modality = 'EAD';
+  } else if (/\bpresencial\b/i.test(head)) {
+    hints.modality = 'Presencial';
+  }
+
+  return hints;
+}
+
+function detectDelivery(text: string, fallbackModality: ModalityType): DeliveryModalityFlag | undefined {
+  if (/s[ií]ncrono[\s-]*mediado/i.test(text)) return 'sincrono-mediado';
+  if (/\bs[ií]ncrono\b/i.test(text)) return 'sincrono';
+  if (/ass[ií]ncrono|a dist[aâ]ncia|\bead\b/i.test(text)) return 'assincrono';
+  if (/\bpresencial\b/i.test(text)) return 'presencial';
+  if (fallbackModality === 'EAD') return 'assincrono';
+  if (fallbackModality === 'Presencial') return 'presencial';
+  return undefined;
+}
+
+function parseDisciplineLine(
+  line: string,
+  fallbackModality: ModalityType
+): Discipline | null {
+  const skipped =
+    /^(subtotal|total|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome da disciplina|estrutura curricular|relat[oó]rio)/i;
+  if (skipped.test(line)) return null;
+
+  const match = line.match(
+    /^([A-Z]{2,6}\d{3,5})(?:\s*\(([A-Z0-9])\))?\s+(.+)$/i
+  );
+  if (!match) return null;
+
+  const baseCode = match[1].toUpperCase();
+  const group = match[2];
+  let rest = match[3].trim();
+
+  const typeMatch = rest.match(/\b(Obrigat[oó]ria|Eletiva|Optativa)\b/i);
+  let type: Discipline['type'] | undefined;
+  if (typeMatch) {
+    const t = typeMatch[1].toLowerCase();
+    type = t.startsWith('elet') ? 'Eletiva' : t.startsWith('opt') ? 'Optativa' : 'Obrigatória';
+  }
+
+  const creditMatch = rest.match(/(\d+)\s*\(\s*\d+\s*\/\s*\d+\s*\/\s*\d+\s*\)/);
+  const credits = creditMatch ? Number(creditMatch[1]) : undefined;
+
+  const hoursMatch =
+    rest.match(/\b(\d{2,4})\s*h(?:oras?)?\b/i) ||
+    rest.match(/\bch\s*[:\-]?\s*(\d{2,4})\b/i);
+  const hours = hoursMatch ? Number(hoursMatch[1]) : undefined;
+
+  let name = rest;
+  if (typeMatch) name = name.slice(0, typeMatch.index).trim();
+  name = name
+    .replace(/\d+\s*\(\s*\d+\s*\/\s*\d+\s*\/\s*\d+\s*\)/g, '')
+    .replace(/\b(Obrigat[oó]ria|Eletiva|Optativa)\b/gi, '')
+    .replace(/\b(A Dist[aâ]ncia|Presencial|Semipresencial|S[ií]ncrono(?:[\s-]*Mediado)?|Ass[ií]ncrono|EAD)\b/gi, '')
+    .replace(/\b\d+\s*h(?:oras?)?\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!name || name.length < 2) return null;
+
+  const delivery = detectDelivery(rest, fallbackModality);
+  const code = group ? `${baseCode} (${group})` : baseCode;
+  const isExt = baseCode.startsWith('EXT') || /extens[aã]o/i.test(name);
+  const isIntern = /est[aá]gio|pr[aá]tica supervisionada/i.test(name);
+
+  return {
+    id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    code,
+    name,
+    type: type || 'Obrigatória',
+    credits: credits ?? 0,
+    hours: hours ?? 0,
+    modalityDelivery: delivery || (fallbackModality === 'EAD' ? 'assincrono' : 'presencial'),
+    isExtension: isExt || undefined,
+    isInternship: isIntern || undefined,
+    evaluationForm: undefined,
+  };
+}
+
+function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules?: ModuleData[]): CurriculumStructure {
+  const safePeriods = periods || [];
+  const safeModules = modules || [];
+  const totalHours =
+    params.structureType === 'modular'
+      ? safeModules.reduce((acc, m) => acc + (m.hours || 0), 0)
+      : safePeriods.reduce((acc, p) => acc + (p.totalHours || 0), 0);
+  const totalCredits =
+    params.structureType === 'modular'
+      ? 0
+      : safePeriods.reduce((acc, p) => acc + (p.totalCredits || 0), 0);
+  const extensionHours = safePeriods.reduce(
+    (sum, p) => sum + p.disciplines.filter((d) => d.isExtension).reduce((s, d) => s + (d.hours || 0), 0),
+    0
+  );
+
+  return {
+    id: `saga-${Date.now()}`,
+    code: params.code,
+    courseId: params.courseId,
+    courseName: params.courseName,
+    modality: params.modality,
+    activeYearSemester: params.activeYearSemester,
+    structureType: params.structureType,
+    status: 'Em Elaboração',
+    validityStart: '',
+    hideValidity: false,
+    requiredTotalHours: params.requiredTotalHours || 0,
+    minPresentialHoursPercent: 0,
+    maxEadHoursPercent: 0,
+    minExtensionPercent: 10,
+    calculatedTotalHours: totalHours,
+    calculatedPresentialHours: 0,
+    calculatedEadHours: 0,
+    calculatedExtensionHours: extensionHours,
+    calculatedComplementaryHours: 0,
+    calculatedInternshipHours: 0,
+    totalCredits,
+    periods: params.structureType === 'disciplinar' ? safePeriods : undefined,
+    modules: params.structureType === 'modular' ? safeModules : undefined,
+    institutionName: 'UNISUAM - Centro Universitário Augusto Motta',
+    campusName: '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function parseSagaReportText(rawText: string, params: SagaParseParams): SagaParseResult {
+  const hints = extractSagaHeaderHints(rawText);
+  const warnings: string[] = [];
   const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
 
-  if (params.structureType === 'disciplinar') {
-    const periods: PeriodData[] = [];
-    let currentPeriod: PeriodData | null = null;
-    let periodIndex = 1;
-
-    for (const line of lines) {
-      // Período detection
-      const periodMatch = line.match(/(\d+)º\s*Per[íi]odo/i);
-      if (periodMatch) {
-        const pNum = parseInt(periodMatch[1], 10);
-        currentPeriod = {
-          id: `p-${pNum}-${Date.now()}`,
-          number: pNum,
-          disciplines: [],
-          totalCredits: 0,
-          totalHours: 0,
-        };
-        periods.push(currentPeriod);
-        periodIndex = pNum;
-        continue;
-      }
-
-      if (!currentPeriod) {
-        currentPeriod = {
-          id: `p-1-${Date.now()}`,
-          number: 1,
-          disciplines: [],
-          totalCredits: 0,
-          totalHours: 0,
-        };
-        periods.push(currentPeriod);
-      }
-
-      // Check for discipline pattern like:
-      // "EXTN0001 (B) Extensão 1 Obrigatória" or "TCSA0021 (B) Contabilidade Básica Obrigatória"
-      // or tabular row
-      const discMatch = line.match(/^([A-Z]{3,5}\d{3,5}(?:\s*\([A-Z0-9]\))?)\s+(.+?)(?:\s+(Obrigat[oó]ria|Eletiva|Optativa))?$/i);
-      if (discMatch) {
-        const code = discMatch[1].trim();
-        const name = discMatch[2].trim();
-        const type = (discMatch[3]?.toLowerCase().includes('eletiva') ? 'Eletiva' : 'Obrigatória') as 'Obrigatória' | 'Eletiva';
-
-        const isExt = code.toLowerCase().startsWith('ext') || name.toLowerCase().includes('extensão');
-        const isIntern = name.toLowerCase().includes('estágio') || name.toLowerCase().includes('prática supervisionada');
-
-        const hours = isExt ? 60 : 80;
-        const credits = isExt ? 3 : 4;
-
-        currentPeriod.disciplines.push({
-          id: `disc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-          code,
-          name,
-          type,
-          credits,
-          hours,
-          evaluationForm: params.modality === 'EAD' ? 'Nota (EAD)' : 'Resultado Final',
-          modalityDelivery: params.modality === 'EAD' ? 'assincrono' : 'presencial',
-          isExtension: isExt,
-          isInternship: isIntern,
-          flags: {
-            classroom: params.modality === 'EAD' ? 'assincrono' : 'presencial',
-            internship: 'presencial',
-            complementaryActivity: 'presencial',
-            extension: isExt ? 'sincrono-mediado' : 'presencial',
-          },
-        });
-      }
-    }
-
-    // Recalculate period totals
-    periods.forEach((p) => {
-      p.totalCredits = p.disciplines.reduce((acc, d) => acc + (d.credits || 0), 0);
-      p.totalHours = p.disciplines.reduce((acc, d) => acc + (d.hours || 0), 0);
-    });
-
-    const totalHours = periods.reduce((acc, p) => acc + p.totalHours, 0);
-
+  if (!rawText.trim()) {
+    warnings.push('Nenhum texto foi extraído. O PDF pode ser digitalizado (imagem). Preencha a estrutura manualmente.');
     return {
-      id: `saga-${Date.now()}`,
-      code: params.code,
-      courseId: params.courseId,
-      courseName: params.courseName,
-      modality: params.modality,
-      activeYearSemester: params.activeYearSemester,
-      structureType: 'disciplinar',
-      status: 'Ativa',
-      validityStart: new Date().toISOString().split('T')[0],
-      hideValidity: false,
-      requiredTotalHours: params.requiredTotalHours || totalHours || 3000,
-      minPresentialHoursPercent: params.modality === 'EAD' ? 10 : 60,
-      maxEadHoursPercent: params.modality === 'EAD' ? 90 : 40,
-      minExtensionPercent: 10,
-      calculatedTotalHours: totalHours,
-      calculatedPresentialHours: Math.round(totalHours * (params.modality === 'EAD' ? 0.2 : 0.8)),
-      calculatedEadHours: Math.round(totalHours * (params.modality === 'EAD' ? 0.8 : 0.2)),
-      calculatedExtensionHours: periods.reduce((sum, p) => sum + p.disciplines.filter(d => d.isExtension).reduce((s, d) => s + d.hours, 0), 0),
-      calculatedComplementaryHours: 100,
-      calculatedInternshipHours: 0,
-      totalCredits: periods.reduce((acc, p) => acc + p.totalCredits, 0),
-      periods,
-      institutionName: 'UNISUAM - Centro Universitário Augusto Motta',
-      campusName: 'Sede: UNISUAM-RJ',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-  } else {
-    // Modular
-    const modules: ModuleData[] = [];
-    let currentModule: ModuleData | null = null;
-    let modNumber = 1;
-
-    for (const line of lines) {
-      if (line.toLowerCase().startsWith('módulo') || line.toLowerCase().startsWith('modulo') || line.toLowerCase().startsWith('conhecimentos')) {
-        const title = line.replace(/^(m[oó]dulo\s*\d*[:\-]?|conhecimentos[:\-]?)\s*/i, '').trim() || `Módulo ${modNumber}`;
-        currentModule = {
-          id: `mod-${modNumber}-${Date.now()}`,
-          number: modNumber,
-          code: `MOD-${String(modNumber).padStart(2, '0')}`,
-          title,
-          hours: 325,
-          disciplines: [],
-          competencies: [
-            { id: `c-c-${Date.now()}`, category: 'conhecimento', name: `Fundamentos teóricos de ${title}`, hours: 40 },
-            { id: `c-h-${Date.now()}`, category: 'habilidade', name: `Aplicação prática e resolução de problemas em ${title}`, hours: 35 },
-            { id: `c-a-${Date.now()}`, category: 'atitude', name: 'Postura colaborativa, crítica e ética', hours: 15 },
-          ],
-        };
-        modules.push(currentModule);
-        modNumber++;
-        continue;
-      }
-
-      const discMatch = line.match(/^([A-Z]{3,5}\d{3,5})\s+(.+?)(?:\s+(Obrigat[oó]ria|Eletiva))?$/i);
-      if (discMatch && currentModule) {
-        currentModule.disciplines.push({
-          id: `mdisc-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          code: discMatch[1],
-          name: discMatch[2],
-          type: 'Obrigatória',
-          credits: 4,
-          hours: 80,
-          modalityDelivery: 'presencial',
-          flags: { classroom: 'presencial', internship: 'presencial', complementaryActivity: 'presencial', extension: 'presencial' },
-        });
-      }
-    }
-
-    if (modules.length === 0) {
-      // Default 8 modules if raw text couldn't be parsed
-      for (let i = 1; i <= 8; i++) {
-        modules.push({
-          id: `mod-${i}-${Date.now()}`,
-          number: i,
-          code: `MOD-${String(i).padStart(2, '0')}`,
-          title: `Módulo Integrado ${i}`,
-          hours: 375,
-          disciplines: [],
-          competencies: [
-            { id: `c-1-${i}`, category: 'conhecimento', name: `Conceitos essenciais do módulo ${i}`, hours: 40 },
-            { id: `c-2-${i}`, category: 'habilidade', name: `Habilidades de diagnóstico e execução no módulo ${i}`, hours: 30 },
-            { id: `c-3-${i}`, category: 'atitude', name: 'Atitude profissional ética e orientada a resultados', hours: 15 },
-          ],
-        });
-      }
-    }
-
-    const totalHours = modules.reduce((acc, m) => acc + m.hours, 0);
-
-    return {
-      id: `saga-${Date.now()}`,
-      code: params.code,
-      courseId: params.courseId,
-      courseName: params.courseName,
-      modality: params.modality,
-      activeYearSemester: params.activeYearSemester,
-      structureType: 'modular',
-      status: 'Ativa',
-      validityStart: new Date().toISOString().split('T')[0],
-      hideValidity: false,
-      requiredTotalHours: params.requiredTotalHours || totalHours,
-      minPresentialHoursPercent: 60,
-      maxEadHoursPercent: 40,
-      minExtensionPercent: 10,
-      calculatedTotalHours: totalHours,
-      calculatedPresentialHours: Math.round(totalHours * 0.8),
-      calculatedEadHours: Math.round(totalHours * 0.2),
-      calculatedExtensionHours: Math.round(totalHours * 0.1),
-      calculatedComplementaryHours: 100,
-      calculatedInternshipHours: 0,
-      totalCredits: Math.round(totalHours / 20),
-      modules,
-      institutionName: 'UNISUAM - Centro Universitário Augusto Motta',
-      campusName: 'Sede: UNISUAM-RJ',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      structure: emptyStructure(params, [], []),
+      hints,
+      warnings,
+      stats: { periods: 0, disciplines: 0, withoutHours: 0, withoutCredits: 0, withoutName: 0, textChars: 0 },
     };
   }
+
+  const resolvedParams: SagaParseParams = {
+    ...params,
+    code: params.code || hints.structureCode || '',
+    activeYearSemester: params.activeYearSemester || hints.semester || '',
+    modality: hints.modality || params.modality,
+    courseName: params.courseName || hints.courseName || '',
+  };
+
+  if (resolvedParams.structureType === 'modular') {
+    return parseModular(lines, resolvedParams, hints, warnings, rawText.length);
+  }
+  return parseDisciplinar(lines, resolvedParams, hints, warnings, rawText.length);
+}
+
+function parseDisciplinar(
+  lines: string[],
+  params: SagaParseParams,
+  hints: SagaHeaderHints,
+  warnings: string[],
+  textChars: number
+): SagaParseResult {
+  const periods: PeriodData[] = [];
+  let current: PeriodData | null = null;
+  let withoutHours = 0;
+  let withoutCredits = 0;
+  let withoutName = 0;
+
+  const ensurePeriod = (num: number) => {
+    current = {
+      id: `p-${num}-${Date.now()}`,
+      number: num,
+      disciplines: [],
+      totalCredits: 0,
+      totalHours: 0,
+    };
+    periods.push(current);
+  };
+
+  for (const line of lines) {
+    const periodMatch = line.match(/(\d+)\s*[ºo°]?\s*[Pp]er[íi]odo/i);
+    if (periodMatch && !/subtotal/i.test(line)) {
+      ensurePeriod(parseInt(periodMatch[1], 10));
+      continue;
+    }
+
+    const disc = parseDisciplineLine(line, params.modality);
+    if (!disc) continue;
+    if (!current) ensurePeriod(periods.length + 1);
+
+    if (!disc.hours) withoutHours++;
+    if (!disc.credits) withoutCredits++;
+    if (!disc.name) withoutName++;
+    current!.disciplines.push(disc);
+  }
+
+  periods.forEach((p) => {
+    p.totalCredits = p.disciplines.reduce((acc, d) => acc + (d.credits || 0), 0);
+    p.totalHours = p.disciplines.reduce((acc, d) => acc + (d.hours || 0), 0);
+  });
+
+  const disciplines = periods.reduce((acc, p) => acc + p.disciplines.length, 0);
+  if (disciplines === 0) {
+    warnings.push('Nenhuma disciplina foi identificada no PDF. O coordenador deve preencher a matriz.');
+  }
+  if (withoutHours > 0) {
+    warnings.push(`${withoutHours} disciplina(s) sem carga horária — preencha no editor.`);
+  }
+  if (withoutCredits > 0) {
+    warnings.push(`${withoutCredits} disciplina(s) sem créditos — preencha no editor.`);
+  }
+
+  return {
+    structure: emptyStructure(params, periods, []),
+    hints,
+    warnings,
+    stats: {
+      periods: periods.length,
+      disciplines,
+      withoutHours,
+      withoutCredits,
+      withoutName,
+      textChars,
+    },
+  };
+}
+
+function parseModular(
+  lines: string[],
+  params: SagaParseParams,
+  hints: SagaHeaderHints,
+  warnings: string[],
+  textChars: number
+): SagaParseResult {
+  const modules: ModuleData[] = [];
+  let current: ModuleData | null = null;
+  let modNumber = 1;
+  let withoutHours = 0;
+  let withoutCredits = 0;
+
+  for (const line of lines) {
+    if (/^(m[oó]dulo\s*\d*|conhecimentos)\b/i.test(line)) {
+      const title =
+        line.replace(/^(m[oó]dulo\s*\d*[:.\-]?\s*|conhecimentos[:.\-]?\s*)/i, '').trim() ||
+        `Módulo ${modNumber}`;
+      current = {
+        id: `mod-${modNumber}-${Date.now()}`,
+        number: modNumber,
+        code: '',
+        title,
+        hours: 0,
+        disciplines: [],
+        competencies: [],
+      };
+      modules.push(current);
+      modNumber++;
+      continue;
+    }
+
+    const disc = parseDisciplineLine(line, params.modality);
+    if (disc && current) {
+      if (!disc.hours) withoutHours++;
+      if (!disc.credits) withoutCredits++;
+      current.disciplines.push(disc);
+      current.hours += disc.hours || 0;
+    }
+  }
+
+  const disciplines = modules.reduce((acc, m) => acc + m.disciplines.length, 0);
+  if (modules.length === 0) {
+    warnings.push('Nenhum módulo foi identificado no PDF. O coordenador deve preencher a estrutura.');
+  }
+  if (withoutHours > 0) {
+    warnings.push(`${withoutHours} disciplina(s) sem carga horária — preencha no editor.`);
+  }
+
+  return {
+    structure: emptyStructure(params, [], modules),
+    hints,
+    warnings,
+    stats: {
+      periods: modules.length,
+      disciplines,
+      withoutHours,
+      withoutCredits,
+      withoutName: 0,
+      textChars,
+    },
+  };
 }

@@ -14,6 +14,8 @@ export const COURSE_BATCH_HEADERS = [
   'Nome Coordenador',
   'E-mail Coordenador',
   'Ato Autorizativo',
+  'Laboratório',
+  'Clínica',
   'Nome DCN',
   'Link DCN',
 ] as const;
@@ -25,6 +27,38 @@ export function normalizeCourseName(name: string): string {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Remove sufixo de modalidade do nome (EAD/Presencial), pois isso vai em campo próprio. */
+export function courseBaseName(name: string): string {
+  return String(name || '')
+    .replace(/\s*\((EAD|Presencial|Semipresencial|A Dist[âa]ncia)\)\s*$/i, '')
+    .trim();
+}
+
+export function uniqueCourseOptions(courses: Course[]): { key: string; name: string }[] {
+  const map = new Map<string, string>();
+  for (const c of courses) {
+    const name = courseBaseName(c.name);
+    const key = normalizeCourseName(name);
+    if (name && !map.has(key)) map.set(key, name);
+  }
+  return [...map.entries()]
+    .map(([key, name]) => ({ key, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+
+export function resolveCourseByNameAndModality(
+  courses: Course[],
+  nameOrIdOrKey: string,
+  modality: ModalityType
+): Course | undefined {
+  const byId = courses.find((c) => c.id === nameOrIdOrKey);
+  const base = courseBaseName(byId?.name || nameOrIdOrKey);
+  const key = normalizeCourseName(base);
+  const group = courses.filter((c) => normalizeCourseName(courseBaseName(c.name)) === key);
+  if (group.length === 0) return byId;
+  return group.find((c) => c.modality === modality) || group[0];
 }
 
 export function generateCourseCodeFromName(name: string): string {
@@ -81,6 +115,19 @@ export function parseHoursOrNotInformed(raw: string): number | undefined {
   }
   const n = parseInt(v.replace(/\D/g, ''), 10);
   return Number.isNaN(n) ? undefined : n;
+}
+
+/** Interpreta Sim/Não (ou x/1) para flags do curso. */
+export function parseYesNoFlag(raw: string): boolean | undefined {
+  const v = String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  if (!v) return undefined;
+  if (/^(s|sim|yes|y|1|x|true|verdadeiro)$/.test(v)) return true;
+  if (/^(n|nao|no|0|false|falso)$/.test(v)) return false;
+  return undefined;
 }
 
 export function parseDcnLinksFromCell(raw: string): DcnDocument[] {
@@ -272,6 +319,8 @@ export type CourseBatchField =
   | 'coordenador'
   | 'email'
   | 'ato'
+  | 'laboratorio'
+  | 'clinica'
   | 'dcnNome'
   | 'dcnLink';
 
@@ -321,6 +370,8 @@ export function mapBatchHeaderToField(header: string): CourseBatchField | null {
   if (h.includes('e-mail') || h.includes('email')) return 'email';
   if (h.includes('coordenador') || h.includes('coord.')) return 'coordenador';
   if (h.includes('ato autoriz') || h.includes('autorizativo') || h === 'ato') return 'ato';
+  if (h.includes('laboratorio') || h === 'lab') return 'laboratorio';
+  if (h.includes('clinica')) return 'clinica';
 
   // Nome DCN (identificação) — antes do link genérico
   if (
@@ -382,6 +433,8 @@ export function normalizeCourseBatchMatrix(matrix: string[][]): string[][] {
     'coordenador',
     'email',
     'ato',
+    'laboratorio',
+    'clinica',
     'dcnNome',
     'dcnLink',
   ];
@@ -466,6 +519,8 @@ export function courseToBatchRow(course: Course): (string | number)[] {
     course.coordinatorName || '',
     course.coordinatorEmail || '',
     course.authorizationAct || '',
+    course.hasLaboratory ? 'Sim' : 'Não',
+    course.hasClinical ? 'Sim' : 'Não',
     courseDcnNamesCell(course),
     courseDcnLinksCell(course),
   ];
@@ -533,6 +588,8 @@ export function applyCourseBatchRows(
       coordinatorNameRaw = '',
       coordinatorEmailRaw = '',
       authorizationActRaw = '',
+      laboratorioRaw = '',
+      clinicaRaw = '',
       dcnNamesCell = '',
       dcnLinksCell = '',
     ] = parts.map(cellToString);
@@ -565,6 +622,8 @@ export function applyCourseBatchRows(
     const minInternshipHours = parseHoursOrNotInformed(chInternshipRaw);
     const complementaryTotalHours = parseHoursOrNotInformed(chComplementaryRaw);
     const extensionTotalHours = parseHoursOrNotInformed(chExtensionRaw) ?? 0;
+    const hasLaboratory = parseYesNoFlag(laboratorioRaw);
+    const hasClinical = parseYesNoFlag(clinicaRaw);
     const dcns = parseDcnsFromNameAndLinkCells(dcnNamesRaw, dcnLinksRaw);
 
     if (courseIndex !== -1) {
@@ -584,6 +643,8 @@ export function applyCourseBatchRows(
       if (coordinatorNameRaw) current.coordinatorName = coordinatorNameRaw;
       if (coordinatorEmailRaw) current.coordinatorEmail = coordinatorEmailRaw;
       if (authorizationActRaw) current.authorizationAct = authorizationActRaw;
+      if (hasLaboratory !== undefined) current.hasLaboratory = hasLaboratory;
+      if (hasClinical !== undefined) current.hasClinical = hasClinical;
       if (dcns.length > 0) {
         current.dcns = dcns;
         current.dcnLink = dcns.map((d) => d.pdfUrl).join(' | ');
@@ -609,6 +670,8 @@ export function applyCourseBatchRows(
         coordinatorName: coordinatorNameRaw || '',
         coordinatorEmail: coordinatorEmailRaw || '',
         authorizationAct: authorizationActRaw || '',
+        hasLaboratory: hasLaboratory ?? false,
+        hasClinical: hasClinical ?? false,
         activeDcn: dcns.length ? dcns.map((d) => d.title).join('; ') : '',
         dcnLink: dcns.map((d) => d.pdfUrl).join(' | '),
         dcns,

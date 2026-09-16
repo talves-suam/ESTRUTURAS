@@ -5,7 +5,10 @@ import {
   Discipline,
   ModuleData, 
   PeriodData,
-  getDisciplineChBreakdown 
+  getDisciplineChBreakdown,
+  structureHasPresentialSplit,
+  getPresentialSplitFlags,
+  withStructurePresentialFlags,
 } from '../types/curriculum';
 import { 
   FileText, 
@@ -62,6 +65,11 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
   const [hideWorkloadSummaryInReport, setHideWorkloadSummaryInReport] = useState(
     structure.hideWorkloadSummaryInReport ?? false
   );
+  const splitFlags = getPresentialSplitFlags(structure);
+  const usePresentialSplit = splitFlags.enabled;
+  const presentialColSpan = 1 + (splitFlags.hasLaboratory ? 1 : 0) + (splitFlags.hasClinical ? 1 : 0);
+  const chOf = (disc: Parameters<typeof getDisciplineChBreakdown>[0]) =>
+    getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
 
   useEffect(() => {
     setHideCompetenciesInReport(structure.hideCompetenciesInReport ?? false);
@@ -432,34 +440,65 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
 
                     {/* Table */}
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[900px] text-left text-xs">
-                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[11px]">
-                          <tr>
-                            <th className="px-3 py-3 w-20">Código</th>
-                            <th className="px-3 py-3 min-w-[200px]">Nome da Disciplina</th>
-                            <th className="px-2.5 py-3 text-center w-24">Tipo</th>
-                            <th className="px-2.5 py-3 text-center w-28">Avaliação</th>
-                            <th className="px-2 py-3 text-center w-16">Créditos</th>
-                            <th className="px-2.5 py-3 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">
-                              <span className="block font-bold">CH Presencial</span>
-                            </th>
-                            <th className="px-2.5 py-3 text-center w-24 bg-sky-50/70 text-sky-900 border-l border-slate-200">
-                              <span className="block font-bold">CH Síncrona</span>
-                            </th>
-                            <th className="px-2.5 py-3 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200">
-                              <span className="block font-bold whitespace-nowrap">CH Síncrona-Mediada</span>
-                            </th>
-                            <th className="px-2.5 py-3 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">
-                              <span className="block font-bold">CH Assíncrona</span>
-                            </th>
-                            <th className="px-2.5 py-3 text-center w-20 border-l border-slate-200">
-                              <span className="block font-bold">Total</span>
-                            </th>
-                          </tr>
+                      <table className={`w-full text-left text-xs ${usePresentialSplit ? 'min-w-[980px]' : 'min-w-[900px]'}`}>
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                          {usePresentialSplit ? (
+                            <>
+                              <tr>
+                                <th rowSpan={2} className="px-3 py-2 w-20 align-bottom">Código</th>
+                                <th rowSpan={2} className="px-3 py-2 min-w-[180px] align-bottom">Nome da Disciplina</th>
+                                <th rowSpan={2} className="px-2.5 py-2 text-center w-24 align-bottom">Tipo</th>
+                                <th rowSpan={2} className="px-2.5 py-2 text-center w-28 align-bottom">Avaliação</th>
+                                <th rowSpan={2} className="px-2 py-2 text-center w-14 align-bottom">Créditos</th>
+                                <th colSpan={presentialColSpan} className="px-2 py-1.5 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">
+                                  Presencial
+                                </th>
+                                <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 align-bottom whitespace-nowrap">
+                                  Síncrono-Mediado
+                                </th>
+                                <th rowSpan={2} className="px-2 py-2 text-center w-20 bg-purple-50/70 text-purple-900 border-l border-slate-200 align-bottom">
+                                  Assíncrono
+                                </th>
+                                <th rowSpan={2} className="px-2.5 py-2 text-center w-16 border-l border-slate-200 align-bottom">
+                                  Total
+                                </th>
+                              </tr>
+                              <tr>
+                                <th className="px-1.5 py-1.5 text-center w-16 bg-blue-50/50 text-[#002B49] border-l border-slate-200 font-bold">Teórico</th>
+                                {splitFlags.hasLaboratory && (
+                                  <th className="px-1.5 py-1.5 text-center w-16 bg-blue-50/40 text-[#002B49] font-bold">Laboratório</th>
+                                )}
+                                {splitFlags.hasClinical && (
+                                  <th className="px-1.5 py-1.5 text-center w-16 bg-blue-50/50 text-[#002B49] font-bold">Clínica</th>
+                                )}
+                              </tr>
+                            </>
+                          ) : (
+                            <tr className="text-[11px]">
+                              <th className="px-3 py-3 w-20">Código</th>
+                              <th className="px-3 py-3 min-w-[200px]">Nome da Disciplina</th>
+                              <th className="px-2.5 py-3 text-center w-24">Tipo</th>
+                              <th className="px-2.5 py-3 text-center w-28">Avaliação</th>
+                              <th className="px-2 py-3 text-center w-16">Créditos</th>
+                              <th className="px-2.5 py-3 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">
+                                CH Presencial
+                              </th>
+                              <th className="px-2.5 py-3 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">
+                                CH Síncrona-Mediada
+                              </th>
+                              <th className="px-2.5 py-3 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">
+                                CH Assíncrona
+                              </th>
+                              <th className="px-2.5 py-3 text-center w-20 border-l border-slate-200">
+                                Total
+                              </th>
+                            </tr>
+                          )}
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {period.disciplines.map((disc) => {
-                            const chBd = getDisciplineChBreakdown(disc);
+                            const chBd = chOf(disc);
+                            const syncMed = (chBd.syncMediated || 0) + (chBd.sync || 0);
                             return (
                               <tr key={disc.id} className="hover:bg-blue-50/40 transition">
                                 <td className="px-3 py-2.5 font-mono font-bold text-[#002B49] text-xs whitespace-nowrap">
@@ -481,28 +520,51 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                                 <td className="px-2 py-2.5 text-center font-bold text-slate-700 text-xs">
                                   {disc.credits}
                                 </td>
-                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
-                                  {chBd.presential > 0 ? (
-                                    <span className="text-blue-900 font-black">{chBd.presential}h</span>
+                                {usePresentialSplit ? (
+                                  <>
+                                    <td className="px-1.5 py-2.5 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
+                                      {chBd.theoretical > 0 ? (
+                                        <span className="text-blue-900 font-black">{chBd.theoretical}h</span>
+                                      ) : (
+                                        <span className="text-slate-300 font-normal">0h</span>
+                                      )}
+                                    </td>
+                                    {splitFlags.hasLaboratory && (
+                                      <td className="px-1.5 py-2.5 text-center font-bold text-xs bg-blue-50/10">
+                                        {chBd.laboratory > 0 ? (
+                                          <span className="text-teal-800 font-black">{chBd.laboratory}h</span>
+                                        ) : (
+                                          <span className="text-slate-300 font-normal">0h</span>
+                                        )}
+                                      </td>
+                                    )}
+                                    {splitFlags.hasClinical && (
+                                      <td className="px-1.5 py-2.5 text-center font-bold text-xs bg-blue-50/20">
+                                        {chBd.clinical > 0 ? (
+                                          <span className="text-rose-800 font-black">{chBd.clinical}h</span>
+                                        ) : (
+                                          <span className="text-slate-300 font-normal">0h</span>
+                                        )}
+                                      </td>
+                                    )}
+                                  </>
+                                ) : (
+                                  <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
+                                    {chBd.presential > 0 ? (
+                                      <span className="text-blue-900 font-black">{chBd.presential}h</span>
+                                    ) : (
+                                      <span className="text-slate-300 font-normal">0h</span>
+                                    )}
+                                  </td>
+                                )}
+                                <td className="px-2 py-2.5 text-center font-bold text-xs bg-indigo-50/20 border-l border-slate-100">
+                                  {syncMed > 0 ? (
+                                    <span className="text-indigo-800 font-black">{syncMed}h</span>
                                   ) : (
                                     <span className="text-slate-300 font-normal">0h</span>
                                   )}
                                 </td>
-                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-sky-50/20 border-l border-slate-100">
-                                  {chBd.sync > 0 ? (
-                                    <span className="text-sky-800 font-black">{chBd.sync}h</span>
-                                  ) : (
-                                    <span className="text-slate-300 font-normal">0h</span>
-                                  )}
-                                </td>
-                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-indigo-50/20 border-l border-slate-100">
-                                  {chBd.syncMediated > 0 ? (
-                                    <span className="text-indigo-800 font-black">{chBd.syncMediated}h</span>
-                                  ) : (
-                                    <span className="text-slate-300 font-normal">0h</span>
-                                  )}
-                                </td>
-                                <td className="px-2.5 py-2.5 text-center font-bold text-xs bg-purple-50/20 border-l border-slate-100">
+                                <td className="px-2 py-2.5 text-center font-bold text-xs bg-purple-50/20 border-l border-slate-100">
                                   {chBd.async > 0 ? (
                                     <span className="text-purple-800 font-black">{chBd.async}h</span>
                                   ) : (
@@ -518,11 +580,16 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                         </tbody>
                         <tfoot className="bg-slate-50 border-t border-slate-200 text-xs font-bold text-slate-700">
                           {(() => {
-                            const pPres = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
-                            const pSync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).sync, 0);
-                            const pSyncMed = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).syncMediated, 0);
-                            const pAsync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
-                            const pTot = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).total, 0);
+                            const pPres = period.disciplines.reduce((acc, d) => acc + chOf(d).presential, 0);
+                            const pTheo = period.disciplines.reduce((acc, d) => acc + chOf(d).theoretical, 0);
+                            const pLab = period.disciplines.reduce((acc, d) => acc + chOf(d).laboratory, 0);
+                            const pClin = period.disciplines.reduce((acc, d) => acc + chOf(d).clinical, 0);
+                            const pSyncMed = period.disciplines.reduce((acc, d) => {
+                              const bd = chOf(d);
+                              return acc + bd.syncMediated + (bd.sync || 0);
+                            }, 0);
+                            const pAsync = period.disciplines.reduce((acc, d) => acc + chOf(d).async, 0);
+                            const pTot = period.disciplines.reduce((acc, d) => acc + chOf(d).total, 0);
                             return (
                               <tr>
                                 <td colSpan={4} className="px-3 py-2.5 text-slate-600 text-right">
@@ -531,16 +598,31 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                                 <td className="px-2 py-2.5 text-center text-slate-900 font-bold">
                                   {period.totalCredits}
                                 </td>
-                                <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
-                                  {pPres}h
-                                </td>
-                                <td className="px-2.5 py-2.5 text-center text-sky-900 font-black border-l border-slate-200 bg-sky-50/50">
-                                  {pSync}h
-                                </td>
-                                <td className="px-2.5 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
+                                {usePresentialSplit ? (
+                                  <>
+                                    <td className="px-1.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                      {pTheo}h
+                                    </td>
+                                    {splitFlags.hasLaboratory && (
+                                      <td className="px-1.5 py-2.5 text-center text-teal-900 font-black bg-blue-50/40">
+                                        {pLab}h
+                                      </td>
+                                    )}
+                                    {splitFlags.hasClinical && (
+                                      <td className="px-1.5 py-2.5 text-center text-rose-900 font-black bg-blue-50/50">
+                                        {pClin}h
+                                      </td>
+                                    )}
+                                  </>
+                                ) : (
+                                  <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                    {pPres}h
+                                  </td>
+                                )}
+                                <td className="px-2 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
                                   {pSyncMed}h
                                 </td>
-                                <td className="px-2.5 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
+                                <td className="px-2 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
                                   {pAsync}h
                                 </td>
                                 <td className="px-2.5 py-2.5 text-center text-[#FF6B00] font-black border-l border-slate-200 bg-orange-50/60">
@@ -616,20 +698,43 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                           <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
                             Conhecimentos do Módulo ({mod.disciplines.length})
                           </h5>
-                          <table className="w-full min-w-[760px] text-left text-xs bg-slate-50/50 rounded-lg border border-slate-200 overflow-hidden">
+                          <table className={`w-full text-left text-xs bg-slate-50/50 rounded-lg border border-slate-200 overflow-hidden ${usePresentialSplit ? 'min-w-[860px]' : 'min-w-[700px]'}`}>
                             <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
-                              <tr>
-                                <th className="px-3 py-2 w-20">Código</th>
-                                <th className="px-3 py-2 min-w-[180px]">Conhecimento</th>
-                                <th className="px-2 py-2 text-center w-24">Tipo</th>
-                                <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
-                                <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
-                                <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
-                              </tr>
+                              {usePresentialSplit ? (
+                                <>
+                                  <tr>
+                                    <th rowSpan={2} className="px-3 py-2 w-20 align-bottom">Código</th>
+                                    <th rowSpan={2} className="px-3 py-2 min-w-[160px] align-bottom">Conhecimento</th>
+                                    <th rowSpan={2} className="px-2 py-2 text-center w-24 align-bottom">Tipo</th>
+                                    <th colSpan={presentialColSpan} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">Presencial</th>
+                                    <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 align-bottom whitespace-nowrap">Síncrono-Mediado</th>
+                                    <th rowSpan={2} className="px-2 py-2 text-center w-20 bg-purple-50/70 text-purple-900 border-l border-slate-200 align-bottom">Assíncrono</th>
+                                  </tr>
+                                  <tr>
+                                    <th className="px-1.5 py-1 text-center bg-blue-50/50 text-[#002B49] border-l border-slate-200">Teórico</th>
+                                    {splitFlags.hasLaboratory && (
+                                      <th className="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Laboratório</th>
+                                    )}
+                                    {splitFlags.hasClinical && (
+                                      <th className="px-1.5 py-1 text-center bg-blue-50/50 text-[#002B49]">Clínica</th>
+                                    )}
+                                  </tr>
+                                </>
+                              ) : (
+                                <tr>
+                                  <th className="px-3 py-2 w-20">Código</th>
+                                  <th className="px-3 py-2 min-w-[180px]">Conhecimento</th>
+                                  <th className="px-2 py-2 text-center w-24">Tipo</th>
+                                  <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
+                                  <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
+                                  <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
+                                </tr>
+                              )}
                             </thead>
                             <tbody className="divide-y divide-slate-200/60 bg-white">
                               {mod.disciplines.map((d) => {
-                                const chBd = getDisciplineChBreakdown(d);
+                                const chBd = chOf(d);
+                                const syncMed = (chBd.syncMediated || 0) + (chBd.sync || 0);
                                 return (
                                   <tr key={d.id} className="hover:bg-blue-50/30 transition">
                                     <td className="px-3 py-2 font-mono font-bold text-[#002B49]">{d.code}</td>
@@ -637,13 +742,31 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                                     <td className="px-2 py-2 text-center text-slate-600">
                                       <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100">{d.type}</span>
                                     </td>
-                                    <td className="px-2.5 py-2 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
-                                      {chBd.presential > 0 ? <span className="text-blue-900 font-black">{chBd.presential}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                    {usePresentialSplit ? (
+                                      <>
+                                        <td className="px-1.5 py-2 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
+                                          {chBd.theoretical > 0 ? <span className="text-blue-900 font-black">{chBd.theoretical}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                        </td>
+                                        {splitFlags.hasLaboratory && (
+                                          <td className="px-1.5 py-2 text-center font-bold text-xs bg-blue-50/10">
+                                            {chBd.laboratory > 0 ? <span className="text-teal-800 font-black">{chBd.laboratory}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                          </td>
+                                        )}
+                                        {splitFlags.hasClinical && (
+                                          <td className="px-1.5 py-2 text-center font-bold text-xs bg-blue-50/20">
+                                            {chBd.clinical > 0 ? <span className="text-rose-800 font-black">{chBd.clinical}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                          </td>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <td className="px-2.5 py-2 text-center font-bold text-xs bg-blue-50/20 border-l border-slate-100">
+                                        {chBd.presential > 0 ? <span className="text-blue-900 font-black">{chBd.presential}h</span> : <span className="text-slate-300 font-normal">0h</span>}
+                                      </td>
+                                    )}
+                                    <td className="px-2 py-2 text-center font-bold text-xs bg-indigo-50/20 border-l border-slate-100">
+                                      {syncMed > 0 ? <span className="text-indigo-800 font-black">{syncMed}h</span> : <span className="text-slate-300 font-normal">0h</span>}
                                     </td>
-                                    <td className="px-2.5 py-2 text-center font-bold text-xs bg-indigo-50/20 border-l border-slate-100">
-                                      {chBd.syncMediated > 0 ? <span className="text-indigo-800 font-black">{chBd.syncMediated}h</span> : <span className="text-slate-300 font-normal">0h</span>}
-                                    </td>
-                                    <td className="px-2.5 py-2 text-center font-bold text-xs bg-purple-50/20 border-l border-slate-100">
+                                    <td className="px-2 py-2 text-center font-bold text-xs bg-purple-50/20 border-l border-slate-100">
                                       {chBd.async > 0 ? <span className="text-purple-800 font-black">{chBd.async}h</span> : <span className="text-slate-300 font-normal">0h</span>}
                                     </td>
                                   </tr>
@@ -652,21 +775,45 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                             </tbody>
                             <tfoot className="bg-slate-100/90 border-t border-slate-200 text-xs font-bold text-slate-700">
                               {(() => {
-                                const mPres = mod.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
-                                const mSyncMed = mod.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).syncMediated, 0);
-                                const mAsync = mod.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
+                                const mPres = mod.disciplines.reduce((acc, d) => acc + chOf(d).presential, 0);
+                                const mTheo = mod.disciplines.reduce((acc, d) => acc + chOf(d).theoretical, 0);
+                                const mLab = mod.disciplines.reduce((acc, d) => acc + chOf(d).laboratory, 0);
+                                const mClin = mod.disciplines.reduce((acc, d) => acc + chOf(d).clinical, 0);
+                                const mSyncMed = mod.disciplines.reduce((acc, d) => {
+                                  const bd = chOf(d);
+                                  return acc + bd.syncMediated + (bd.sync || 0);
+                                }, 0);
+                                const mAsync = mod.disciplines.reduce((acc, d) => acc + chOf(d).async, 0);
                                 return (
                                   <tr>
                                     <td colSpan={3} className="px-3 py-2.5 text-slate-600 text-right">
                                       Subtotal dos Conhecimentos
                                     </td>
-                                    <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
-                                      {mPres}h
-                                    </td>
-                                    <td className="px-2.5 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
+                                    {usePresentialSplit ? (
+                                      <>
+                                        <td className="px-1.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                          {mTheo}h
+                                        </td>
+                                        {splitFlags.hasLaboratory && (
+                                          <td className="px-1.5 py-2.5 text-center text-teal-900 font-black bg-blue-50/40">
+                                            {mLab}h
+                                          </td>
+                                        )}
+                                        {splitFlags.hasClinical && (
+                                          <td className="px-1.5 py-2.5 text-center text-rose-900 font-black bg-blue-50/50">
+                                            {mClin}h
+                                          </td>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                        {mPres}h
+                                      </td>
+                                    )}
+                                    <td className="px-2 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
                                       {mSyncMed}h
                                     </td>
-                                    <td className="px-2.5 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
+                                    <td className="px-2 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
                                       {mAsync}h
                                     </td>
                                   </tr>
@@ -680,16 +827,11 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                       {/* Conhecimentos, Habilidades e Atitudes (CHA / Zabala) */}
                       {isExpanded && (
                         <div className="p-5 bg-gradient-to-br from-orange-50/40 to-blue-50/30 space-y-3">
-                          <div className="flex items-center justify-between border-b border-orange-200/60 pb-2">
-                            <div className="flex items-center gap-2">
-                              <Sparkles className="w-4 h-4 text-[#FF6B00]" />
-                              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                                {chaTitle.sectionTitle}
-                              </h5>
-                            </div>
-                            <span className="text-[11px] font-semibold text-orange-700 bg-orange-100 px-2 py-0.5 rounded">
-                              {mod.competencies?.length || 0} saberes mapeados
-                            </span>
+                          <div className="flex items-center gap-2 border-b border-orange-200/60 pb-2">
+                            <Sparkles className="w-4 h-4 text-[#FF6B00]" />
+                            <h5 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                              {chaTitle.sectionTitle}
+                            </h5>
                           </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

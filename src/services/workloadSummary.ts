@@ -2,6 +2,8 @@ import {
   CurriculumStructure,
   Discipline,
   getDisciplineChBreakdown,
+  getPresentialSplitFlags,
+  withStructurePresentialFlags,
 } from '../types/curriculum';
 
 export interface WorkloadSummaryRow {
@@ -14,27 +16,40 @@ export interface WorkloadSummaryRow {
 
 function collectDisciplines(structure: CurriculumStructure): Discipline[] {
   if (structure.structureType === 'disciplinar' && structure.periods) {
-    return structure.periods.flatMap((p) => p.disciplines || []);
+    return structure.periods
+      .flatMap((p) => p.disciplines || [])
+      .map((d) => withStructurePresentialFlags(d, structure));
   }
   if (structure.structureType === 'modular' && structure.modules) {
     const fromDisc = structure.modules.flatMap((m) => m.disciplines || []);
-    if (fromDisc.length > 0) return fromDisc;
+    if (fromDisc.length > 0) {
+      return fromDisc.map((d) => withStructurePresentialFlags(d, structure));
+    }
 
     // Fallback: conhecimentos do módulo como componentes de CH
     return structure.modules.flatMap((m) =>
       (m.knowledges || []).map(
-        (k): Discipline => ({
-          id: k.id,
-          code: m.code || '',
-          name: k.name,
-          type: 'Obrigatória',
-          credits: 0,
-          hours: k.hours || 0,
-          modalityDelivery: k.modalityDelivery,
-          chPresential: k.chPresential,
-          chSyncMediated: k.chSyncMediated,
-          chAsync: k.chAsync,
-        })
+        (k): Discipline =>
+          withStructurePresentialFlags(
+            {
+              id: k.id,
+              code: m.code || '',
+              name: k.name,
+              type: 'Obrigatória',
+              credits: 0,
+              hours: k.hours || 0,
+              modalityDelivery: k.modalityDelivery,
+              hasLaboratory: k.hasLaboratory,
+              hasClinical: k.hasClinical,
+              chTheoretical: k.chTheoretical,
+              chLaboratory: k.chLaboratory,
+              chClinical: k.chClinical,
+              chPresential: k.chPresential,
+              chSyncMediated: k.chSyncMediated,
+              chAsync: k.chAsync,
+            },
+            structure
+          )
       )
     );
   }
@@ -86,7 +101,9 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
 } {
   const disciplines = collectDisciplines(structure);
 
-  let presential = 0;
+  let theoretical = 0;
+  let laboratory = 0;
+  let clinical = 0;
   let sync = 0;
   let syncMediated = 0;
   let asyncH = 0;
@@ -100,7 +117,9 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
     const hours = bd.total;
     componentsTotal += hours;
 
-    presential += bd.presential;
+    theoretical += bd.theoretical;
+    laboratory += bd.laboratory;
+    clinical += bd.clinical;
     sync += bd.sync || 0;
     syncMediated += bd.syncMediated;
     asyncH += bd.async;
@@ -124,8 +143,9 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
 
   const complementaryMod = structure.complementaryModality || 'assincrono';
   if (complementary > 0) {
-    if (complementaryMod === 'presencial') presential += complementary;
-    else if (complementaryMod === 'sincrono' || complementaryMod === 'sincrono-mediado') {
+    if (complementaryMod === 'presencial') {
+      theoretical += complementary;
+    } else if (complementaryMod === 'sincrono' || complementaryMod === 'sincrono-mediado') {
       syncMediated += complementary;
     } else asyncH += complementary;
   }
@@ -144,9 +164,50 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
 
   // Síncrono foi retirado do cadastro — eventuais horas residuais entram em Síncrono-Mediado
   const syncMediatedShown = syncMediated + sync;
+  const presentialTotal = theoretical + laboratory + clinical;
+  const splitFlags = getPresentialSplitFlags(structure);
+  const useSplit = splitFlags.enabled;
+
+  const presentialRows: WorkloadSummaryRow[] = useSplit
+    ? [
+        {
+          id: 'teorico',
+          label: 'Presencial — Teórico',
+          hours: theoretical,
+          percent: pct(theoretical),
+        },
+        ...(splitFlags.hasLaboratory
+          ? [
+              {
+                id: 'laboratorio',
+                label: 'Presencial — Laboratório',
+                hours: laboratory,
+                percent: pct(laboratory),
+              } as WorkloadSummaryRow,
+            ]
+          : []),
+        ...(splitFlags.hasClinical
+          ? [
+              {
+                id: 'clinica',
+                label: 'Presencial — Clínica',
+                hours: clinical,
+                percent: pct(clinical),
+              } as WorkloadSummaryRow,
+            ]
+          : []),
+      ]
+    : [
+        {
+          id: 'presencial',
+          label: 'Presencial',
+          hours: presentialTotal,
+          percent: pct(presentialTotal),
+        },
+      ];
 
   const rows: WorkloadSummaryRow[] = [
-    { id: 'presencial', label: 'Presencial', hours: presential, percent: pct(presential) },
+    ...presentialRows,
     {
       id: 'sincrono-mediado',
       label: 'Síncrono-Mediado',
