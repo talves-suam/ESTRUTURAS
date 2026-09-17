@@ -635,13 +635,18 @@ export async function exportCurriculumToXlsx(
 
   if (!structure.hideWorkloadSummaryInReport) {
     const { rows } = buildWorkloadSummary(structure);
+    const componentRows = rows.filter((r) => r.id !== 'total');
+    const totalRow = rows.find((r) => r.id === 'total');
+    const pct = (value: number) => `${Math.round(value * 100) / 100}%`;
     const wsCh = wb.addWorksheet('Carga Horária');
     const chRows: (string | number)[][] = [
       ['CARGA HORÁRIA'],
       [`Curso: ${structure.courseName}`, `Código: ${structure.code}`],
       [],
-      ['Componentes', 'Hora-relógio', 'Percentual'],
-      ...rows.map((r) => [r.label, r.hours, `${Math.round(r.percent * 100) / 100}%`]),
+      ['Componentes', ...componentRows.map((r) => r.shortLabel || r.label)],
+      ['Hora-relógio', ...componentRows.map((r) => r.hours)],
+      ['Percentual', ...componentRows.map((r) => pct(r.percent))],
+      ...(totalRow ? [['Total', totalRow.hours, pct(totalRow.percent)]] : []),
     ];
     chRows.forEach((r, i) =>
       r.forEach((v, j) => {

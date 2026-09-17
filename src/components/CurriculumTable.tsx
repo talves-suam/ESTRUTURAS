@@ -118,7 +118,10 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
     setExportToast({ message: 'Renderizando e gerando imagem PNG em alta resolução...', type: 'info' });
     try {
       await prepareMatrixForCapture();
-      await exportToPNG('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`);
+      await exportToPNG('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`, {
+        structure: structureForExport,
+        settings,
+      });
       setExportToast({ message: 'Imagem PNG gerada com sucesso e download iniciado!', type: 'success' });
       setTimeout(() => setExportToast(null), 4000);
     } catch (err: any) {
@@ -135,7 +138,11 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
     setExportToast({ message: 'Gerando PDF com o mesmo visual da tabela...', type: 'info' });
     try {
       await prepareMatrixForCapture();
-      await exportElementToPDF('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`);
+      await exportElementToPDF(
+        'curriculum-print-area',
+        `${structure.code}_Estrutura_Curricular_UNISUAM`,
+        { structure: structureForExport, settings }
+      );
       setExportToast({ message: 'PDF gerado com sucesso e download iniciado!', type: 'success' });
       setTimeout(() => setExportToast(null), 4000);
     } catch (err: any) {

@@ -1,5 +1,11 @@
 import React, { useRef, useState } from 'react';
-import { AppSettings, Course, ModalityType, RequirementLevel } from '../types/curriculum';
+import {
+  AppSettings,
+  Course,
+  ModalityType,
+  ReportNoteBlock,
+  RequirementLevel,
+} from '../types/curriculum';
 import { 
   Settings, 
   Save, 
@@ -14,9 +20,14 @@ import {
   Download,
   Upload,
   Trash2,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  NotebookPen,
 } from 'lucide-react';
 import { DcnViewerModal } from './DcnViewerModal';
 import { exportCourseBatchTemplate, readCourseBatchFile } from '../services/exportService';
+import { DEFAULT_REPORT_NOTES_TITLE, createReportNoteBlock } from '../services/reportNotes';
 import {
   COURSE_BATCH_HEADERS,
   applyCourseBatchRows,
@@ -51,6 +62,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [defaultEadLimit, setDefaultEadLimit] = useState(settings.defaultEadPercentLimit);
   const [defaultExtensionMin, setDefaultExtensionMin] = useState(settings.defaultExtensionPercentMin);
 
+  const [reportNotesTitle, setReportNotesTitle] = useState(
+    settings.reportNotesTitle || DEFAULT_REPORT_NOTES_TITLE
+  );
+  const [reportNotes, setReportNotes] = useState<{
+    disciplinar: ReportNoteBlock[];
+    modular: ReportNoteBlock[];
+  }>({
+    disciplinar: settings.reportNotesDisciplinar || [],
+    modular: settings.reportNotesModular || [],
+  });
+  const [activeNotesType, setActiveNotesType] = useState<'disciplinar' | 'modular'>('disciplinar');
+
   const [editableCourses, setEditableCourses] = useState<Course[]>(courses);
   const [selectedDcnCourse, setSelectedDcnCourse] = useState<Course | null>(null);
   const [csvText, setCsvText] = useState('');
@@ -65,6 +88,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setEditableCourses((prev) =>
       prev.map((c) => (c.id === courseId ? { ...c, [field]: value } : c))
     );
+  };
+
+  const activeNotesBlocks = reportNotes[activeNotesType];
+
+  const updateActiveNotes = (updater: (blocks: ReportNoteBlock[]) => ReportNoteBlock[]) => {
+    setReportNotes((prev) => ({ ...prev, [activeNotesType]: updater(prev[activeNotesType]) }));
+  };
+
+  const handleAddNoteBlock = () => {
+    updateActiveNotes((blocks) => [...blocks, createReportNoteBlock()]);
+  };
+
+  const handleNoteBlockChange = (id: string, field: 'title' | 'text', value: string) => {
+    updateActiveNotes((blocks) =>
+      blocks.map((block) => (block.id === id ? { ...block, [field]: value } : block))
+    );
+  };
+
+  const handleRemoveNoteBlock = (id: string) => {
+    updateActiveNotes((blocks) => blocks.filter((block) => block.id !== id));
+  };
+
+  const handleMoveNoteBlock = (index: number, direction: -1 | 1) => {
+    updateActiveNotes((blocks) => {
+      const target = index + direction;
+      if (target < 0 || target >= blocks.length) return blocks;
+      const next = [...blocks];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   };
 
   const applyBatchResult = (result: ReturnType<typeof applyCourseBatchRows>) => {
@@ -135,6 +188,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       defaultPresentialPercentMin: settings.defaultPresentialPercentMin || 60,
       defaultExtensionPercentMin: defaultExtensionMin,
       campusDefault: settings.campusDefault || 'Sede: UNISUAM-RJ',
+      reportNotesTitle: reportNotesTitle.trim() || DEFAULT_REPORT_NOTES_TITLE,
+      reportNotesDisciplinar: reportNotes.disciplinar,
+      reportNotesModular: reportNotes.modular,
     };
 
     await onSaveSettings(updatedSettings);
@@ -288,13 +344,139 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Section 3: Carga em Lote — Dados dos Cursos */}
+        {/* Section 3: Página de Observações (2ª página dos relatórios) */}
+        <div className="py-6 border-b border-slate-200 space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-[#002B49] uppercase tracking-wider flex items-center gap-2">
+              <NotebookPen className="w-4 h-4 text-[#FF6B00]" />
+              3. Página de Observações, Regras e Explicações da Ementa
+            </h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-4xl">
+              Este conteúdo é gerado como 2ª página nas exportações em PDF, PNG e HTML, com o mesmo
+              cabeçalho institucional da primeira. Cadastre quantos títulos e textos precisar; o
+              conteúdo é separado por tipo de estrutura. Linhas iniciadas por “-” viram lista.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label className="font-bold text-slate-700 block mb-1">Título da Página</label>
+              <input
+                type="text"
+                value={reportNotesTitle}
+                onChange={(e) => setReportNotesTitle(e.target.value)}
+                placeholder={DEFAULT_REPORT_NOTES_TITLE}
+                className="w-full px-3 py-2 border rounded-lg"
+              />
+            </div>
+            <div>
+              <span className="font-bold text-slate-700 block mb-1">Tipo de Estrutura</span>
+              <div className="flex items-center gap-2">
+                {(['disciplinar', 'modular'] as const).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => setActiveNotesType(type)}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold border transition ${
+                      activeNotesType === type
+                        ? 'bg-[#002B49] text-white border-[#002B49]'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    {type === 'disciplinar' ? 'Disciplinar' : 'Modular'}
+                    <span
+                      className={`ml-1.5 ${
+                        activeNotesType === type ? 'text-[#FF9B4A]' : 'text-slate-400'
+                      }`}
+                    >
+                      ({reportNotes[type].length})
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {activeNotesBlocks.length === 0 && (
+              <p className="text-xs text-slate-500 bg-slate-50 border border-dashed border-slate-300 rounded-lg p-4">
+                Nenhuma observação cadastrada para estruturas{' '}
+                {activeNotesType === 'disciplinar' ? 'disciplinares' : 'modulares'}. Sem conteúdo, os
+                relatórios continuam com apenas uma página.
+              </p>
+            )}
+
+            {activeNotesBlocks.map((block, index) => (
+              <div
+                key={block.id}
+                className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black text-slate-400 w-5 text-center">
+                    {index + 1}
+                  </span>
+                  <input
+                    type="text"
+                    value={block.title}
+                    onChange={(e) => handleNoteBlockChange(block.id, 'title', e.target.value)}
+                    placeholder="Título (ex.: Regras de Extensão Curricular)"
+                    className="flex-1 px-3 py-2 border rounded-lg text-xs font-bold text-[#002B49]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleMoveNoteBlock(index, -1)}
+                    disabled={index === 0}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+                    title="Mover para cima"
+                  >
+                    <ArrowUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleMoveNoteBlock(index, 1)}
+                    disabled={index === activeNotesBlocks.length - 1}
+                    className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+                    title="Mover para baixo"
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveNoteBlock(block.id)}
+                    className="p-1.5 rounded-lg border border-rose-200 bg-white text-rose-500 hover:bg-rose-50"
+                    title="Remover bloco"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <textarea
+                  value={block.text}
+                  onChange={(e) => handleNoteBlockChange(block.id, 'text', e.target.value)}
+                  placeholder="Texto da observação, regra ou explicação sobre o conteúdo da ementa."
+                  rows={4}
+                  className="w-full px-3 py-2 border rounded-lg text-xs leading-relaxed"
+                />
+              </div>
+            ))}
+
+            <button
+              type="button"
+              onClick={handleAddNoteBlock}
+              className="px-3 py-2 rounded-lg bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-bold flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Adicionar título e texto
+            </button>
+          </div>
+        </div>
+
+        {/* Section 4: Carga em Lote — Dados dos Cursos */}
         <div className="py-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-bold text-[#002B49] uppercase tracking-wider flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                3. Carga em Lote — Dados dos Cursos
+                4. Carga em Lote — Dados dos Cursos
               </h3>
               <p className="text-xs text-slate-500 mt-1 max-w-4xl">
                 Prefira Excel (.xlsx). Colunas: {COURSE_BATCH_HEADERS.join('; ')}.

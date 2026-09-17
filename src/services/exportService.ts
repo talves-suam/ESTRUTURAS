@@ -14,8 +14,10 @@ import {
   buildWorkloadSummary,
   formatWorkloadHours,
   formatWorkloadPercent,
+  WorkloadSummaryRow,
 } from './workloadSummary';
 import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
+import { getReportNotes, renderReportNotesPageHtml } from './reportNotes';
 import {
   COURSE_BATCH_HEADERS,
   courseToBatchRow,
@@ -116,8 +118,10 @@ async function inlineImagesAsDataUrls(
 function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
   if (structure.hideWorkloadSummaryInReport) return '';
   const { rows } = buildWorkloadSummary(structure);
+  const componentRows = rows.filter((row) => row.id !== 'total');
+  const totalRow = rows.find((row) => row.id === 'total');
   return `
-    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden max-w-md mx-auto">
+    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden">
       <div class="bg-[#002B49] px-3 py-2 text-center">
         <h3 class="text-[11px] font-black tracking-wide text-white uppercase">Carga Horária</h3>
         <p class="text-[9px] text-blue-200/90 mt-0.5">Hora-relógio · ${structure.courseName}</p>
@@ -126,27 +130,54 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
         <table class="w-full text-[11px] border-collapse">
           <thead>
             <tr class="bg-[#002B49]/5 border-b border-[#002B49]/10">
-              <th class="px-2.5 py-1.5 text-left text-[9px] font-bold uppercase tracking-wider text-[#002B49]">Componentes</th>
-              <th class="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] w-16">Horas</th>
-              <th class="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] w-14">%</th>
+              <th class="px-2.5 py-1.5 text-left text-[9px] font-bold uppercase tracking-wider text-[#002B49] whitespace-nowrap">Componentes</th>
+              ${componentRows
+                .map(
+                  (row) =>
+                    `<th class="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] leading-tight">${
+                      row.shortLabel || row.label
+                    }</th>`
+                )
+                .join('')}
             </tr>
           </thead>
           <tbody>
-            ${rows
-              .map(
-                (row) => `
-              <tr class="border-b border-slate-100 last:border-0 ${
-                row.emphasize ? 'bg-[#FF6B00]/8 font-bold text-[#002B49]' : 'text-slate-700'
-              }">
-                <td class="px-2.5 py-1 text-left font-medium leading-snug whitespace-normal">${row.label}</td>
-                <td class="px-2 py-1 text-center tabular-nums font-semibold whitespace-nowrap">${formatWorkloadHours(row.hours)}</td>
-                <td class="px-2 py-1 text-center tabular-nums whitespace-nowrap ${
-                  row.emphasize ? 'text-[#FF6B00]' : 'text-slate-600'
-                }">${formatWorkloadPercent(row.percent)}</td>
-              </tr>`
-              )
-              .join('')}
+            <tr class="border-b border-slate-100">
+              <th class="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">Hora-relógio</th>
+              ${componentRows
+                .map(
+                  (row) =>
+                    `<td class="px-2 py-1.5 text-center tabular-nums font-bold text-slate-800 whitespace-nowrap">${formatWorkloadHours(
+                      row.hours
+                    )}</td>`
+                )
+                .join('')}
+            </tr>
+            <tr>
+              <th class="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">Percentual</th>
+              ${componentRows
+                .map(
+                  (row) =>
+                    `<td class="px-2 py-1.5 text-center tabular-nums text-slate-600 whitespace-nowrap">${formatWorkloadPercent(
+                      row.percent
+                    )}</td>`
+                )
+                .join('')}
+            </tr>
           </tbody>
+          ${
+            totalRow
+              ? `<tfoot>
+            <tr class="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
+              <th class="px-2.5 py-1.5 text-left uppercase tracking-wider">Total</th>
+              <td colspan="${componentRows.length}" class="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">
+                ${formatWorkloadHours(totalRow.hours)} horas
+                <span class="text-[#FF6B00] ml-1.5">(${formatWorkloadPercent(totalRow.percent)})</span>
+              </td>
+            </tr>
+          </tfoot>`
+              : ''
+          }
         </table>
       </div>
     </section>`;
@@ -266,11 +297,15 @@ async function captureElementAsPngDataUrl(
   }
 }
 
-export async function exportToPNG(elementId: string, filename: string): Promise<string> {
-  const { dataUrl } = await captureElementAsPngDataUrl(elementId);
+/** Opções de exportação por captura de tela (2ª página de observações). */
+export interface ElementExportOptions {
+  structure?: CurriculumStructure;
+  settings?: AppSettings;
+}
 
+function triggerDownload(dataUrl: string, filename: string): void {
   const link = document.createElement('a');
-  link.download = `${filename}.png`;
+  link.download = filename;
   link.href = dataUrl;
   document.body.appendChild(link);
   link.click();
@@ -279,12 +314,91 @@ export async function exportToPNG(elementId: string, filename: string): Promise<
       document.body.removeChild(link);
     }
   }, 200);
+}
+
+/**
+ * Renderiza a página de observações fora da tela e a captura como imagem,
+ * na mesma largura da 1ª página para o relatório ficar homogêneo.
+ */
+async function captureReportNotesPage(
+  options: ElementExportOptions,
+  widthPx: number
+): Promise<{ dataUrl: string; widthPx: number; heightPx: number } | null> {
+  const { structure, settings } = options;
+  if (!structure) return null;
+
+  const logoDataUrl = await getLogoDataUrl().catch(() => '');
+  const html = renderReportNotesPageHtml(structure, settings, {
+    widthPx: Math.round(widthPx),
+    logoDataUrl,
+  });
+  if (!html) return null;
+
+  const host = document.createElement('div');
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  host.style.width = `${Math.round(widthPx)}px`;
+  host.style.background = '#ffffff';
+  host.innerHTML = html;
+  document.body.appendChild(host);
+
+  try {
+    await Promise.all(
+      Array.from(host.querySelectorAll('img')).map((img) =>
+        img.decode ? img.decode().catch(() => undefined) : Promise.resolve()
+      )
+    );
+
+    const dataUrl = await toPng(host, {
+      backgroundColor: '#ffffff',
+      pixelRatio: 2,
+      width: Math.round(widthPx),
+    });
+
+    let outWidth = Math.round(widthPx) * 2;
+    let outHeight = Math.max(host.scrollHeight, 1) * 2;
+    try {
+      const img = new Image();
+      img.src = dataUrl;
+      await img.decode();
+      outWidth = img.naturalWidth || outWidth;
+      outHeight = img.naturalHeight || outHeight;
+    } catch {
+      /* mantém estimativa */
+    }
+
+    return { dataUrl, widthPx: outWidth, heightPx: outHeight };
+  } catch (err) {
+    console.warn('Não foi possível gerar a página de observações:', err);
+    return null;
+  } finally {
+    document.body.removeChild(host);
+  }
+}
+
+export async function exportToPNG(
+  elementId: string,
+  filename: string,
+  options: ElementExportOptions = {}
+): Promise<string> {
+  const { dataUrl, widthPx } = await captureElementAsPngDataUrl(elementId);
+  triggerDownload(dataUrl, `${filename}.png`);
+
+  const notes = await captureReportNotesPage(options, widthPx / 2);
+  if (notes) {
+    triggerDownload(notes.dataUrl, `${filename}_Observacoes.png`);
+  }
 
   return dataUrl;
 }
 
 /** PDF da visualização atual (mapa ou tabela capturada da tela). */
-export async function exportElementToPDF(elementId: string, filename: string): Promise<void> {
+export async function exportElementToPDF(
+  elementId: string,
+  filename: string,
+  options: ElementExportOptions = {}
+): Promise<void> {
   const { dataUrl, widthPx, heightPx } = await captureElementAsPngDataUrl(elementId);
 
   // Converte px → pt (~0.75) para página sob medida
@@ -301,6 +415,15 @@ export async function exportElementToPDF(elementId: string, filename: string): P
   });
 
   pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH, undefined, 'FAST');
+
+  // 2ª página: observações da ementa com o mesmo cabeçalho e largura da 1ª
+  const notes = await captureReportNotesPage(options, widthPx / 2);
+  if (notes) {
+    const notesH = Math.max(200, (notes.heightPx / notes.widthPx) * pageW);
+    pdf.addPage([pageW, notesH], pageW >= notesH ? 'landscape' : 'portrait');
+    pdf.addImage(notes.dataUrl, 'PNG', 0, 0, pageW, notesH, undefined, 'FAST');
+  }
+
   pdf.save(`${filename}.pdf`);
 }
 
@@ -702,12 +825,16 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     }
     y += 4;
     const { rows } = buildWorkloadSummary(structure);
-    const tableW = Math.min(contentWidth, 160);
+    const componentRows = rows.filter((row) => row.id !== 'total');
+    const totalRow = rows.find((row) => row.id === 'total');
+
+    // Quadro horizontal: um componente por coluna, total na faixa de baixo
+    const colLabel = 30;
+    const tableW = Math.min(contentWidth, colLabel + componentRows.length * 27);
     const tableX = margin + (contentWidth - tableW) / 2;
-    const colLabel = tableW * 0.5;
-    const colHours = tableW * 0.25;
-    const colPct = tableW * 0.25;
-    const rowH = 6;
+    const colData = (tableW - colLabel) / Math.max(componentRows.length, 1);
+    const rowH = 7;
+    const centerOf = (index: number) => tableX + colLabel + colData * index + colData / 2;
 
     doc.setFillColor(0, 43, 73);
     doc.rect(tableX, y, tableW, 8, 'F');
@@ -718,41 +845,60 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     y += 8;
 
     doc.setFillColor(245, 247, 250);
-    doc.rect(tableX, y, tableW, 6, 'F');
+    doc.rect(tableX, y, tableW, rowH, 'F');
     doc.setDrawColor(0, 43, 73);
-    doc.setFontSize(7);
+    doc.rect(tableX, y, tableW, rowH);
+    doc.setFontSize(6.5);
     doc.setTextColor(0, 43, 73);
-    doc.text('Componentes', tableX + colLabel / 2, y + 4, { align: 'center' });
-    doc.text('Hora-relógio', tableX + colLabel + colHours / 2, y + 4, { align: 'center' });
-    doc.text('Percentual', tableX + colLabel + colHours + colPct / 2, y + 4, { align: 'center' });
-    y += 6;
+    doc.text('Componentes', tableX + 2, y + 4.4);
+    componentRows.forEach((row, index) => {
+      doc.text(row.shortLabel || row.label, centerOf(index), y + 4.4, {
+        align: 'center',
+        maxWidth: colData - 2,
+      });
+    });
+    y += rowH;
 
-    rows.forEach((row) => {
-      if (y > 190) {
-        doc.addPage();
-        y = 12;
-      }
-      if (row.emphasize) {
-        doc.setFillColor(255, 240, 230);
-        doc.rect(tableX, y, tableW, rowH, 'F');
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(0, 43, 73);
-      } else {
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(50, 50, 50);
-      }
+    const drawValueRow = (
+      title: string,
+      valueOf: (row: WorkloadSummaryRow) => string,
+      bold: boolean
+    ) => {
       doc.setDrawColor(220, 220, 220);
       doc.rect(tableX, y, tableW, rowH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(title, tableX + 2, y + 4.4);
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setTextColor(50, 50, 50);
       doc.setFontSize(7);
-      doc.text(row.label, tableX + colLabel / 2, y + 4, { align: 'center', maxWidth: colLabel - 4 });
-      doc.text(formatWorkloadHours(row.hours), tableX + colLabel + colHours / 2, y + 4, {
-        align: 'center',
-      });
-      doc.text(formatWorkloadPercent(row.percent), tableX + colLabel + colHours + colPct / 2, y + 4, {
-        align: 'center',
+      componentRows.forEach((row, index) => {
+        doc.text(valueOf(row), centerOf(index), y + 4.4, { align: 'center' });
       });
       y += rowH;
-    });
+    };
+
+    drawValueRow('Hora-relógio', (row) => formatWorkloadHours(row.hours), true);
+    drawValueRow('Percentual', (row) => formatWorkloadPercent(row.percent), false);
+
+    if (totalRow) {
+      doc.setFillColor(255, 240, 230);
+      doc.rect(tableX, y, tableW, rowH, 'F');
+      doc.setDrawColor(0, 43, 73);
+      doc.rect(tableX, y, tableW, rowH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(0, 43, 73);
+      doc.text('TOTAL', tableX + 2, y + 4.6);
+      doc.text(
+        `${formatWorkloadHours(totalRow.hours)} horas (${formatWorkloadPercent(totalRow.percent)})`,
+        tableX + colLabel + (tableW - colLabel) / 2,
+        y + 4.6,
+        { align: 'center' }
+      );
+      y += rowH;
+    }
   }
 
   // Footer / Assinatura Oficial
@@ -767,6 +913,92 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   doc.setTextColor(100, 100, 100);
   doc.text('Documento gerado eletronicamente pelo Sistema de Gestão de Estruturas Curriculares - UNISUAM.', margin, y + 4);
   doc.text(`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}`, margin + 180, y + 4);
+
+  // 2ª página: observações, regras e explicações da ementa
+  const notes = getReportNotes(structure.structureType, settings);
+  if (notes.blocks.length > 0) {
+    doc.addPage();
+    let ny = 12;
+
+    doc.setFillColor(0, 43, 73);
+    doc.rect(margin, ny, contentWidth, 14, 'F');
+    doc.setFillColor(255, 107, 0);
+    doc.rect(margin, ny + 14, contentWidth, 2, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      settings?.institutionName || 'UNISUAM - Centro Universitário Augusto Motta',
+      margin + 4,
+      ny + 6
+    );
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(notes.title.toUpperCase(), margin + 4, ny + 11);
+    ny += 20;
+
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 30, 30);
+    doc.setDrawColor(200, 200, 200);
+    doc.rect(margin, ny, contentWidth, 12);
+    doc.text(
+      `Curso e Modalidade: ${structure.courseName} (${structure.modality})`,
+      margin + 3,
+      ny + 5
+    );
+    doc.text(
+      `Estrutura: ${structure.code}${structure.hideStatus ? '' : ` (${structure.status})`}`,
+      margin + 110,
+      ny + 5
+    );
+    doc.text(`CH Total: ${structure.calculatedTotalHours}h`, margin + 200, ny + 5);
+    doc.text(`Tipo de Estrutura: ${structure.structureType.toUpperCase()}`, margin + 3, ny + 9.5);
+    doc.text(`DCN Ativa: ${structure.dcnRef || 'Resolução MEC'}`, margin + 110, ny + 9.5);
+    doc.text(`Semestre Ativo: ${structure.activeYearSemester}`, margin + 200, ny + 9.5);
+    ny += 18;
+
+    notes.blocks.forEach((block) => {
+      if (block.title) {
+        if (ny > 185) {
+          doc.addPage();
+          ny = 12;
+        }
+        doc.setFillColor(240, 244, 248);
+        doc.rect(margin, ny, contentWidth, 6, 'F');
+        doc.setFillColor(255, 107, 0);
+        doc.rect(margin, ny, 1.5, 6, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(0, 43, 73);
+        doc.text(block.title.toUpperCase(), margin + 5, ny + 4);
+        ny += 8;
+      }
+
+      if (block.text) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(50, 50, 50);
+        block.text.split(/\r?\n/).forEach((paragraph) => {
+          const clean = paragraph.trim();
+          if (!clean) {
+            ny += 2;
+            return;
+          }
+          const lines = doc.splitTextToSize(clean, contentWidth - 8) as string[];
+          lines.forEach((line) => {
+            if (ny > 195) {
+              doc.addPage();
+              ny = 12;
+            }
+            doc.text(line, margin + 4, ny);
+            ny += 4;
+          });
+        });
+      }
+
+      ny += 4;
+    });
+  }
 
   doc.save(`${structure.code}_${structure.courseName.replace(/\s+/g, '_')}_Oficial_UNISUAM.pdf`);
 }
@@ -796,6 +1028,7 @@ export async function generateInteractiveHtml(
     @media print {
       .no-print { display: none !important; }
       body { background: white !important; color: black !important; }
+      .report-notes-page { page-break-before: always; break-before: page; border: 0 !important; }
     }
   </style>
 </head>
@@ -1175,6 +1408,13 @@ export async function generateInteractiveHtml(
     </div>
 
     ${renderWorkloadSummaryHtml(structure)}
+
+    ${(() => {
+      const notesHtml = renderReportNotesPageHtml(structure, settings, { logoDataUrl });
+      return notesHtml
+        ? `<div class="report-notes-page mt-8 rounded-xl overflow-hidden border border-slate-200 bg-white">${notesHtml}</div>`
+        : '';
+    })()}
   </main>
 
   <footer class="bg-white border-t border-slate-200 mt-12 py-6 text-center text-xs text-slate-500">
@@ -1253,7 +1493,8 @@ export async function exportToInteractiveHTML(
 export async function exportMapToHTML(
   elementId: string,
   structure: CurriculumStructure,
-  filename?: string
+  filename?: string,
+  settings?: AppSettings
 ): Promise<void> {
   const element = document.getElementById(elementId);
   if (!element) {
@@ -1285,6 +1526,9 @@ export async function exportMapToHTML(
 
   const safeName = (structure.courseName || 'Curso').replace(/\s+/g, '_');
   const title = `Mapa Curricular — ${structure.code} · ${structure.courseName}`;
+  const notesPageHtml = renderReportNotesPageHtml(structure, settings, {
+    logoDataUrl: await getLogoDataUrl().catch(() => ''),
+  });
 
   const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -1360,6 +1604,19 @@ export async function exportMapToHTML(
       padding-bottom: 24px;
       transform-origin: top left;
     }
+    .report-notes-page {
+      border-top: 1px solid #e2e8f0;
+      background: #f8fafc;
+      padding: 20px 12px 40px;
+    }
+    .report-notes-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    @media print {
+      #map-viewport { height: auto; max-height: none; overflow: visible; }
+      .report-notes-page { page-break-before: always; break-before: page; background: #fff; border: 0; }
+    }
     @media (max-width: 768px) {
       header {
         padding: 10px 12px;
@@ -1402,6 +1659,13 @@ export async function exportMapToHTML(
       ${clone.outerHTML}
     </div>
   </div>
+  ${
+    notesPageHtml
+      ? `<div class="report-notes-page">
+    <div class="report-notes-inner">${notesPageHtml}</div>
+  </div>`
+      : ''
+  }
   <script>
     (function () {
       var vp = document.getElementById('map-viewport');

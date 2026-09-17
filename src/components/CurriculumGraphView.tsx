@@ -913,7 +913,10 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
   const handleExportPNG = async () => {
     setIsExporting(true);
     try {
-      await exportToPNG('graph-export-container', `${structure.code}_Mapa_Curricular`);
+      await exportToPNG('graph-export-container', `${structure.code}_Mapa_Curricular`, {
+        structure,
+        settings,
+      });
       setExportToast('PNG do mapa gerado com sucesso.');
       setTimeout(() => setExportToast(null), 3000);
     } catch (e) {
@@ -928,7 +931,10 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
   const handleExportMapPDF = async () => {
     setIsExporting(true);
     try {
-      await exportElementToPDF('graph-export-container', `${structure.code}_Mapa_Curricular`);
+      await exportElementToPDF('graph-export-container', `${structure.code}_Mapa_Curricular`, {
+        structure,
+        settings,
+      });
       setExportToast('PDF do mapa gerado com sucesso.');
       setTimeout(() => setExportToast(null), 3000);
     } catch (e) {
@@ -942,7 +948,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
 
   const handleExportMapHTML = async () => {
     try {
-      await exportMapToHTML('graph-export-container', structure);
+      await exportMapToHTML('graph-export-container', structure, undefined, settings);
       setExportToast('HTML do mapa gerado e download iniciado.');
       setTimeout(() => setExportToast(null), 3000);
     } catch (e) {

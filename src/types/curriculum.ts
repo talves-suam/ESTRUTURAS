@@ -552,6 +552,13 @@ export interface CurriculumStructure {
   updatedAt: string;
 }
 
+/** Bloco de conteúdo da página de observações dos relatórios (título + texto). */
+export interface ReportNoteBlock {
+  id: string;
+  title: string;
+  text: string;
+}
+
 export interface AppSettings {
   pedagogicalNomenclature: PedagogicalNomenclature;
   hideValidityStartDefault: boolean;
@@ -560,4 +567,8 @@ export interface AppSettings {
   defaultExtensionPercentMin: number;
   institutionName: string;
   campusDefault: string;
+  /** Título da 2ª página (observações, regras e explicações da ementa). */
+  reportNotesTitle?: string;
+  reportNotesDisciplinar?: ReportNoteBlock[];
+  reportNotesModular?: ReportNoteBlock[];
 }

@@ -9,6 +9,8 @@ import {
 export interface WorkloadSummaryRow {
   id: string;
   label: string;
+  /** Rótulo enxuto para o quadro horizontal (uma coluna por componente). */
+  shortLabel?: string;
   hours: number;
   percent: number;
   emphasize?: boolean;
@@ -173,6 +175,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
         {
           id: 'teorico',
           label: 'Presencial — Teórico',
+          shortLabel: 'Teórico',
           hours: theoretical,
           percent: pct(theoretical),
         },
@@ -181,6 +184,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
               {
                 id: 'laboratorio',
                 label: 'Presencial — Laboratório',
+                shortLabel: 'Laboratório',
                 hours: laboratory,
                 percent: pct(laboratory),
               } as WorkloadSummaryRow,
@@ -191,6 +195,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
               {
                 id: 'clinica',
                 label: 'Presencial — Clínica',
+                shortLabel: 'Clínica',
                 hours: clinical,
                 percent: pct(clinical),
               } as WorkloadSummaryRow,
@@ -201,6 +206,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
         {
           id: 'presencial',
           label: 'Presencial',
+          shortLabel: 'Presencial',
           hours: presentialTotal,
           percent: pct(presentialTotal),
         },
@@ -211,32 +217,49 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
     {
       id: 'sincrono-mediado',
       label: 'Síncrono-Mediado',
+      shortLabel: 'Síncrono-Mediado',
       hours: syncMediatedShown,
       percent: pct(syncMediatedShown),
     },
-    { id: 'assincrono', label: 'Assíncrono', hours: asyncH, percent: pct(asyncH) },
+    {
+      id: 'assincrono',
+      label: 'Assíncrono',
+      shortLabel: 'Assíncrono',
+      hours: asyncH,
+      percent: pct(asyncH),
+    },
     {
       id: 'estagio',
       label: 'Estágio Supervisionado',
+      shortLabel: 'Estágio',
       hours: internship,
       percent: pct(internship),
     },
-    { id: 'extensao', label: 'Extensão', hours: extensionShown, percent: pct(extensionShown) },
+    {
+      id: 'extensao',
+      label: 'Extensão',
+      shortLabel: 'Extensão',
+      hours: extensionShown,
+      percent: pct(extensionShown),
+    },
     {
       id: 'tcc',
       label: 'Trabalho de Conclusão de Curso',
+      shortLabel: 'TCC',
       hours: finalPaper,
       percent: pct(finalPaper),
     },
     {
       id: 'complementares',
       label: 'Atividades Complementares',
+      shortLabel: 'Ativ. Complementares',
       hours: complementary,
       percent: pct(complementary),
     },
     {
       id: 'total',
       label: 'Total',
+      shortLabel: 'Total',
       hours: totalHours,
       percent: 100,
       emphasize: true,
