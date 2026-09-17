@@ -904,9 +904,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
         )}
 
         {!hideWorkloadSummaryInReport && (
-          <div className="flex justify-center">
-            <WorkloadSummaryCard structure={structure} />
-          </div>
+          <WorkloadSummaryCard structure={structure} className="w-full" />
         )}
       </div>
 

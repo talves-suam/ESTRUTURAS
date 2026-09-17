@@ -1124,9 +1124,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
           )}
 
           {showWorkloadSummaryOnMap && (
-            <div className="mt-4 flex justify-center">
-              <WorkloadSummaryCard structure={structure} />
-            </div>
+            <WorkloadSummaryCard structure={structure} className="mt-4 w-full" />
           )}
         </div>
 

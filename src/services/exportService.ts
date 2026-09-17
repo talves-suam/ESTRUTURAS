@@ -828,10 +828,11 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     const componentRows = rows.filter((row) => row.id !== 'total');
     const totalRow = rows.find((row) => row.id === 'total');
 
-    // Quadro horizontal: um componente por coluna, total na faixa de baixo
+    // Quadro horizontal: um componente por coluna, total na faixa de baixo.
+    // Ocupa a mesma largura das tabelas de disciplinas para alinhar o relatório.
     const colLabel = 30;
-    const tableW = Math.min(contentWidth, colLabel + componentRows.length * 27);
-    const tableX = margin + (contentWidth - tableW) / 2;
+    const tableW = contentWidth;
+    const tableX = margin;
     const colData = (tableW - colLabel) / Math.max(componentRows.length, 1);
     const rowH = 7;
     const centerOf = (index: number) => tableX + colLabel + colData * index + colData / 2;
