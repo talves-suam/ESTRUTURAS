@@ -646,7 +646,7 @@ export async function exportCurriculumToXlsx(
       ['Componentes', ...componentRows.map((r) => r.shortLabel || r.label)],
       ['Hora-relógio', ...componentRows.map((r) => r.hours)],
       ['Percentual', ...componentRows.map((r) => pct(r.percent))],
-      ...(totalRow ? [['Total', totalRow.hours, pct(totalRow.percent)]] : []),
+      ...(totalRow ? [['Total', totalRow.hours]] : []),
     ];
     chRows.forEach((r, i) =>
       r.forEach((v, j) => {

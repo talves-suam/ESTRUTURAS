@@ -172,7 +172,6 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
               <th class="px-2.5 py-1.5 text-left uppercase tracking-wider">Total</th>
               <td colspan="${componentRows.length}" class="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">
                 ${formatWorkloadHours(totalRow.hours)} horas
-                <span class="text-[#FF6B00] ml-1.5">(${formatWorkloadPercent(totalRow.percent)})</span>
               </td>
             </tr>
           </tfoot>`
@@ -893,7 +892,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setTextColor(0, 43, 73);
       doc.text('TOTAL', tableX + 2, y + 4.6);
       doc.text(
-        `${formatWorkloadHours(totalRow.hours)} horas (${formatWorkloadPercent(totalRow.percent)})`,
+        `${formatWorkloadHours(totalRow.hours)} horas`,
         tableX + colLabel + (tableW - colLabel) / 2,
         y + 4.6,
         { align: 'center' }

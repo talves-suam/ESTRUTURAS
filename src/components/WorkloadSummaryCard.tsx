@@ -95,9 +95,6 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
                   className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap"
                 >
                   {formatWorkloadHours(totalRow.hours)} horas
-                  <span className="text-[#FF6B00] ml-1.5">
-                    ({formatWorkloadPercent(totalRow.percent)})
-                  </span>
                 </td>
               </tr>
             </tfoot>
