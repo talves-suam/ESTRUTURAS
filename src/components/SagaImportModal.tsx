@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Course, CurriculumStructure, ModalityType } from '../types/curriculum';
 import {
   extractTextFromPdf,
@@ -6,11 +6,13 @@ import {
   parseSagaReportText,
   SagaParseResult,
 } from '../services/sagaImportService';
+import { calculateStructureTotals } from '../services/curriculumService';
 import {
   courseBaseName,
-  uniqueCourseOptions,
   resolveCourseByNameAndModality,
   normalizeCourseName,
+  stripAcademicCoursePrefix,
+  formatCineBrasilLabel,
 } from '../utils/courseBatch';
 import {
   UploadCloud,
@@ -21,6 +23,7 @@ import {
   Loader2,
   FileText,
   FileSpreadsheet,
+  XCircle,
 } from 'lucide-react';
 
 interface SagaImportModalProps {
@@ -29,97 +32,318 @@ interface SagaImportModalProps {
   onCancel: () => void;
 }
 
+type ComplianceItem = {
+  id: string;
+  label: string;
+  detail: string;
+  ok: boolean;
+  critical?: boolean;
+};
+
+function courseMatchKeys(name: string): string[] {
+  const base = courseBaseName(name);
+  const stripped = stripAcademicCoursePrefix(base);
+  const keys = new Set<string>([
+    normalizeCourseName(base),
+    normalizeCourseName(stripped),
+  ]);
+  return [...keys].filter(Boolean);
+}
+
+function findCourseFromHints(
+  courses: Course[],
+  courseName?: string,
+  modality?: ModalityType
+): Course | undefined {
+  if (!courseName?.trim()) return undefined;
+
+  const hintKeys = courseMatchKeys(courseName);
+
+  const scored = courses.map((c) => {
+    const keys = courseMatchKeys(c.name);
+    let score = 0;
+    for (const hk of hintKeys) {
+      for (const ck of keys) {
+        if (hk === ck) score = Math.max(score, 100);
+        else if (hk.includes(ck) || ck.includes(hk)) score = Math.max(score, 70 + Math.min(hk.length, ck.length));
+      }
+    }
+    if (modality && c.modality === modality) score += 5;
+    // Híbrido no PDF ≈ Semipresencial no cadastro
+    if (modality === 'Semipresencial' && c.modality === 'Semipresencial') score += 3;
+    return { course: c, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  if (scored[0]?.score >= 70) return scored[0].course;
+
+  return resolveCourseByNameAndModality(
+    courses,
+    stripAcademicCoursePrefix(courseBaseName(courseName)),
+    modality || 'Semipresencial'
+  );
+}
+
+function applyCourseToStructure(
+  structure: CurriculumStructure,
+  course: Course | undefined,
+  hints: SagaParseResult['hints']
+): CurriculumStructure {
+  const structureType = structure.structureType || hints.structureType || 'disciplinar';
+  const base: CurriculumStructure = {
+    ...structure,
+    structureType,
+    code: structure.code || hints.structureCode || '',
+    activeYearSemester: structure.activeYearSemester || hints.semester || '',
+    modality: hints.modality || structure.modality || course?.modality || 'EAD',
+    courseName: course
+      ? courseBaseName(course.name)
+      : courseBaseName(hints.courseName || structure.courseName || ''),
+    courseId: course?.id || structure.courseId || '',
+    complementaryTotalHours:
+      structure.complementaryTotalHours || hints.complementaryHours || undefined,
+    requiredTotalHours:
+      structure.requiredTotalHours || hints.totalHours || course?.minTotalHours || 0,
+  };
+
+  if (!course) {
+    return calculateStructureTotals(base);
+  }
+
+  return calculateStructureTotals({
+    ...base,
+    courseId: course.id,
+    courseName: courseBaseName(course.name),
+    modality: course.modality,
+    requiredTotalHours: course.minTotalHours || base.requiredTotalHours,
+    minPresentialHoursPercent: course.minPresentialPercent,
+    maxEadHoursPercent: course.maxEadPercent,
+    minExtensionPercent: course.minExtensionPercent ?? 10,
+    complementaryTotalHours:
+      course.complementaryTotalHours ?? base.complementaryTotalHours,
+    complementaryModality: course.complementaryModality,
+    extensionTotalHours: course.extensionTotalHours,
+    extensionModality: course.extensionModality,
+    minInternshipHours: course.minInternshipHours,
+    internshipRequirement: course.internshipRequirement,
+    complementaryRequirement: course.complementaryRequirement,
+    finalPaperRequirement: course.finalPaperRequirement,
+    degrees: course.degrees,
+    coordinatorName: course.coordinatorName,
+    coordinatorEmail: course.coordinatorEmail,
+    hasLaboratory: course.hasLaboratory,
+    hasClinical: course.hasClinical,
+    dcnRef: course.activeDcn,
+    dcns: course.dcns,
+    cineBrasilRef: formatCineBrasilLabel(course.cineBrasilCode, course.cineBrasilArea),
+    authorizationAct: course.authorizationAct,
+  });
+}
+
+function buildCompliance(
+  structure: CurriculumStructure,
+  course: Course | undefined,
+  hints: SagaParseResult['hints']
+): ComplianceItem[] {
+  const items: ComplianceItem[] = [];
+  const total = structure.calculatedTotalHours || 0;
+  const core = structure.calculatedCoreHours ?? total;
+  const pct = (part: number) => (total > 0 ? (part / total) * 100 : 0);
+
+  items.push({
+    id: 'course',
+    label: 'Curso vinculado ao cadastro',
+    detail: course
+      ? `${courseBaseName(course.name)} · ${course.modality}`
+      : hints.courseName
+        ? `“${hints.courseName}” não encontrado no cadastro de cursos`
+        : 'Nome do curso não identificado no documento',
+    ok: Boolean(course),
+    critical: true,
+  });
+
+  if (course && hints.modality) {
+    items.push({
+      id: 'modality',
+      label: 'Modalidade',
+      detail:
+        hints.modality === course.modality
+          ? `Documento e cadastro: ${course.modality}`
+          : `Documento: ${hints.modality} · Cadastro: ${course.modality}`,
+      ok: hints.modality === course.modality,
+      critical: true,
+    });
+  }
+
+  if (course) {
+    const minCh = course.minTotalHours || 0;
+    items.push({
+      id: 'ch',
+      label: 'Carga horária mínima do curso',
+      detail:
+        minCh > 0
+          ? `Estrutura: ${core}h (núcleo) / ${total}h total · Mínimo cadastrado: ${minCh}h`
+          : `Estrutura: ${total}h · Mínimo do curso não informado`,
+      ok: minCh <= 0 || core >= minCh || total >= minCh,
+      critical: true,
+    });
+
+    const presPct = pct(structure.calculatedPresentialHours || 0);
+    const minPres = course.minPresentialPercent || 0;
+    if (minPres > 0 && total > 0) {
+      items.push({
+        id: 'presencial',
+        label: 'Presencialidade mínima',
+        detail: `${presPct.toFixed(1)}% na estrutura · Mínimo: ${minPres}%`,
+        ok: presPct + 0.05 >= minPres,
+      });
+    }
+
+    const eadPct = pct(structure.calculatedEadHours || 0);
+    const maxEad = course.maxEadPercent || 0;
+    if (maxEad > 0 && total > 0) {
+      items.push({
+        id: 'ead',
+        label: 'Limite de EAD',
+        detail: `${eadPct.toFixed(1)}% na estrutura · Máximo: ${maxEad}%`,
+        ok: eadPct - 0.05 <= maxEad,
+      });
+    }
+
+    const extPct = pct(structure.calculatedExtensionHours || 0);
+    const minExt = course.minExtensionPercent ?? 10;
+    if (total > 0) {
+      items.push({
+        id: 'extension',
+        label: 'Extensão curricular',
+        detail: `${extPct.toFixed(1)}% (${structure.calculatedExtensionHours || 0}h) · Mínimo: ${minExt}%`,
+        ok: extPct + 0.05 >= minExt,
+      });
+    }
+
+    const minIntern = course.minInternshipHours;
+    if (minIntern != null && minIntern > 0) {
+      const intern = structure.calculatedInternshipHours || 0;
+      items.push({
+        id: 'internship',
+        label: 'Estágio supervisionado',
+        detail: `${intern}h na estrutura · Mínimo cadastrado: ${minIntern}h`,
+        ok: intern >= minIntern,
+      });
+    }
+
+    if (course.complementaryTotalHours != null && course.complementaryTotalHours > 0) {
+      items.push({
+        id: 'complementary',
+        label: 'Atividades complementares (cadastro)',
+        detail: `${course.complementaryTotalHours}h definidas no curso serão aplicadas à estrutura`,
+        ok: true,
+      });
+    }
+  }
+
+  if (hints.structureCode) {
+    items.push({
+      id: 'code',
+      label: 'Código da estrutura',
+      detail: hints.structureCode,
+      ok: true,
+    });
+  }
+
+  if (hints.semester) {
+    items.push({
+      id: 'semester',
+      label: 'Ano/semestre',
+      detail: hints.semester,
+      ok: true,
+    });
+  }
+
+  return items;
+}
+
 export const SagaImportModal: React.FC<SagaImportModalProps> = ({
   courses,
   onImportComplete,
   onCancel,
 }) => {
-  const [selectedCourseId, setSelectedCourseId] = useState<string>(courses[0]?.id || '');
-  const [code, setCode] = useState('');
-  const [activeYearSemester, setActiveYearSemester] = useState('');
-  const [modality, setModality] = useState<ModalityType>('EAD');
-  const [structureType, setStructureType] = useState<'disciplinar' | 'modular'>('disciplinar');
   const [fileName, setFileName] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState('');
   const [parseResult, setParseResult] = useState<SagaParseResult | null>(null);
+  const [matchedCourse, setMatchedCourse] = useState<Course | undefined>();
+  const [draftStructure, setDraftStructure] = useState<CurriculumStructure | null>(null);
   const [isReading, setIsReading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState<'sheet' | 'pdf' | null>(null);
   const sheetInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
-  const courseOptions = uniqueCourseOptions(courses);
-  const selectedCourse =
-    resolveCourseByNameAndModality(courses, selectedCourseId, modality) ||
-    courses.find((c) => c.id === selectedCourseId) ||
-    courses[0];
-  const selectedCourseKey = normalizeCourseName(courseBaseName(selectedCourse?.name || ''));
+  const compliance = useMemo(() => {
+    if (!draftStructure || !parseResult) return [];
+    return buildCompliance(draftStructure, matchedCourse, parseResult.hints);
+  }, [draftStructure, matchedCourse, parseResult]);
 
-  const buildParams = (overrides?: { courseId?: string; courseName?: string; code?: string; modality?: ModalityType; semester?: string }) => ({
-    courseName: courseBaseName(overrides?.courseName || selectedCourse?.name || ''),
-    courseId: overrides?.courseId || selectedCourseId,
-    modality: overrides?.modality || modality,
-    code: overrides?.code || code,
-    activeYearSemester: overrides?.semester || activeYearSemester,
-    structureType,
-    requiredTotalHours: selectedCourse?.minTotalHours,
-  });
+  const criticalFails = compliance.filter((c) => c.critical && !c.ok);
+  const softFails = compliance.filter((c) => !c.critical && !c.ok);
+  const allCriticalOk = criticalFails.length === 0 && Boolean(matchedCourse);
 
-  useEffect(() => {
-    const resolved = resolveCourseByNameAndModality(courses, selectedCourseId, modality);
-    if (resolved && resolved.id !== selectedCourseId) {
-      setSelectedCourseId(resolved.id);
-    }
-  }, [modality, courses, selectedCourseId]);
+  const canProceed = (parseResult?.stats.disciplines || 0) > 0;
 
-  useEffect(() => {
-    if (!extractedText.trim()) return;
-    setParseResult(parseSagaReportText(extractedText, buildParams()));
-  }, [structureType, selectedCourseId, code, modality, activeYearSemester, extractedText]);
+  const ingestParse = (text: string) => {
+    const firstPass = parseSagaReportText(text, {
+      courseName: '',
+      courseId: '',
+      modality: 'EAD',
+      code: '',
+      activeYearSemester: '',
+      structureType: 'disciplinar',
+    });
 
-  const applyHints = (result: SagaParseResult) => {
-    const { hints } = result;
-    if (hints.structureCode) setCode(hints.structureCode);
-    if (hints.semester) setActiveYearSemester(hints.semester);
-    if (hints.modality) setModality(hints.modality);
-    if (hints.courseName) {
-      const found = resolveCourseByNameAndModality(
-        courses,
-        hints.courseName,
-        hints.modality || modality
-      );
-      if (found) setSelectedCourseId(found.id);
-    }
-  };
-
-  const parseExtractedText = (text: string) => {
-    const hintsFirst = parseSagaReportText(text, buildParams());
-    applyHints(hintsFirst);
-    const matchedCourse =
-      (hintsFirst.hints.courseName &&
-        resolveCourseByNameAndModality(
-          courses,
-          hintsFirst.hints.courseName,
-          hintsFirst.hints.modality || modality
-        )) ||
-      selectedCourse;
-    const result = parseSagaReportText(
-      text,
-      buildParams({
-        courseId: matchedCourse?.id,
-        courseName: matchedCourse?.name,
-        code: hintsFirst.hints.structureCode || code,
-        modality: hintsFirst.hints.modality || modality,
-        semester: hintsFirst.hints.semester || activeYearSemester,
-      })
+    const detectedType = firstPass.hints.structureType || 'disciplinar';
+    const course = findCourseFromHints(
+      courses,
+      firstPass.hints.courseName,
+      firstPass.hints.modality
     );
+
+    const result = parseSagaReportText(text, {
+      courseName: course ? courseBaseName(course.name) : firstPass.hints.courseName || '',
+      courseId: course?.id || '',
+      modality: firstPass.hints.modality || course?.modality || 'EAD',
+      code: firstPass.hints.structureCode || '',
+      activeYearSemester: firstPass.hints.semester || '',
+      structureType: detectedType,
+      requiredTotalHours: course?.minTotalHours || firstPass.hints.totalHours,
+    });
+
+    const structure = applyCourseToStructure(result.structure, course, result.hints);
     setParseResult(result);
+    setMatchedCourse(course);
+    setDraftStructure(structure);
+
+    if (result.stats.disciplines === 0) {
+      setError(
+        'O texto foi lido, mas nenhum componente curricular foi identificado. Verifique o layout do PDF ou complete a estrutura no editor.'
+      );
+    } else if (!firstPass.hints.courseName) {
+      setError(
+        'Componentes importados, mas o nome do curso não apareceu no cabeçalho. Vincule o curso no editor.'
+      );
+    } else if (!course) {
+      setError(
+        `Estrutura lida (${result.stats.disciplines} componentes). Curso “${firstPass.hints.courseName}” não está no cadastro — cadastre-o (modalidade ${firstPass.hints.modality || 'do documento'}) para aplicar os dados obrigatórios, ou prossiga e vincule no editor.`
+      );
+    } else {
+      setError(null);
+    }
   };
 
   const processImportedFile = async (file: File) => {
     const name = file.name.toLowerCase();
     const isPdf = file.type.includes('pdf') || name.endsWith('.pdf');
-    const isSheet = /\.(xlsx|xls|csv|tsv|txt)$/.test(name) || /spreadsheet|excel|csv/.test(file.type);
+    const isSheet =
+      /\.(xlsx|xls|csv|tsv|txt)$/.test(name) || /spreadsheet|excel|csv/.test(file.type);
 
     if (!isPdf && !isSheet) {
       setError('Envie uma planilha (.xlsx, .xls, .csv) ou um PDF do relatório SAGA.');
@@ -129,6 +353,8 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
     setIsReading(true);
     setError(null);
     setParseResult(null);
+    setMatchedCourse(undefined);
+    setDraftStructure(null);
     setFileName(file.name);
 
     try {
@@ -141,15 +367,17 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
         text = await file.text();
       }
       setExtractedText(text);
-      parseExtractedText(text);
+      ingestParse(text);
     } catch (err) {
       console.error(err);
       setExtractedText('');
       setParseResult(null);
+      setMatchedCourse(undefined);
+      setDraftStructure(null);
       setError(
         isPdf
           ? 'Não foi possível ler o PDF. Se o arquivo estiver protegido ou for uma imagem digitalizada, o coordenador deve preencher a estrutura manualmente.'
-          : 'Não foi possível ler a planilha. Verifique o arquivo e tente novamente, ou complete os campos no editor.'
+          : 'Não foi possível ler a planilha. Verifique o arquivo e tente novamente.'
       );
     } finally {
       setIsReading(false);
@@ -186,36 +414,9 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
   };
 
   const handleConfirmImport = () => {
-    if (!parseResult) return;
-    const parsed = parseSagaReportText(extractedText, buildParams()).structure;
-    onImportComplete({
-      ...parsed,
-      courseName: courseBaseName(selectedCourse?.name || parsed.courseName),
-      requiredTotalHours: selectedCourse?.minTotalHours || parsed.requiredTotalHours || 0,
-      minPresentialHoursPercent: selectedCourse?.minPresentialPercent ?? parsed.minPresentialHoursPercent,
-      maxEadHoursPercent: selectedCourse?.maxEadPercent ?? parsed.maxEadHoursPercent,
-      minExtensionPercent: selectedCourse?.minExtensionPercent ?? 10,
-      complementaryTotalHours: selectedCourse?.complementaryTotalHours,
-      complementaryModality: selectedCourse?.complementaryModality,
-      extensionTotalHours: selectedCourse?.extensionTotalHours,
-      extensionModality: selectedCourse?.extensionModality,
-      minInternshipHours: selectedCourse?.minInternshipHours,
-      internshipRequirement: selectedCourse?.internshipRequirement,
-      complementaryRequirement: selectedCourse?.complementaryRequirement,
-      finalPaperRequirement: selectedCourse?.finalPaperRequirement,
-      degrees: selectedCourse?.degrees,
-      coordinatorName: selectedCourse?.coordinatorName,
-      coordinatorEmail: selectedCourse?.coordinatorEmail,
-      hasLaboratory: selectedCourse?.hasLaboratory,
-      hasClinical: selectedCourse?.hasClinical,
-      dcnRef: selectedCourse?.activeDcn,
-      dcns: selectedCourse?.dcns,
-      cineBrasilRef: selectedCourse?.cineBrasilCode,
-      authorizationAct: selectedCourse?.authorizationAct,
-    });
+    if (!draftStructure || !canProceed) return;
+    onImportComplete(draftStructure);
   };
-
-  const parsedPreview = parseResult?.structure;
 
   return (
     <div className="space-y-6">
@@ -228,7 +429,8 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
             <div>
               <h2 className="text-xl font-black text-[#002B49]">Importador do Relatório SAGA</h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Envie a planilha ou o PDF do relatório. O sistema preenche o que conseguir ler; o restante fica em branco para o coordenador completar.
+                Envie a planilha ou o PDF. O sistema identifica o curso, aplica os dados obrigatórios
+                do cadastro e indica se a estrutura está em conformidade.
               </p>
             </div>
           </div>
@@ -239,73 +441,6 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
           >
             Voltar
           </button>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 py-5 border-b border-slate-100 text-xs">
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">Curso Vinculado</label>
-            <select
-              value={selectedCourseKey}
-              onChange={(e) => {
-                const resolved = resolveCourseByNameAndModality(courses, e.target.value, modality);
-                if (resolved) setSelectedCourseId(resolved.id);
-              }}
-              className="w-full px-2.5 py-2 border rounded-lg bg-white font-medium"
-            >
-              {courseOptions.map((opt) => (
-                <option key={opt.key} value={opt.key}>
-                  {opt.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">Código da Estrutura</label>
-            <input
-              type="text"
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="Ex: TAM242"
-              className="w-full px-2.5 py-2 border rounded-lg font-mono font-bold"
-            />
-          </div>
-
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">Modalidade</label>
-            <select
-              value={modality}
-              onChange={(e) => setModality(e.target.value as ModalityType)}
-              className="w-full px-2.5 py-2 border rounded-lg bg-white"
-            >
-              <option value="EAD">EAD</option>
-              <option value="Presencial">Presencial</option>
-              <option value="Semipresencial">Semipresencial</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">Ano/Semestre</label>
-            <input
-              type="text"
-              value={activeYearSemester}
-              onChange={(e) => setActiveYearSemester(e.target.value)}
-              placeholder="Ex: 2025.1"
-              className="w-full px-2.5 py-2 border rounded-lg font-semibold"
-            />
-          </div>
-
-          <div>
-            <label className="font-bold text-slate-700 block mb-1">Tipo da Estrutura</label>
-            <select
-              value={structureType}
-              onChange={(e) => setStructureType(e.target.value as 'disciplinar' | 'modular')}
-              className="w-full px-2.5 py-2 border rounded-lg bg-white font-bold text-[#002B49]"
-            >
-              <option value="disciplinar">Disciplinar (SAGA padrão)</option>
-              <option value="modular">Modular (com CHA)</option>
-            </select>
-          </div>
         </div>
 
         <div className="py-6 space-y-4">
@@ -343,9 +478,7 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
                 <>
                   <FileSpreadsheet className="w-8 h-8 text-emerald-600" />
                   <div>
-                    <p className="text-xs font-bold text-slate-800">
-                      Planilha do relatório SAGA
-                    </p>
+                    <p className="text-xs font-bold text-slate-800">Planilha do relatório SAGA</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
                       Formatos: .xlsx, .xls, .csv, .tsv ou .txt
                     </p>
@@ -390,12 +523,8 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
                 <>
                   <FileUp className="w-8 h-8 text-emerald-600" />
                   <div>
-                    <p className="text-xs font-bold text-slate-800">
-                      PDF do relatório SAGA
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Formato aceito: .pdf
-                    </p>
+                    <p className="text-xs font-bold text-slate-800">PDF do relatório SAGA</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Formato aceito: .pdf</p>
                   </div>
                   <button
                     type="button"
@@ -416,23 +545,20 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
             </div>
           </div>
 
-          <div className="space-y-1">
-            <div className="w-full h-32 p-3 border border-slate-300 rounded-xl bg-slate-50 overflow-auto">
-              {extractedText ? (
-                <pre className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap">
-                  {extractedText.slice(0, 4000)}
-                  {extractedText.length > 4000 ? '\n…' : ''}
-                </pre>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-400">
-                  <FileText className="w-6 h-6" />
-                  <p className="text-xs">
-                    O texto extraído da planilha ou do PDF aparece aqui para conferência.
-                    Campos não identificados ficam em branco no editor.
-                  </p>
-                </div>
-              )}
-            </div>
+          <div className="w-full h-28 p-3 border border-slate-300 rounded-xl bg-slate-50 overflow-auto">
+            {extractedText ? (
+              <pre className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap">
+                {extractedText.slice(0, 4000)}
+                {extractedText.length > 4000 ? '\n…' : ''}
+              </pre>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-400">
+                <FileText className="w-6 h-6" />
+                <p className="text-xs">
+                  O texto extraído aparece aqui para conferência após o envio do arquivo.
+                </p>
+              </div>
+            )}
           </div>
 
           {error && (
@@ -443,39 +569,90 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
           )}
         </div>
 
-        {parseResult && parsedPreview && (
-          <div className="mt-4 p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
-            <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
+        {parseResult && draftStructure && (
+          <div className="mt-2 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-bold text-emerald-900">
-                  Leitura concluída
+                {allCriticalOk && softFails.length === 0 ? (
+                  <CheckCircle className="w-4 h-4 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-amber-600" />
+                )}
+                <span className="text-xs font-bold text-[#002B49]">
+                  {matchedCourse
+                    ? softFails.length === 0 && criticalFails.length === 0
+                      ? 'Curso identificado — estrutura em conformidade com o cadastro'
+                      : 'Curso identificado — há divergências em relação ao cadastro'
+                    : 'Leitura concluída — curso não vinculado'}
                 </span>
               </div>
-              <span className="text-xs font-black text-emerald-800">
-                Extraído: {parsedPreview.calculatedTotalHours}h ({parsedPreview.totalCredits} créditos)
+              <span className="text-xs font-black text-slate-700">
+                Extraído: {draftStructure.calculatedTotalHours}h
+                {draftStructure.totalCredits
+                  ? ` (${draftStructure.totalCredits} créditos)`
+                  : ''}{' '}
+                · {parseResult.stats.periods}{' '}
+                {draftStructure.structureType === 'modular' ? 'módulos' : 'períodos'} ·{' '}
+                {parseResult.stats.disciplines} componentes
+                {draftStructure.structureType === 'modular' ? ' (modular)' : ''}
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="bg-white p-2 rounded border border-emerald-100">
-                <span className="text-slate-500 block text-[10px]">Períodos Detectados</span>
-                <span className="font-bold text-slate-800">{parseResult.stats.periods}</span>
+            {matchedCourse && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                <div className="bg-white p-2 rounded-lg border border-slate-200">
+                  <span className="text-slate-500 block text-[10px]">Curso</span>
+                  <span className="font-bold text-slate-800">
+                    {courseBaseName(matchedCourse.name)}
+                  </span>
+                </div>
+                <div className="bg-white p-2 rounded-lg border border-slate-200">
+                  <span className="text-slate-500 block text-[10px]">Modalidade</span>
+                  <span className="font-bold text-slate-800">{matchedCourse.modality}</span>
+                </div>
+                <div className="bg-white p-2 rounded-lg border border-slate-200">
+                  <span className="text-slate-500 block text-[10px]">Código / Semestre</span>
+                  <span className="font-bold text-slate-800 font-mono">
+                    {draftStructure.code || '—'} · {draftStructure.activeYearSemester || '—'}
+                  </span>
+                </div>
+                <div className="bg-white p-2 rounded-lg border border-slate-200">
+                  <span className="text-slate-500 block text-[10px]">CH mínima do curso</span>
+                  <span className="font-bold text-slate-800">
+                    {matchedCourse.minTotalHours || 0}h
+                  </span>
+                </div>
               </div>
-              <div className="bg-white p-2 rounded border border-emerald-100">
-                <span className="text-slate-500 block text-[10px]">Disciplinas Importadas</span>
-                <span className="font-bold text-slate-800">{parseResult.stats.disciplines}</span>
-              </div>
-              <div className="bg-white p-2 rounded border border-emerald-100">
-                <span className="text-slate-500 block text-[10px]">Sem CH / créditos</span>
-                <span className="font-bold text-[#FF6B00]">
-                  {parseResult.stats.withoutHours} / {parseResult.stats.withoutCredits}
-                </span>
-              </div>
-              <div className="bg-white p-2 rounded border border-emerald-100">
-                <span className="text-slate-500 block text-[10px]">Status Inicial</span>
-                <span className="font-bold text-slate-800">Pronto para complementar</span>
-              </div>
+            )}
+
+            <div className="space-y-2">
+              <h5 className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Conformidade com o cadastro do curso
+              </h5>
+              <ul className="space-y-1.5">
+                {compliance.map((item) => (
+                  <li
+                    key={item.id}
+                    className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+                      item.ok
+                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                        : item.critical
+                          ? 'bg-rose-50 border-rose-200 text-rose-900'
+                          : 'bg-amber-50 border-amber-200 text-amber-900'
+                    }`}
+                  >
+                    {item.ok ? (
+                      <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <span className="font-bold block">{item.label}</span>
+                      <span className="opacity-90">{item.detail}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
 
             {parseResult.warnings.length > 0 && (
@@ -486,10 +663,18 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
               </ul>
             )}
 
-            <div className="pt-2 flex justify-end">
+            <div className="pt-1 flex justify-end">
               <button
                 onClick={handleConfirmImport}
-                className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black flex items-center gap-2 shadow-md"
+                disabled={!canProceed}
+                title={
+                  !canProceed
+                    ? 'Nenhum componente curricular foi identificado no documento'
+                    : !matchedCourse
+                      ? 'Curso ainda não vinculado ao cadastro — você poderá ajustar no editor'
+                      : undefined
+                }
+                className="px-5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-black flex items-center gap-2 shadow-md"
               >
                 Prosseguir para o Editor Curricular
                 <ArrowRight className="w-4 h-4" />

@@ -11,10 +11,10 @@ import {
   ModuleData,
   AppSettings,
   Discipline,
-  KnowledgeItem,
   CompetencyCHA,
   PeriodData,
 } from '../types/curriculum';
+import { getModularComponents } from '../utils/modularComponents';
 import {
   Table as TableIcon,
   FileText,
@@ -33,8 +33,10 @@ import {
 } from 'lucide-react';
 import { exportToPNG, exportElementToPDF, exportMapToHTML } from '../services/exportService';
 import { WorkloadSummaryCard } from './WorkloadSummaryCard';
+import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
 import { StructureOfficialHeader } from './StructureOfficialHeader';
 import { labelForCategory } from '../utils/nomenclature';
+import { formatModuleName } from '../utils/roman';
 
 interface CurriculumGraphViewProps {
   structure: CurriculumStructure;
@@ -56,20 +58,13 @@ function getModuleConhecimentos(mod: ModuleData): Array<{
   hours: number;
   category?: string;
 }> {
-  const fromDisciplines = (mod.disciplines || []).map((d: Discipline) => ({
+  return getModularComponents(mod).map((d) => ({
     id: d.id,
     name: d.name,
     code: d.code,
     hours: d.hours || 0,
     category: 'conhecimento',
   }));
-  const fromKnowledges = (mod.knowledges || []).map((k: KnowledgeItem) => ({
-    id: k.id,
-    name: k.name,
-    hours: k.hours || 0,
-    category: k.category,
-  }));
-  return [...fromDisciplines, ...fromKnowledges];
 }
 
 /** Ordena uma cadeia usando parentModuleId quando disponível; senão por number. */
@@ -246,15 +241,15 @@ function ModuleNode({
       className="relative z-10 w-[168px] rounded-xl bg-[#002B49] px-3 py-2.5 text-center shadow-md shadow-[#002B49]/25"
     >
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00]" />
-      <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-[#FF6B00]">
-        Módulo {mod.number}
-        {mod.branch ? mod.branch : ''}
+      <p className="text-[12px] font-bold text-white leading-snug">
+        {formatModuleName(mod.number, mod.title, mod.branch)}
       </p>
-      <p className="text-[12px] font-bold text-white leading-snug mt-1">{mod.title}</p>
       {mod.competence ? (
         <p className="text-[9px] text-blue-100/90 mt-1 font-medium leading-snug">{mod.competence}</p>
       ) : null}
-      <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">{mod.hours}h</p>
+      <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
+        {mod.hours}h · {mod.meetings ?? 0} encontros
+      </p>
     </div>
   );
 }
@@ -1124,7 +1119,16 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
           )}
 
           {showWorkloadSummaryOnMap && (
-            <WorkloadSummaryCard structure={structure} className="mt-4 w-full" />
+            <div
+              className={`mt-4 grid gap-4 ${
+                isModular ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'
+              }`}
+            >
+              <WorkloadSummaryCard structure={structure} className="w-full" />
+              {isModular && (
+                <ModuleMeetingsSummaryCard structure={structure} className="w-full" />
+              )}
+            </div>
           )}
         </div>
 

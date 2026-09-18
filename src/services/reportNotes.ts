@@ -1,6 +1,13 @@
 import { AppSettings, CurriculumStructure, ReportNoteBlock } from '../types/curriculum';
 
-export const DEFAULT_REPORT_NOTES_TITLE = 'Observações, Regras e Explicações da Ementa';
+export const DEFAULT_REPORT_NOTES_TITLE = 'Observações, Regras e Explicações da Estrutura';
+
+/** Corrige título legado que ainda fala em “ementa”. */
+export function normalizeReportNotesTitle(title?: string | null): string {
+  const trimmed = (title || '').trim();
+  if (!trimmed) return DEFAULT_REPORT_NOTES_TITLE;
+  return trimmed.replace(/\bda\s+Ementa\b/gi, 'da Estrutura');
+}
 
 export interface ReportNotesContent {
   title: string;
@@ -32,7 +39,7 @@ export function getReportNotes(
     .filter((block) => block.title || block.text);
 
   return {
-    title: (settings?.reportNotesTitle || '').trim() || DEFAULT_REPORT_NOTES_TITLE,
+    title: normalizeReportNotesTitle(settings?.reportNotesTitle),
     blocks,
   };
 }
@@ -92,20 +99,59 @@ function renderNoteText(text: string): string {
 }
 
 /**
- * Página de observações com o mesmo cabeçalho institucional da 1ª página.
- * Usa estilos inline para funcionar em HTML autônomo e na captura PNG/PDF.
+ * Página de observações.
+ * - standalone: cabeçalho institucional completo (HTML / página separada)
+ * - append: só o bloco de observações, mesma largura da matriz (PNG sem 2º cabeçalho / bordas)
  */
 export function renderReportNotesPageHtml(
   structure: CurriculumStructure,
   settings?: AppSettings,
-  options: { widthPx?: number; logoDataUrl?: string } = {}
+  options: {
+    widthPx?: number;
+    logoDataUrl?: string;
+    mode?: 'standalone' | 'append';
+  } = {}
 ): string {
   const notes = getReportNotes(structure.structureType, settings);
   if (notes.blocks.length === 0) return '';
 
-  const { widthPx, logoDataUrl } = options;
+  const { widthPx, logoDataUrl, mode = 'standalone' } = options;
   const institution = settings?.institutionName || 'UNISUAM - Centro Universitário Augusto Motta';
-  const widthStyle = widthPx ? `width:${widthPx}px;` : 'width:100%;';
+  const widthStyle = widthPx ? `width:${widthPx}px;max-width:${widthPx}px;` : 'width:100%;';
+
+  const notesBody = `
+    <div style="box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+      <div style="background:#002B49;padding:10px 20px;">
+        <h2 style="margin:0;font-size:13px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${escapeHtml(
+          notes.title
+        )}</h2>
+        <p style="margin:2px 0 0 0;font-size:10px;color:#bfdbfe;">${escapeHtml(structure.courseName)} · Estrutura ${escapeHtml(
+          structure.structureType === 'modular' ? 'Modular' : 'Disciplinar'
+        )}</p>
+      </div>
+      <div style="padding:20px;">
+        ${notes.blocks
+          .map(
+            (block) => `<div style="margin-bottom:16px;">
+          ${
+            block.title
+              ? `<h3 style="margin:0 0 6px 0;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#002B49;border-left:3px solid #FF6B00;padding-left:8px;">${escapeHtml(
+                  block.title
+                )}</h3>`
+              : ''
+          }
+          ${block.text ? renderNoteText(block.text) : ''}
+        </div>`
+          )
+          .join('')}
+      </div>
+    </div>`;
+
+  if (mode === 'append') {
+    return `<section data-report-notes-page style="box-sizing:border-box;${widthStyle}background:#ffffff;padding:0;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;">
+  ${notesBody}
+</section>`;
+  }
 
   const logo = logoDataUrl
     ? `<img src="${logoDataUrl}" alt="UNISUAM" style="height:56px;width:auto;object-fit:contain;flex-shrink:0;" />`
@@ -151,31 +197,8 @@ export function renderReportNotesPageHtml(
     </div>
   </div>
 
-  <div style="box-sizing:border-box;margin-top:16px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
-    <div style="background:#002B49;padding:10px 20px;">
-      <h2 style="margin:0;font-size:13px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${escapeHtml(
-        notes.title
-      )}</h2>
-      <p style="margin:2px 0 0 0;font-size:10px;color:#bfdbfe;">${escapeHtml(structure.courseName)} · Estrutura ${escapeHtml(
-        structure.structureType === 'modular' ? 'Modular' : 'Disciplinar'
-      )}</p>
-    </div>
-    <div style="padding:20px;">
-      ${notes.blocks
-        .map(
-          (block) => `<div style="margin-bottom:16px;">
-        ${
-          block.title
-            ? `<h3 style="margin:0 0 6px 0;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#002B49;border-left:3px solid #FF6B00;padding-left:8px;">${escapeHtml(
-                block.title
-              )}</h3>`
-            : ''
-        }
-        ${block.text ? renderNoteText(block.text) : ''}
-      </div>`
-        )
-        .join('')}
-    </div>
+  <div style="margin-top:16px;">
+  ${notesBody}
   </div>
 </section>`;
 }

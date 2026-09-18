@@ -8,8 +8,10 @@ import {
   getPresentialSplitFlags,
   withStructurePresentialFlags,
 } from '../types/curriculum';
-import { buildWorkloadSummary } from './workloadSummary';
+import { buildWorkloadSummary, buildModuleMeetingsSummary } from './workloadSummary';
 import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
+import { formatModuleName, toRoman } from '../utils/roman';
+import { getModularComponents } from '../utils/modularComponents';
 import logoUnisuamUrl from '../assets/logo-unisuam.png';
 
 const C = {
@@ -32,20 +34,6 @@ const C = {
     'FFC44D00',
   ],
 };
-
-function toRoman(num: number): string {
-  const vals = [10, 9, 5, 4, 1];
-  const syms = ['X', 'IX', 'V', 'IV', 'I'];
-  let n = Math.max(1, Math.min(39, num));
-  let out = '';
-  for (let i = 0; i < vals.length; i++) {
-    while (n >= vals[i]) {
-      out += syms[i];
-      n -= vals[i];
-    }
-  }
-  return out;
-}
 
 function thinBorder(): ExcelJS.Borders {
   const edge: Partial<ExcelJS.Border> = {
@@ -78,32 +66,7 @@ function getModuleComponents(
   mod: NonNullable<CurriculumStructure['modules']>[number],
   structure: Pick<CurriculumStructure, 'hasLaboratory' | 'hasClinical'>
 ): Discipline[] {
-  if (mod.disciplines && mod.disciplines.length > 0) {
-    return mod.disciplines.map((d) => withStructurePresentialFlags(d, structure));
-  }
-  return (mod.knowledges || []).map(
-    (k): Discipline =>
-      withStructurePresentialFlags(
-        {
-          id: k.id,
-          code: mod.code || '',
-          name: k.name,
-          type: 'Obrigatória',
-          credits: 0,
-          hours: k.hours || 0,
-          modalityDelivery: k.modalityDelivery,
-          hasLaboratory: k.hasLaboratory,
-          hasClinical: k.hasClinical,
-          chTheoretical: k.chTheoretical,
-          chLaboratory: k.chLaboratory,
-          chClinical: k.chClinical,
-          chPresential: k.chPresential,
-          chSyncMediated: k.chSyncMediated,
-          chAsync: k.chAsync,
-        },
-        structure
-      )
-  );
+  return getModularComponents(mod).map((d) => withStructurePresentialFlags(d, structure));
 }
 
 async function fetchLogoBuffer(): Promise<ArrayBuffer | null> {
@@ -215,7 +178,7 @@ async function buildCurriculumIdentificationSheet(
 
   const blocks: Block[] = isModular
     ? (structure.modules || []).map((mod) => ({
-        label: `Módulo ${toRoman(mod.number)} - ${mod.title}`,
+        label: formatModuleName(mod.number, mod.title),
         subtitle: mod.competence || undefined,
         components: getModuleComponents(mod, structure),
         fallbackHours: mod.hours,
@@ -231,7 +194,7 @@ async function buildCurriculumIdentificationSheet(
   const sideStartRow = row;
   const sideItems = isModular
     ? (structure.modules || []).map((m) => ({
-        period: `${m.number}º`,
+        period: toRoman(m.number),
         pub: `${(m.competence || m.title).slice(0, 42)}${m.hours ? ` — ${m.hours}H` : ''}`,
       }))
     : (structure.periods || []).map((p) => ({
@@ -613,7 +576,7 @@ export async function exportCurriculumToXlsx(
       (mod.competencies || []).forEach((comp) => {
         hasSaberes = true;
         saberRows.push([
-          `${mod.number}º Módulo: ${mod.title}`,
+          formatModuleName(mod.number, mod.title),
           mod.code,
           branchText,
           labelForCategory(comp.category, settings?.pedagogicalNomenclature),
@@ -654,6 +617,25 @@ export async function exportCurriculumToXlsx(
       })
     );
     wsCh.getColumn(1).width = 40;
+
+    const meetings = buildModuleMeetingsSummary(structure);
+    if (meetings && meetings.rows.length > 0) {
+      const wsMeet = wb.addWorksheet('Encontros por Módulo');
+      const meetRows: (string | number)[][] = [
+        ['ENCONTROS POR MÓDULO'],
+        [`Curso: ${structure.courseName}`, `Código: ${structure.code}`],
+        [],
+        ['Módulos', ...meetings.rows.map((r) => r.shortLabel)],
+        ['Encontros', ...meetings.rows.map((r) => r.meetings)],
+        ['Total', meetings.totalMeetings],
+      ];
+      meetRows.forEach((r, i) =>
+        r.forEach((v, j) => {
+          wsMeet.getCell(i + 1, j + 1).value = v;
+        })
+      );
+      wsMeet.getColumn(1).width = 40;
+    }
   }
 
   const buffer = await wb.xlsx.writeBuffer();

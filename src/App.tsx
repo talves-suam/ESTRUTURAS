@@ -4,14 +4,13 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Navbar } from './components/Navbar';
+import { Navbar, type NavbarTab } from './components/Navbar';
 import { StructuresList } from './components/StructuresList';
 import { CurriculumTable } from './components/CurriculumTable';
 import { CurriculumGraphView } from './components/CurriculumGraphView';
 import { CurriculumForm } from './components/CurriculumForm';
 import { SagaImportModal } from './components/SagaImportModal';
 import { SettingsModal } from './components/SettingsModal';
-import { OfficialTemplates } from './components/OfficialTemplates';
 
 import { CurriculumStructure, Course, AppSettings } from './types/curriculum';
 import { 
@@ -23,12 +22,15 @@ import {
   saveAllCoursesToFirestore, 
   getSettingsFromFirestore, 
   saveSettingsToFirestore,
-  calculateStructureTotals
+  calculateStructureTotals,
+  getCachedStructures,
+  getCachedCourses,
+  getCachedSettings,
 } from './services/curriculumService';
+import { ensureCourseForStructure, courseBaseName } from './utils/courseBatch';
 import { 
   CheckCircle2, 
   AlertCircle, 
-  Database,
   ArrowLeft
 } from 'lucide-react';
 
@@ -45,7 +47,7 @@ export default function App() {
     campusDefault: 'Sede: UNISUAM-RJ (Bonsucesso)',
   });
 
-  const [activeTab, setActiveTab] = useState<'structures' | 'new' | 'templates' | 'saga' | 'settings'>('structures');
+  const [activeTab, setActiveTab] = useState<NavbarTab>('structures');
   const [selectedStructure, setSelectedStructure] = useState<CurriculumStructure | null>(null);
   const [currentViewMode, setCurrentViewMode] = useState<'list' | 'table' | 'graph' | 'form'>('list');
   const [editingStructure, setEditingStructure] = useState<CurriculumStructure | null>(null);
@@ -57,11 +59,25 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Load data from Firebase / cache on mount
+  // Load data: pinta cache local na hora, depois sincroniza com Firestore em background
   useEffect(() => {
+    const cachedStructures = getCachedStructures();
+    const cachedCourses = getCachedCourses();
+    const cachedSettings = getCachedSettings();
+
+    if (cachedStructures.length > 0 || cachedCourses.length > 0) {
+      setStructures(cachedStructures);
+      setCourses(cachedCourses);
+      if (cachedSettings) setSettings(cachedSettings);
+      if (cachedStructures.length > 0) setSelectedStructure(cachedStructures[0]);
+      setLoading(false);
+    }
+
     async function loadData() {
       try {
-        setLoading(true);
+        if (cachedStructures.length === 0 && cachedCourses.length === 0) {
+          setLoading(true);
+        }
         const [loadedStructures, loadedCourses, loadedSettings] = await Promise.all([
           getStructuresFromFirestore(),
           getCoursesFromFirestore(),
@@ -71,11 +87,18 @@ export default function App() {
         setCourses(loadedCourses);
         setSettings(loadedSettings);
         if (loadedStructures.length > 0) {
-          setSelectedStructure(loadedStructures[0]);
+          setSelectedStructure((prev) => {
+            if (prev && loadedStructures.some((s) => s.id === prev.id)) {
+              return loadedStructures.find((s) => s.id === prev.id) || loadedStructures[0];
+            }
+            return loadedStructures[0];
+          });
         }
       } catch (err) {
         console.error('Erro ao carregar dados:', err);
-        showToast('Dados carregados do armazenamento local seguro.', 'success');
+        if (cachedStructures.length === 0) {
+          showToast('Não foi possível sincronizar. Usando dados locais, se houver.', 'error');
+        }
       } finally {
         setLoading(false);
       }
@@ -86,7 +109,25 @@ export default function App() {
   // Handlers
   const handleSaveStructure = async (structure: CurriculumStructure) => {
     try {
-      const calculated = calculateStructureTotals(structure);
+      const { course, created, clonedFromModality } = ensureCourseForStructure(
+        structure,
+        courses
+      );
+
+      if (created) {
+        await saveCourseToFirestore(course);
+        setCourses((prev) => {
+          if (prev.some((c) => c.id === course.id)) return prev;
+          return [...prev, course];
+        });
+      }
+
+      const calculated = calculateStructureTotals({
+        ...structure,
+        courseId: course.id,
+        courseName: courseBaseName(course.name),
+        modality: course.modality,
+      });
       await saveStructureToFirestore(calculated);
       setStructures((prev) => {
         const index = prev.findIndex((s) => s.id === calculated.id);
@@ -100,7 +141,17 @@ export default function App() {
       setSelectedStructure(calculated);
       setCurrentViewMode('table');
       setActiveTab('structures');
-      showToast(`Estrutura [${calculated.code}] salva com sucesso no Firebase!`);
+
+      if (created) {
+        const cloneNote = clonedFromModality
+          ? ` (a partir do cadastro ${clonedFromModality})`
+          : '';
+        showToast(
+          `Estrutura [${calculated.code}] salva. Curso ${course.name} (${course.modality}) incluído no cadastro${cloneNote}.`
+        );
+      } else {
+        showToast(`Estrutura [${calculated.code}] salva com sucesso no Firebase!`);
+      }
     } catch (err) {
       console.error(err);
       showToast('Erro ao salvar estrutura.', 'error');
@@ -153,21 +204,6 @@ export default function App() {
     await saveSettingsToFirestore(newSettings);
     setSettings(newSettings);
     showToast('Configurações atualizadas com sucesso!');
-  };
-
-  const handleUseTemplate = (template: CurriculumStructure) => {
-    const cloned: CurriculumStructure = {
-      ...template,
-      id: `struct-${Date.now()}`,
-      code: `${template.code}-NOVA`,
-      status: 'Em Elaboração',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setEditingStructure(cloned);
-    setCurrentViewMode('form');
-    setActiveTab('new');
-    showToast(`Modelo carregado para novo preenchimento!`);
   };
 
   const handleSagaImportComplete = (parsed: CurriculumStructure) => {
@@ -304,19 +340,6 @@ export default function App() {
                   setCurrentViewMode('list');
                 }}
                 onAddCourse={handleAddCourse}
-              />
-            )}
-
-            {/* View: Modelos Oficiais */}
-            {activeTab === 'templates' && (
-              <OfficialTemplates
-                settings={settings}
-                onUseTemplate={handleUseTemplate}
-                onViewTemplate={(tpl, view) => {
-                  setSelectedStructure(tpl);
-                  setActiveTab('structures');
-                  setCurrentViewMode(view);
-                }}
               />
             )}
 

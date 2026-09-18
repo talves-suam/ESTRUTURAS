@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   CurriculumStructure, 
   AppSettings, 
@@ -29,11 +29,15 @@ import {
   EyeOff
 } from 'lucide-react';
 import { exportToXLSX, exportToInteractiveHTML, exportToPNG, exportElementToPDF } from '../services/exportService';
+import { PpcExportMenu } from './PpcExportMenu';
 import { RegulatoryValidator } from './RegulatoryValidator';
 import { DcnViewerModal } from './DcnViewerModal';
 import { WorkloadSummaryCard } from './WorkloadSummaryCard';
+import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
 import { StructureOfficialHeader } from './StructureOfficialHeader';
-import { getSaberesLabels } from '../utils/nomenclature';
+import { getSaberesLabels, matchesSaberesColumn } from '../utils/nomenclature';
+import { formatModuleName } from '../utils/roman';
+import { getModularComponents } from '../utils/modularComponents';
 
 interface CurriculumTableProps {
   structure: CurriculumStructure;
@@ -56,6 +60,15 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isDcnModalOpen, setIsDcnModalOpen] = useState(false);
   const [exportToast, setExportToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const exportToastTimer = useRef<number>(0);
+  const showExportToast = (message: string, type: 'info' | 'success' | 'error', ms?: number) => {
+    setExportToast({ message, type });
+    window.clearTimeout(exportToastTimer.current);
+    exportToastTimer.current = window.setTimeout(
+      () => setExportToast(null),
+      ms ?? (type === 'info' ? 4000 : 5000)
+    );
+  };
   const [hideCompetenciesInReport, setHideCompetenciesInReport] = useState(
     structure.hideCompetenciesInReport ?? false
   );
@@ -90,44 +103,32 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
     setExpandedModules((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const expandAll = () => {
-    if (structure.modules) {
-      const all: { [key: string]: boolean } = {};
-      structure.modules.forEach((m) => (all[m.id] = true));
-      setExpandedModules(all);
-    }
-  };
-
-  const collapseAll = () => {
-    setExpandedModules({});
-  };
-
   const prepareMatrixForCapture = async () => {
     setActiveTab('matrix');
+    setSearchTerm('');
+    setSelectedBranchFilter('all');
     if (structure.modules) {
       const all: { [key: string]: boolean } = {};
       structure.modules.forEach((m) => (all[m.id] = true));
       setExpandedModules(all);
     }
-    // Aguarda o React pintar o conteúdo expandido
-    await new Promise((r) => setTimeout(r, 120));
+    // Aguarda o React pintar o conteúdo expandido / filtros limpos
+    await new Promise((r) => setTimeout(r, 180));
   };
 
   const handleExportPNG = async () => {
     setIsExportingPng(true);
-    setExportToast({ message: 'Renderizando e gerando imagem PNG em alta resolução...', type: 'info' });
+    showExportToast('Renderizando e gerando imagem PNG em alta resolução...', 'info');
     try {
       await prepareMatrixForCapture();
       await exportToPNG('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`, {
         structure: structureForExport,
         settings,
       });
-      setExportToast({ message: 'Imagem PNG gerada com sucesso e download iniciado!', type: 'success' });
-      setTimeout(() => setExportToast(null), 4000);
+      showExportToast('Imagem PNG gerada com sucesso e download iniciado!', 'success');
     } catch (err: any) {
       console.error(err);
-      setExportToast({ message: 'Erro ao gerar PNG: ' + (err?.message || 'Falha na renderização'), type: 'error' });
-      setTimeout(() => setExportToast(null), 5000);
+      showExportToast('Erro ao gerar PNG: ' + (err?.message || 'Falha na renderização'), 'error');
     } finally {
       setIsExportingPng(false);
     }
@@ -135,7 +136,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
 
   const handleExportPDF = async () => {
     setIsExportingPdf(true);
-    setExportToast({ message: 'Gerando PDF com o mesmo visual da tabela...', type: 'info' });
+    showExportToast('Gerando PDF com o mesmo visual da tabela...', 'info');
     try {
       await prepareMatrixForCapture();
       await exportElementToPDF(
@@ -143,12 +144,10 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
         `${structure.code}_Estrutura_Curricular_UNISUAM`,
         { structure: structureForExport, settings }
       );
-      setExportToast({ message: 'PDF gerado com sucesso e download iniciado!', type: 'success' });
-      setTimeout(() => setExportToast(null), 4000);
+      showExportToast('PDF gerado com sucesso e download iniciado!', 'success');
     } catch (err: any) {
       console.error(err);
-      setExportToast({ message: 'Erro ao gerar PDF: ' + (err?.message || 'Falha na renderização'), type: 'error' });
-      setTimeout(() => setExportToast(null), 5000);
+      showExportToast('Erro ao gerar PDF: ' + (err?.message || 'Falha na renderização'), 'error');
     } finally {
       setIsExportingPdf(false);
     }
@@ -167,7 +166,9 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
     const term = searchTerm.toLowerCase();
     const titleMatch = m.title.toLowerCase().includes(term);
     const codeMatch = m.code.toLowerCase().includes(term);
-    const discMatch = m.disciplines?.some((d) => d.name.toLowerCase().includes(term) || d.code.toLowerCase().includes(term));
+    const discMatch = getModularComponents(m).some(
+      (d) => d.name.toLowerCase().includes(term) || d.code.toLowerCase().includes(term)
+    );
     const compMatch = m.competencies?.some((c) => c.name.toLowerCase().includes(term));
     return titleMatch || codeMatch || discMatch || compMatch;
   });
@@ -332,6 +333,12 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
               <Share2 className="w-3.5 h-3.5" />
               HTML Navegável
             </button>
+            <PpcExportMenu
+              structure={structureForExport}
+              disabled={isExportingPng || isExportingPdf}
+              onToast={showExportToast}
+              prepareCapture={prepareMatrixForCapture}
+            />
             </div>
           </div>
         </div>
@@ -393,29 +400,14 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
             onChange={(e) => setSearchTerm(e.target.value)}
             className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs bg-white text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#002B49] w-52"
           />
-
-          {structure.structureType === 'modular' && (
-            <div className="flex items-center gap-1">
-              <button
-                onClick={expandAll}
-                className="px-2.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium"
-              >
-                Expandir CHA
-              </button>
-              <button
-                onClick={collapseAll}
-                className="px-2.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium"
-              >
-                Recolher
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
       {/* Main Printable / Capture Area */}
       <div id="curriculum-print-area" className="space-y-6 bg-slate-50/50 p-2 sm:p-4 rounded-xl border border-slate-100">
-        <StructureOfficialHeader structure={structure} />
+        <div data-ppc-header>
+          <StructureOfficialHeader structure={structure} />
+        </div>
 
         {/* TAB 1: Matriz Curricular */}
         {activeTab === 'matrix' && (
@@ -425,7 +417,8 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
               <div className="space-y-6">
                 {filteredPeriods?.map((period) => (
                   <div 
-                    key={period.id} 
+                    key={period.id}
+                    data-ppc-section={period.id}
                     className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
                   >
                     {/* Period Header */}
@@ -652,10 +645,12 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                 {filteredModules?.map((mod) => {
                   const isExpanded = expandedModules[mod.id] ?? true;
                   const isBranch = !!mod.branch;
+                  const components = getModularComponents(mod);
 
                   return (
                     <div 
-                      key={mod.id} 
+                      key={mod.id}
+                      data-ppc-section={mod.id}
                       className={`bg-white rounded-xl border transition shadow-sm overflow-hidden ${
                         isBranch ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'
                       }`}
@@ -663,18 +658,16 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                       {/* Module Header */}
                       <div className="bg-[#002B49] text-white px-5 py-4 flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
-                          <span className="px-2.5 py-1 rounded bg-[#FF6B00] text-xs font-black text-white shadow-xs">
-                            Módulo {mod.number}
-                            {mod.branch ? mod.branch : ''}
-                          </span>
                           {mod.branch && (
-                            <span className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-400/40 text-xs font-bold flex items-center gap-1">
+                            <span className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-400/40 text-xs font-bold flex items-center gap-1 shrink-0">
                               <GitBranch className="w-3.5 h-3.5" />
                               Trilha {mod.branch}
                             </span>
                           )}
                           <div>
-                            <h4 className="font-bold text-base text-white">{mod.title}</h4>
+                            <h4 className="font-bold text-base text-white">
+                              {formatModuleName(mod.number, mod.title, mod.branch)}
+                            </h4>
                             {mod.competence && (
                               <p className="text-xs text-blue-200 mt-0.5 whitespace-normal">{mod.competence}</p>
                             )}
@@ -688,10 +681,16 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                               {mod.hours}h
                             </span>
                           </div>
+                          <div className="text-right">
+                            <span className="text-xs text-blue-200 block">Encontros:</span>
+                            <span className="text-sm font-black text-white bg-white/10 px-2.5 py-0.5 rounded tabular-nums">
+                              {mod.meetings ?? 0}
+                            </span>
+                          </div>
 
                           <button
                             onClick={() => toggleModule(mod.id)}
-                            className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                            className="no-export p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
                             title={isExpanded ? 'Recolher detalhes de CHA' : 'Expandir detalhes de CHA'}
                           >
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -700,10 +699,10 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                       </div>
 
                       {/* Conhecimentos do Módulo (em estrutura modular) */}
-                      {mod.disciplines && mod.disciplines.length > 0 && (
+                      {components.length > 0 && (
                         <div className="p-4 border-b border-slate-100 overflow-x-auto">
                           <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                            Conhecimentos do Módulo ({mod.disciplines.length})
+                            Conhecimentos do Módulo ({components.length})
                           </h5>
                           <table className={`w-full text-left text-xs bg-slate-50/50 rounded-lg border border-slate-200 overflow-hidden ${usePresentialSplit ? 'min-w-[860px]' : 'min-w-[700px]'}`}>
                             <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
@@ -739,7 +738,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                               )}
                             </thead>
                             <tbody className="divide-y divide-slate-200/60 bg-white">
-                              {mod.disciplines.map((d) => {
+                              {components.map((d) => {
                                 const chBd = chOf(d);
                                 const syncMed = (chBd.syncMediated || 0) + (chBd.sync || 0);
                                 return (
@@ -782,15 +781,15 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                             </tbody>
                             <tfoot className="bg-slate-100/90 border-t border-slate-200 text-xs font-bold text-slate-700">
                               {(() => {
-                                const mPres = mod.disciplines.reduce((acc, d) => acc + chOf(d).presential, 0);
-                                const mTheo = mod.disciplines.reduce((acc, d) => acc + chOf(d).theoretical, 0);
-                                const mLab = mod.disciplines.reduce((acc, d) => acc + chOf(d).laboratory, 0);
-                                const mClin = mod.disciplines.reduce((acc, d) => acc + chOf(d).clinical, 0);
-                                const mSyncMed = mod.disciplines.reduce((acc, d) => {
+                                const mPres = components.reduce((acc, d) => acc + chOf(d).presential, 0);
+                                const mTheo = components.reduce((acc, d) => acc + chOf(d).theoretical, 0);
+                                const mLab = components.reduce((acc, d) => acc + chOf(d).laboratory, 0);
+                                const mClin = components.reduce((acc, d) => acc + chOf(d).clinical, 0);
+                                const mSyncMed = components.reduce((acc, d) => {
                                   const bd = chOf(d);
                                   return acc + bd.syncMediated + (bd.sync || 0);
                                 }, 0);
-                                const mAsync = mod.disciplines.reduce((acc, d) => acc + chOf(d).async, 0);
+                                const mAsync = components.reduce((acc, d) => acc + chOf(d).async, 0);
                                 return (
                                   <tr>
                                     <td colSpan={3} className="px-3 py-2.5 text-slate-600 text-right">
@@ -850,7 +849,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                               </div>
                               <div className="space-y-1.5">
                                 {mod.competencies
-                                  ?.filter((c) => c.category === 'conhecimento' || c.category === 'conceitual')
+                                  ?.filter((c) => matchesSaberesColumn(c.category, 'c'))
                                   .map((comp) => (
                                     <div key={comp.id} className="bg-white p-2.5 rounded-lg border border-blue-100 shadow-2xs text-xs">
                                       <p className="font-medium text-slate-800 leading-relaxed">{comp.name}</p>
@@ -867,7 +866,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                               </div>
                               <div className="space-y-1.5">
                                 {mod.competencies
-                                  ?.filter((c) => c.category === 'habilidade' || c.category === 'procedimental')
+                                  ?.filter((c) => matchesSaberesColumn(c.category, 'h'))
                                   .map((comp) => (
                                     <div key={comp.id} className="bg-white p-2.5 rounded-lg border border-emerald-100 shadow-2xs text-xs">
                                       <p className="font-medium text-slate-800 leading-relaxed">{comp.name}</p>
@@ -884,7 +883,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                               </div>
                               <div className="space-y-1.5">
                                 {mod.competencies
-                                  ?.filter((c) => c.category === 'atitude' || c.category === 'atitudinal')
+                                  ?.filter((c) => matchesSaberesColumn(c.category, 'a'))
                                   .map((comp) => (
                                     <div key={comp.id} className="bg-white p-2.5 rounded-lg border border-amber-100 shadow-2xs text-xs">
                                       <p className="font-medium text-slate-800 leading-relaxed">{comp.name}</p>
@@ -904,7 +903,19 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
         )}
 
         {!hideWorkloadSummaryInReport && (
-          <WorkloadSummaryCard structure={structure} className="w-full" />
+          <div
+            data-ppc-section="summary"
+            className={`grid gap-4 ${
+              structure.structureType === 'modular'
+                ? 'grid-cols-1 xl:grid-cols-2'
+                : 'grid-cols-1'
+            }`}
+          >
+            <WorkloadSummaryCard structure={structure} className="w-full" />
+            {structure.structureType === 'modular' && (
+              <ModuleMeetingsSummaryCard structure={structure} className="w-full" />
+            )}
+          </div>
         )}
       </div>
 

@@ -12,11 +12,14 @@ import {
 } from '../types/curriculum';
 import {
   buildWorkloadSummary,
+  buildModuleMeetingsSummary,
   formatWorkloadHours,
   formatWorkloadPercent,
   WorkloadSummaryRow,
 } from './workloadSummary';
-import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
+import { getSaberesLabels, labelForCategory, matchesSaberesColumn } from '../utils/nomenclature';
+import { formatModuleName } from '../utils/roman';
+import { getModularComponents } from '../utils/modularComponents';
 import { getReportNotes, renderReportNotesPageHtml } from './reportNotes';
 import {
   COURSE_BATCH_HEADERS,
@@ -57,23 +60,53 @@ async function fetchUrlAsDataUrl(url: string): Promise<string> {
 
 let cachedLogoDataUrl: string | null = null;
 
-/** Logo UNISUAM embutida (para HTML autônomo). */
+/** Logo UNISUAM em resolução completa (arquivo original — nunca a miniatura da tela). */
 export async function getLogoDataUrl(): Promise<string> {
   if (cachedLogoDataUrl) return cachedLogoDataUrl;
-  // Tenta pegar a logo já renderizada na página (mesma origem)
-  const live = document.querySelector<HTMLImageElement>(
-    'img[alt="UNISUAM"], img[src*="logo-unisuam"]'
-  );
-  if (live && live.complete && live.naturalWidth > 0) {
-    try {
-      cachedLogoDataUrl = htmlImageToDataUrl(live);
-      return cachedLogoDataUrl;
-    } catch {
-      /* fallback fetch */
-    }
-  }
   cachedLogoDataUrl = await fetchUrlAsDataUrl(logoUnisuamUrl);
   return cachedLogoDataUrl;
+}
+
+/**
+ * Durante a captura, força a logo em alta resolução e um pouco maior na tela,
+ * para não sair pixelizada no PNG/PDF.
+ */
+async function prepareLogosForCapture(root: HTMLElement): Promise<() => void> {
+  const logoDataUrl = await getLogoDataUrl().catch(() => null);
+  const imgs = Array.from(
+    root.querySelectorAll<HTMLImageElement>('img[alt="UNISUAM"], img[src*="logo-unisuam"]')
+  );
+  const backups = imgs.map((img) => ({
+    img,
+    src: img.getAttribute('src'),
+    height: img.style.height,
+    width: img.style.width,
+    maxHeight: img.style.maxHeight,
+    className: img.className,
+  }));
+
+  for (const img of imgs) {
+    if (logoDataUrl) img.setAttribute('src', logoDataUrl);
+    img.style.height = '120px';
+    img.style.width = 'auto';
+    img.style.maxHeight = 'none';
+    img.classList.remove('h-9', 'h-12', 'h-14');
+  }
+
+  await Promise.all(
+    imgs.map((img) => (img.decode ? img.decode().catch(() => undefined) : Promise.resolve()))
+  );
+
+  return () => {
+    for (const b of backups) {
+      if (b.src != null) b.img.setAttribute('src', b.src);
+      else b.img.removeAttribute('src');
+      b.img.style.height = b.height;
+      b.img.style.width = b.width;
+      b.img.style.maxHeight = b.maxHeight;
+      b.img.className = b.className;
+    }
+  };
 }
 
 /** Substitui src de <img> no clone por data URL, usando as imagens do DOM original. */
@@ -120,7 +153,9 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
   const { rows } = buildWorkloadSummary(structure);
   const componentRows = rows.filter((row) => row.id !== 'total');
   const totalRow = rows.find((row) => row.id === 'total');
-  return `
+  const meetings = buildModuleMeetingsSummary(structure);
+
+  const chTable = `
     <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden">
       <div class="bg-[#002B49] px-3 py-2 text-center">
         <h3 class="text-[11px] font-black tracking-wide text-white uppercase">Carga Horária</h3>
@@ -180,11 +215,60 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
         </table>
       </div>
     </section>`;
+
+  const meetingsTable =
+    meetings && meetings.rows.length > 0
+      ? `
+    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden">
+      <div class="bg-[#002B49] px-3 py-2 text-center">
+        <h3 class="text-[11px] font-black tracking-wide text-white uppercase">Encontros por Módulo</h3>
+        <p class="text-[9px] text-blue-200/90 mt-0.5">Quantidade de encontros · ${structure.courseName}</p>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-[11px] border-collapse">
+          <thead>
+            <tr class="bg-[#002B49]/5 border-b border-[#002B49]/10">
+              <th class="px-2.5 py-1.5 text-left text-[9px] font-bold uppercase tracking-wider text-[#002B49] whitespace-nowrap">Módulos</th>
+              ${meetings.rows
+                .map(
+                  (row) =>
+                    `<th class="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] leading-tight" title="${row.label}">${row.shortLabel}</th>`
+                )
+                .join('')}
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-b border-slate-100">
+              <th class="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">Encontros</th>
+              ${meetings.rows
+                .map(
+                  (row) =>
+                    `<td class="px-2 py-1.5 text-center tabular-nums font-bold text-slate-800 whitespace-nowrap">${row.meetings}</td>`
+                )
+                .join('')}
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr class="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
+              <th class="px-2.5 py-1.5 text-left uppercase tracking-wider">Total</th>
+              <td colspan="${meetings.rows.length}" class="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">
+                ${meetings.totalMeetings} ${meetings.totalMeetings === 1 ? 'encontro' : 'encontros'}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>`
+      : '';
+
+  if (!meetingsTable) return chTable;
+
+  return `<div class="grid grid-cols-1 xl:grid-cols-2 gap-4">${chTable}${meetingsTable}</div>`;
 }
 
-async function captureElementAsPngDataUrl(
+export async function captureElementAsPngDataUrl(
   elementId: string
-): Promise<{ dataUrl: string; widthPx: number; heightPx: number }> {
+): Promise<{ dataUrl: string; widthPx: number; heightPx: number; cssWidth: number }> {
   const element = document.getElementById(elementId);
   if (!element) {
     throw new Error('Elemento de visualização não encontrado para captura');
@@ -213,62 +297,51 @@ async function captureElementAsPngDataUrl(
     c.style.height = 'auto';
   });
 
-  let maxRequiredWidth = Math.max(1200, element.scrollWidth + 80);
+  let maxRequiredWidth = Math.max(1100, element.scrollWidth + 48);
   const tables = element.querySelectorAll<HTMLElement>('table');
   tables.forEach((t) => {
-    if (t.scrollWidth + 60 > maxRequiredWidth) {
-      maxRequiredWidth = t.scrollWidth + 60;
+    if (t.scrollWidth + 48 > maxRequiredWidth) {
+      maxRequiredWidth = t.scrollWidth + 48;
     }
   });
   const mapStage = element.querySelector<HTMLElement>('.inline-block, .inline-grid');
-  if (mapStage && mapStage.scrollWidth + 80 > maxRequiredWidth) {
-    maxRequiredWidth = mapStage.scrollWidth + 80;
+  if (mapStage && mapStage.scrollWidth + 48 > maxRequiredWidth) {
+    maxRequiredWidth = mapStage.scrollWidth + 48;
   }
 
-  element.style.width = `${maxRequiredWidth}px`;
-  element.style.minWidth = `${maxRequiredWidth}px`;
+  // Matrizes modulares ficam muito altas: evita canvas branco por limite do browser
+  const SAFE_PIXELS = 28_000_000;
+  let captureWidth = maxRequiredWidth;
+  let contentHeight = Math.max(element.scrollHeight, 1);
+  // Preferir 3x / 2x para zoom sem perder nitidez (logo e textos)
+  let pixelRatio = 3;
+  while (captureWidth * contentHeight * pixelRatio * pixelRatio > SAFE_PIXELS && pixelRatio > 1) {
+    pixelRatio = pixelRatio <= 2 ? 1 : 2;
+  }
+  while (captureWidth * contentHeight * pixelRatio * pixelRatio > SAFE_PIXELS && captureWidth > 1000) {
+    captureWidth = Math.floor(captureWidth * 0.9);
+  }
+
+  element.style.width = `${captureWidth}px`;
+  element.style.minWidth = `${captureWidth}px`;
   element.style.maxWidth = 'none';
   element.style.overflow = 'visible';
 
+  const restoreLogos = await prepareLogosForCapture(element);
+  contentHeight = Math.max(element.scrollHeight, 1);
+
+  element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+
   try {
-    let dataUrl = '';
-    let widthPx = maxRequiredWidth;
-    let heightPx = element.scrollHeight;
+    const dataUrl = await rasterizeElementToPng(element, {
+      width: captureWidth,
+      pixelRatio,
+      backgroundColor: '#ffffff',
+    });
 
-    try {
-      dataUrl = await toPng(element, {
-        cacheBust: true,
-        backgroundColor: '#ffffff',
-        pixelRatio: 2,
-        width: maxRequiredWidth,
-        filter: (node) => {
-          if (node instanceof HTMLElement && node.classList?.contains('no-export')) {
-            return false;
-          }
-          return true;
-        },
-      });
-      widthPx = maxRequiredWidth * 2;
-      heightPx = Math.max(element.scrollHeight, 1) * 2;
-    } catch (primaryErr) {
-      console.warn('html-to-image falhou, tentando fallback com html2canvas:', primaryErr);
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-        windowWidth: maxRequiredWidth + 100,
-      });
-      dataUrl = canvas.toDataURL('image/png');
-      widthPx = canvas.width;
-      heightPx = canvas.height;
-    }
-
-    if (!dataUrl || !dataUrl.startsWith('data:image')) {
-      throw new Error('Falha ao gerar os dados da imagem');
-    }
-
-    // Lê dimensões reais da imagem gerada
+    let widthPx = captureWidth * pixelRatio;
+    let heightPx = contentHeight * pixelRatio;
     try {
       const img = new Image();
       img.src = dataUrl;
@@ -279,8 +352,13 @@ async function captureElementAsPngDataUrl(
       /* mantém estimativa */
     }
 
-    return { dataUrl, widthPx, heightPx };
+    if (widthPx < 20 || heightPx < 20) {
+      throw new Error('Captura gerou imagem inválida (muito pequena)');
+    }
+
+    return { dataUrl, widthPx, heightPx, cssWidth: captureWidth };
   } finally {
+    restoreLogos();
     element.style.width = prevWidth;
     element.style.minWidth = prevMinWidth;
     element.style.maxWidth = prevMaxWidth;
@@ -293,6 +371,101 @@ async function captureElementAsPngDataUrl(
       c.style.height = prev.height;
     });
     actionButtons.forEach((btn) => (btn.style.display = ''));
+  }
+}
+
+/**
+ * Converte cores modernas (oklch/color-mix do Tailwind v4) em RGB no próprio
+ * elemento — evita PNG/PDF em branco (html-to-image desta versão não tem onclone).
+ */
+function applyComputedPaintInlining(root: HTMLElement): () => void {
+  type PaintKeys =
+    | 'backgroundColor'
+    | 'color'
+    | 'borderTopColor'
+    | 'borderRightColor'
+    | 'borderBottomColor'
+    | 'borderLeftColor'
+    | 'outlineColor'
+    | 'boxShadow'
+    | 'opacity';
+
+  const keys: PaintKeys[] = [
+    'backgroundColor',
+    'color',
+    'borderTopColor',
+    'borderRightColor',
+    'borderBottomColor',
+    'borderLeftColor',
+    'outlineColor',
+    'boxShadow',
+    'opacity',
+  ];
+
+  const backups: Array<{ el: HTMLElement; values: Record<PaintKeys, string> }> = [];
+  const nodes = [root, ...Array.from(root.querySelectorAll('*'))];
+
+  for (const node of nodes) {
+    if (!(node instanceof HTMLElement)) continue;
+    const cs = window.getComputedStyle(node);
+    const values = {} as Record<PaintKeys, string>;
+    for (const key of keys) {
+      values[key] = node.style[key];
+      const computed = cs[key];
+      if (computed) node.style[key] = computed;
+    }
+    backups.push({ el: node, values });
+  }
+
+  return () => {
+    for (const { el, values } of backups) {
+      for (const key of keys) {
+        el.style[key] = values[key];
+      }
+    }
+  };
+}
+
+async function rasterizeElementToPng(
+  element: HTMLElement,
+  opts: { width: number; pixelRatio: number; backgroundColor: string }
+): Promise<string> {
+  const { width, pixelRatio, backgroundColor } = opts;
+  const restorePaint = applyComputedPaintInlining(element);
+
+  try {
+    try {
+      const dataUrl = await toPng(element, {
+        cacheBust: true,
+        backgroundColor,
+        pixelRatio,
+        width,
+        skipAutoScale: true,
+        filter: (node) => {
+          if (node instanceof HTMLElement && node.classList?.contains('no-export')) return false;
+          return true;
+        },
+      });
+      if (dataUrl?.startsWith('data:image')) return dataUrl;
+    } catch (primaryErr) {
+      console.warn('html-to-image falhou, tentando html2canvas:', primaryErr);
+    }
+
+    const canvas = await html2canvas(element, {
+      scale: pixelRatio,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor,
+      logging: false,
+      windowWidth: width + 80,
+    });
+    const dataUrl = canvas.toDataURL('image/png');
+    if (!dataUrl?.startsWith('data:image')) {
+      throw new Error('Falha ao gerar os dados da imagem');
+    }
+    return dataUrl;
+  } finally {
+    restorePaint();
   }
 }
 
@@ -316,29 +489,39 @@ function triggerDownload(dataUrl: string, filename: string): void {
 }
 
 /**
- * Renderiza a página de observações fora da tela e a captura como imagem,
- * na mesma largura da 1ª página para o relatório ficar homogêneo.
+ * Renderiza a página de observações e captura como imagem.
+ * Host fica no viewport (sem left:-10000) para o rasterizer não gerar branco.
+ * mode=append: sem 2º cabeçalho institucional — usado no PNG combinado.
  */
 async function captureReportNotesPage(
   options: ElementExportOptions,
-  widthPx: number
+  widthPx: number,
+  mode: 'standalone' | 'append' = 'append'
 ): Promise<{ dataUrl: string; widthPx: number; heightPx: number } | null> {
   const { structure, settings } = options;
   if (!structure) return null;
 
-  const logoDataUrl = await getLogoDataUrl().catch(() => '');
+  const safeWidth = Math.max(800, Math.round(widthPx) || 1100);
+  const logoDataUrl = mode === 'standalone' ? await getLogoDataUrl().catch(() => '') : '';
   const html = renderReportNotesPageHtml(structure, settings, {
-    widthPx: Math.round(widthPx),
+    widthPx: safeWidth,
     logoDataUrl,
+    mode,
   });
   if (!html) return null;
 
   const host = document.createElement('div');
-  host.style.position = 'fixed';
-  host.style.left = '-10000px';
-  host.style.top = '0';
-  host.style.width = `${Math.round(widthPx)}px`;
-  host.style.background = '#ffffff';
+  host.id = `report-notes-capture-${Date.now()}`;
+  host.style.cssText = [
+    'position:fixed',
+    'left:0',
+    'top:0',
+    'z-index:-1',
+    'opacity:0.01',
+    'pointer-events:none',
+    `width:${safeWidth}px`,
+    'background:#ffffff',
+  ].join(';');
   host.innerHTML = html;
   document.body.appendChild(host);
 
@@ -348,15 +531,18 @@ async function captureReportNotesPage(
         img.decode ? img.decode().catch(() => undefined) : Promise.resolve()
       )
     );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
 
-    const dataUrl = await toPng(host, {
+    const target = (host.firstElementChild as HTMLElement) || host;
+    const pixelRatio = 2;
+    const dataUrl = await rasterizeElementToPng(target, {
+      width: safeWidth,
+      pixelRatio,
       backgroundColor: '#ffffff',
-      pixelRatio: 2,
-      width: Math.round(widthPx),
     });
 
-    let outWidth = Math.round(widthPx) * 2;
-    let outHeight = Math.max(host.scrollHeight, 1) * 2;
+    let outWidth = safeWidth * pixelRatio;
+    let outHeight = Math.max(target.scrollHeight, 1) * pixelRatio;
     try {
       const img = new Image();
       img.src = dataUrl;
@@ -372,8 +558,144 @@ async function captureReportNotesPage(
     console.warn('Não foi possível gerar a página de observações:', err);
     return null;
   } finally {
-    document.body.removeChild(host);
+    if (document.body.contains(host)) document.body.removeChild(host);
   }
+}
+
+/** Empilha duas capturas em um único PNG (matriz + observações), mesma largura, sem faixas brancas laterais. */
+async function stitchPngVertically(
+  top: { dataUrl: string; widthPx: number; heightPx: number },
+  bottom: { dataUrl: string; widthPx: number; heightPx: number },
+  gapPx = 24
+): Promise<string> {
+  const [imgA, imgB] = await Promise.all([
+    loadImageFromDataUrl(top.dataUrl),
+    loadImageFromDataUrl(bottom.dataUrl),
+  ]);
+
+  const width = Math.max(imgA.naturalWidth || top.widthPx, 1);
+  const scaleB = width / Math.max(imgB.naturalWidth || bottom.widthPx, 1);
+  const heightB = Math.max(1, Math.round((imgB.naturalHeight || bottom.heightPx) * scaleB));
+  const heightA = imgA.naturalHeight || top.heightPx;
+  const height = heightA + gapPx + heightB;
+
+  const SAFE_PIXELS = 32_000_000;
+  const scale = width * height > SAFE_PIXELS ? Math.sqrt(SAFE_PIXELS / (width * height)) : 1;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Não foi possível montar a imagem combinada');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  ctx.drawImage(imgA, 0, 0, canvas.width, Math.round(heightA * scale));
+  ctx.drawImage(
+    imgB,
+    0,
+    Math.round((heightA + gapPx) * scale),
+    canvas.width,
+    Math.round(heightB * scale)
+  );
+
+  return canvas.toDataURL('image/png');
+}
+
+/** Desenha a 2ª página de observações em PDF vetorial (fallback se a captura falhar). */
+function appendReportNotesVectorPages(
+  doc: jsPDF,
+  structure: CurriculumStructure,
+  settings?: AppSettings
+): boolean {
+  const notes = getReportNotes(structure.structureType, settings);
+  if (notes.blocks.length === 0) return false;
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = Math.min(18, pageWidth * 0.04);
+  const contentWidth = pageWidth - margin * 2;
+
+  doc.addPage();
+  let ny = margin;
+
+  doc.setFillColor(0, 43, 73);
+  doc.rect(margin, ny, contentWidth, 16, 'F');
+  doc.setFillColor(255, 107, 0);
+  doc.rect(margin, ny + 16, contentWidth, 2.2, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(255, 255, 255);
+  doc.text(
+    settings?.institutionName || 'UNISUAM - Centro Universitário Augusto Motta',
+    margin + 4,
+    ny + 7
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(notes.title.toUpperCase(), margin + 4, ny + 12.5);
+  ny += 24;
+
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 30, 30);
+  doc.text(
+    `Curso: ${structure.courseName} (${structure.modality}) · Código: ${structure.code} · CH: ${structure.calculatedTotalHours}h`,
+    margin + 2,
+    ny
+  );
+  ny += 10;
+
+  notes.blocks.forEach((block) => {
+    if (ny > pageHeight - 28) {
+      doc.addPage();
+      ny = margin;
+    }
+    if (block.title) {
+      doc.setFillColor(240, 244, 248);
+      doc.rect(margin, ny, contentWidth, 7, 'F');
+      doc.setFillColor(255, 107, 0);
+      doc.rect(margin, ny, 2, 7, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(0, 43, 73);
+      doc.text(block.title.toUpperCase(), margin + 5, ny + 4.8);
+      ny += 10;
+    }
+    if (block.text) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(50, 50, 50);
+      block.text.split(/\r?\n/).forEach((paragraph) => {
+        const clean = paragraph.trim();
+        if (!clean) {
+          ny += 2;
+          return;
+        }
+        const lines = doc.splitTextToSize(clean, contentWidth - 6) as string[];
+        lines.forEach((line) => {
+          if (ny > pageHeight - 20) {
+            doc.addPage();
+            ny = margin;
+          }
+          doc.text(line, margin + 3, ny);
+          ny += 4.2;
+        });
+      });
+    }
+    ny += 5;
+  });
+
+  return true;
+}
+
+async function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
+  const img = new Image();
+  img.src = dataUrl;
+  await img.decode();
+  return img;
 }
 
 export async function exportToPNG(
@@ -381,14 +703,11 @@ export async function exportToPNG(
   filename: string,
   options: ElementExportOptions = {}
 ): Promise<string> {
-  const { dataUrl, widthPx } = await captureElementAsPngDataUrl(elementId);
+  const main = await captureElementAsPngDataUrl(elementId);
+  const notes = await captureReportNotesPage(options, main.cssWidth, 'append');
+
+  const dataUrl = notes ? await stitchPngVertically(main, notes) : main.dataUrl;
   triggerDownload(dataUrl, `${filename}.png`);
-
-  const notes = await captureReportNotesPage(options, widthPx / 2);
-  if (notes) {
-    triggerDownload(notes.dataUrl, `${filename}_Observacoes.png`);
-  }
-
   return dataUrl;
 }
 
@@ -398,10 +717,10 @@ export async function exportElementToPDF(
   filename: string,
   options: ElementExportOptions = {}
 ): Promise<void> {
-  const { dataUrl, widthPx, heightPx } = await captureElementAsPngDataUrl(elementId);
+  const { dataUrl, widthPx, heightPx, cssWidth } = await captureElementAsPngDataUrl(elementId);
 
-  // Converte px → pt (~0.75) para página sob medida
-  const scale = 0.72;
+  // Converte px → pt (~0.75) para página sob medida; sem reduzir demais a resolução
+  const scale = 0.85;
   const pageW = Math.max(200, widthPx * scale);
   const pageH = Math.max(200, heightPx * scale);
   const orientation = pageW >= pageH ? 'landscape' : 'portrait';
@@ -413,14 +732,16 @@ export async function exportElementToPDF(
     compress: true,
   });
 
-  pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH, undefined, 'FAST');
+  pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH, undefined, 'MEDIUM');
 
-  // 2ª página: observações da ementa com o mesmo cabeçalho e largura da 1ª
-  const notes = await captureReportNotesPage(options, widthPx / 2);
+  // 2ª página: observações (com cabeçalho próprio no PDF multipágina)
+  const notes = await captureReportNotesPage(options, cssWidth, 'standalone');
   if (notes) {
     const notesH = Math.max(200, (notes.heightPx / notes.widthPx) * pageW);
     pdf.addPage([pageW, notesH], pageW >= notesH ? 'landscape' : 'portrait');
-    pdf.addImage(notes.dataUrl, 'PNG', 0, 0, pageW, notesH, undefined, 'FAST');
+    pdf.addImage(notes.dataUrl, 'PNG', 0, 0, pageW, notesH, undefined, 'MEDIUM');
+  } else if (options.structure) {
+    appendReportNotesVectorPages(pdf, options.structure, options.settings);
   }
 
   pdf.save(`${filename}.pdf`);
@@ -659,7 +980,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
       const branchIndicator = mod.branch ? ` [Trilha ${mod.branch}]` : '';
-      doc.text(`Módulo ${mod.number}: ${mod.title}${branchIndicator} (${mod.hours}h)`, margin + 3, y + 4.2);
+      doc.text(`${formatModuleName(mod.number, mod.title)}${branchIndicator} (${mod.hours}h · ${mod.meetings ?? 0} encontros)`, margin + 3, y + 4.2);
       y += 6;
       if (mod.competence) {
         doc.setFont('helvetica', 'normal');
@@ -670,7 +991,8 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       }
 
       // Conhecimentos do Módulo (em estrutura modular)
-      if (!structure.hideKnowledgesInReport && mod.disciplines && mod.disciplines.length > 0) {
+      const moduleComponents = getModularComponents(mod);
+      if (!structure.hideKnowledgesInReport && moduleComponents.length > 0) {
         doc.setFillColor(242, 244, 247);
         doc.rect(margin, y, contentWidth, 4.5, 'F');
         doc.setTextColor(0, 43, 73);
@@ -701,7 +1023,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         let mSyncMed = 0;
         let mAsync = 0;
 
-        mod.disciplines.forEach((d) => {
+        moduleComponents.forEach((d) => {
           if (y > 185) {
             doc.addPage();
             y = 12;
@@ -763,7 +1085,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(6.8);
         doc.setTextColor(217, 83, 0);
-        doc.text(`SABERES - MÓDULO ${mod.number}:`, margin + 2, y + 2.8);
+        doc.text(`SABERES - ${formatModuleName(mod.number, mod.title).toUpperCase()}:`, margin + 2, y + 2.8);
         y += 4.5;
 
         doc.setFont('helvetica', 'normal');
@@ -777,37 +1099,6 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
           }
           const cat = labelForCategory(comp.category, settings?.pedagogicalNomenclature);
           doc.text(`• [${cat.toUpperCase()}] ${comp.name}`, margin + 4, y + 2.8);
-          y += 3.6;
-        });
-      }
-
-      // Conhecimentos adicionais (lista knowledges)
-      if (!structure.hideKnowledgesInReport && mod.knowledges && mod.knowledges.length > 0) {
-        if (y > 175) {
-          doc.addPage();
-          y = 12;
-        }
-
-        doc.setFillColor(240, 249, 255);
-        doc.rect(margin, y, contentWidth, 4, 'F');
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(6.8);
-        doc.setTextColor(0, 43, 73);
-        doc.text(`CONHECIMENTOS ESPECÍFICOS - MÓDULO ${mod.number}:`, margin + 2, y + 2.8);
-        y += 4.5;
-
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.8);
-        doc.setTextColor(50, 50, 50);
-
-        mod.knowledges.forEach((know) => {
-          if (y > 185) {
-            doc.addPage();
-            y = 12;
-          }
-          const modText = `[${know.modalityDelivery.toUpperCase()}]`;
-          const chTag = know.hours ? ` [${know.hours}h]` : '';
-          doc.text(`• ${modText} [${know.category.toUpperCase()}] ${know.name}${chTag}`, margin + 4, y + 2.8);
           y += 3.6;
         });
       }
@@ -893,6 +1184,72 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.text('TOTAL', tableX + 2, y + 4.6);
       doc.text(
         `${formatWorkloadHours(totalRow.hours)} horas`,
+        tableX + colLabel + (tableW - colLabel) / 2,
+        y + 4.6,
+        { align: 'center' }
+      );
+      y += rowH;
+    }
+
+    const meetingsSummary = buildModuleMeetingsSummary(structure);
+    if (meetingsSummary && meetingsSummary.rows.length > 0) {
+      y += 6;
+      if (y > 175) {
+        doc.addPage();
+        y = 12;
+      }
+      const mRows = meetingsSummary.rows;
+      const mColData = (tableW - colLabel) / Math.max(mRows.length, 1);
+      const mCenterOf = (index: number) => tableX + colLabel + mColData * index + mColData / 2;
+
+      doc.setFillColor(0, 43, 73);
+      doc.rect(tableX, y, tableW, 8, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(255, 255, 255);
+      doc.text('ENCONTROS POR MÓDULO', tableX + tableW / 2, y + 5.2, { align: 'center' });
+      y += 8;
+
+      doc.setFillColor(245, 247, 250);
+      doc.rect(tableX, y, tableW, rowH, 'F');
+      doc.setDrawColor(0, 43, 73);
+      doc.rect(tableX, y, tableW, rowH);
+      doc.setFontSize(6.5);
+      doc.setTextColor(0, 43, 73);
+      doc.text('Módulos', tableX + 2, y + 4.4);
+      mRows.forEach((row, index) => {
+        doc.text(row.shortLabel, mCenterOf(index), y + 4.4, {
+          align: 'center',
+          maxWidth: mColData - 2,
+        });
+      });
+      y += rowH;
+
+      doc.setDrawColor(220, 220, 220);
+      doc.rect(tableX, y, tableW, rowH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Encontros', tableX + 2, y + 4.4);
+      doc.setTextColor(50, 50, 50);
+      doc.setFontSize(7);
+      mRows.forEach((row, index) => {
+        doc.text(String(row.meetings), mCenterOf(index), y + 4.4, { align: 'center' });
+      });
+      y += rowH;
+
+      doc.setFillColor(255, 240, 230);
+      doc.rect(tableX, y, tableW, rowH, 'F');
+      doc.setDrawColor(0, 43, 73);
+      doc.rect(tableX, y, tableW, rowH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(0, 43, 73);
+      doc.text('TOTAL', tableX + 2, y + 4.6);
+      doc.text(
+        `${meetingsSummary.totalMeetings} ${
+          meetingsSummary.totalMeetings === 1 ? 'encontro' : 'encontros'
+        }`,
         tableX + colLabel + (tableW - colLabel) / 2,
         y + 4.6,
         { align: 'center' }
@@ -1253,11 +1610,12 @@ export async function generateInteractiveHtml(
                 <span class="px-2 py-0.5 rounded bg-[#FF6B00] text-xs font-bold text-white">${mod.code}</span>
                 ${mod.branch ? `<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-xs font-semibold">Trilha ${mod.branch}</span>` : ''}
               </div>
-              <h3 class="font-bold text-base mt-1 text-white">${mod.number}º Módulo: ${mod.title}</h3>
+              <h3 class="font-bold text-base mt-1 text-white">${formatModuleName(mod.number, mod.title)}</h3>
               ${mod.competence ? `<p class="text-xs text-blue-200 mt-0.5">${mod.competence}</p>` : ''}
             </div>
             <div class="flex items-center gap-3">
               <span class="text-sm font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${mod.hours}h</span>
+              <span class="text-sm font-extrabold text-[#002B49] bg-white px-3 py-1 rounded shadow-sm">${mod.meetings ?? 0} encontros</span>
               ${
                 !structure.hideCompetenciesInReport
                   ? `<button onclick="toggleDetails('mod-details-${mod.id}')" class="text-xs px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-white transition no-print">
@@ -1271,9 +1629,9 @@ export async function generateInteractiveHtml(
           <!-- Conhecimentos do Módulo -->
           <div class="p-6">
             ${
-              !structure.hideKnowledgesInReport && (mod.disciplines || []).length > 0
+              !structure.hideKnowledgesInReport && getModularComponents(mod).length > 0
                 ? (() => {
-                    const discs = mod.disciplines || [];
+                    const discs = getModularComponents(mod);
                     const mPres = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
                     const mTheo = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
                     const mLab = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
@@ -1382,9 +1740,9 @@ export async function generateInteractiveHtml(
                   <div class="bg-white p-3 rounded-lg border border-orange-100 shadow-xs">
                     <div class="mb-1">
                       <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
-                        c.category === 'conhecimento' || c.category === 'conceitual'
+                        matchesSaberesColumn(c.category, 'c')
                           ? 'bg-blue-100 text-blue-800'
-                          : c.category === 'habilidade' || c.category === 'procedimental'
+                          : matchesSaberesColumn(c.category, 'h')
                           ? 'bg-emerald-100 text-emerald-800'
                           : 'bg-purple-100 text-purple-800'
                       }">${labelForCategory(c.category, settings?.pedagogicalNomenclature)}</span>
@@ -1757,10 +2115,10 @@ export function exportSampleTemplate(type: 'disciplinar' | 'modular'): void {
       ['Preencha os módulos, trilhas (tronco ou ramificação A/B) e os conhecimentos, habilidades e atitudes'],
       [],
       ['Módulo', 'Trilha / Ramificação', 'Código Módulo/Disciplina', 'Título / Nome do Componente', 'Carga Horária (h)', 'Conhecimentos', 'Habilidades', 'Atitudes'],
-      [1, '', 'MOD-01', 'Empreendedorismo e Sustentabilidade', 325, 'Modelagem de Negócios', 'Diagnósticos ESG', 'Postura Ética'],
-      [2, '', 'MOD-02', 'Ambiente Corporativo e Comunicação', 325, 'Teorias da Administração', 'Técnicas de Negociação', 'Empatia e Liderança'],
-      [9, 'A', 'MOD-09A', 'Ênfase Clínica I: Práticas Terapêuticas', 450, 'Psicofarmacologia', 'Supervisão Clínica', 'Postura Bioética'],
-      [9, 'B', 'MOD-09B', 'Ênfase Gestão I: Consultoria Organizacional', 450, 'Intervenção Psicossocial', 'Diagnóstico Organizacional', 'Inclusão Social'],
+      ['I', '', 'MOD-01', 'Empreendedorismo e Sustentabilidade', 325, 'Modelagem de Negócios', 'Diagnósticos ESG', 'Postura Ética'],
+      ['II', '', 'MOD-02', 'Ambiente Corporativo e Comunicação', 325, 'Teorias da Administração', 'Técnicas de Negociação', 'Empatia e Liderança'],
+      ['IX', 'A', 'MOD-09A', 'Ênfase Clínica I: Práticas Terapêuticas', 450, 'Psicofarmacologia', 'Supervisão Clínica', 'Postura Bioética'],
+      ['IX', 'B', 'MOD-09B', 'Ênfase Gestão I: Consultoria Organizacional', 450, 'Intervenção Psicossocial', 'Diagnóstico Organizacional', 'Inclusão Social'],
     ];
     const ws = XLSX.utils.aoa_to_sheet(headers);
     XLSX.utils.book_append_sheet(wb, ws, 'Template_Modular');

@@ -1,7 +1,9 @@
 import { doc, getDoc, getDocs, setDoc, deleteDoc, collection } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../firebase/config';
 import { CurriculumStructure, Course, AppSettings, getDisciplineChBreakdown, withStructurePresentialFlags } from '../types/curriculum';
-import { initialCourses, initialStructures, initialSettings } from '../data/initialData';
+import { initialSettings } from '../data/initialData';
+import { normalizeReportNotesTitle } from './reportNotes';
+import { getModularComponents, syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
 
 const STRUCTURES_COLLECTION = 'curriculum_structures';
 const COURSES_COLLECTION = 'curriculum_courses';
@@ -15,6 +17,79 @@ function canUseFirestore(): boolean {
   return isFirebaseConfigured && db !== null;
 }
 
+function normalizeAppSettings(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    reportNotesTitle: normalizeReportNotesTitle(settings.reportNotesTitle),
+  };
+}
+
+function readLocalList<T>(key: string): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function itemTimestamp(item: { updatedAt?: string; createdAt?: string }): number {
+  return Date.parse(item.updatedAt || item.createdAt || '') || 0;
+}
+
+/** Une listas por id. Em conflito, o local prevalece se for mais novo ou igual. */
+function mergeById<T extends { id: string; updatedAt?: string; createdAt?: string }>(
+  remote: T[],
+  local: T[]
+): T[] {
+  const map = new Map<string, T>();
+  for (const item of remote) {
+    if (item?.id) map.set(item.id, item);
+  }
+  for (const item of local) {
+    if (!item?.id) continue;
+    const prev = map.get(item.id);
+    if (!prev || itemTimestamp(item) >= itemTimestamp(prev)) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+async function fetchFirestoreList<T extends { id?: string }>(
+  collectionName: string
+): Promise<T[] | null> {
+  if (!canUseFirestore()) return null;
+  try {
+    const snapshot = await getDocs(collection(db!, collectionName));
+    const items: T[] = [];
+    snapshot.forEach((d) => {
+      const data = d.data() as T;
+      items.push({ ...data, id: (data.id as string | undefined) || d.id });
+    });
+    return items;
+  } catch (err) {
+    console.warn(`Firestore indisponível (${collectionName}), usando cache local`, err);
+    return null;
+  }
+}
+
+async function upsertFirestoreDocs<T extends { id: string }>(
+  collectionName: string,
+  items: T[]
+): Promise<void> {
+  if (!canUseFirestore() || items.length === 0) return;
+  try {
+    for (const item of items) {
+      await setDoc(doc(db!, collectionName, item.id), item as Record<string, unknown>);
+    }
+  } catch (err) {
+    console.error(`Erro ao gravar ${collectionName} no Firestore`, err);
+  }
+}
+
 export function calculateStructureTotals(structure: CurriculumStructure): CurriculumStructure {
   let totalHours = 0;
   let coreHours = 0; // Somente Obrigatória + Eletiva (conta para CH mínima do curso)
@@ -23,6 +98,7 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
   let extensionHours = 0;
   let internshipHours = 0;
   let totalCredits = 0;
+  let syncedModules = structure.modules;
 
   if (structure.structureType === 'disciplinar' && structure.periods) {
     structure.periods.forEach((period) => {
@@ -46,7 +122,7 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
         // Presencial = contato direto / presencial regulatório
         presentialHours += bd.presential;
         // Síncrono-Mediado + Assíncrono = mediação a distância
-        eadHours += (bd.syncMediated + bd.async);
+        eadHours += bd.syncMediated + bd.async;
 
         if (disc.isExtension || disc.flags?.extension === 'presencial' || disc.flags?.extension === 'sincrono-mediado') {
           extensionHours += hours;
@@ -60,93 +136,78 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
       period.totalHours = pHours;
     });
   } else if (structure.structureType === 'modular' && structure.modules) {
-    // Para cursos modulares: soma os módulos do tronco comum e os de maior caminho ou disciplinas internas
-    structure.modules.forEach((mod) => {
+    // Preferir knowledges (formulário) e espelhar em disciplines para não perder itens manuais
+    syncedModules = structure.modules.map((mod) => {
+      const synced = syncModuleKnowledgesToDisciplines(mod);
       let modHours = 0;
-      if (mod.disciplines && mod.disciplines.length > 0) {
-        mod.disciplines.forEach((disc) => {
-          const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
-          const hours = bd.total;
-          const credits = Number(disc.credits) || 0;
-          modHours += hours;
-          totalCredits += credits;
 
-          const isOptional = disc.type === 'Optativa';
-          if (!isOptional) {
-            coreHours += hours;
-          }
+      getModularComponents(synced).forEach((disc) => {
+        const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
+        const hours = bd.total;
+        const credits = Number(disc.credits) || 0;
+        modHours += hours;
+        totalCredits += credits;
 
-          presentialHours += bd.presential;
-          eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
+        const isOptional = disc.type === 'Optativa';
+        if (!isOptional) {
+          coreHours += hours;
+        }
 
-          if (disc.isExtension) {
-            extensionHours += hours;
-          }
-          if (disc.isInternship) {
-            internshipHours += hours;
-          }
-        });
-      } else if (mod.knowledges && mod.knowledges.length > 0) {
-        mod.knowledges.forEach((k) => {
-          const asDisc = {
-            id: k.id,
-            code: mod.code || '',
-            name: k.name,
-            type: 'Obrigatória' as const,
-            credits: 0,
-            hours: k.hours || 0,
-            modalityDelivery: k.modalityDelivery,
-            hasLaboratory: k.hasLaboratory,
-            hasClinical: k.hasClinical,
-            chTheoretical: k.chTheoretical,
-            chLaboratory: k.chLaboratory,
-            chClinical: k.chClinical,
-            chPresential: k.chPresential,
-            chSyncMediated: k.chSyncMediated,
-            chAsync: k.chAsync,
-          };
-          const bd = getDisciplineChBreakdown(
-            withStructurePresentialFlags(asDisc, structure)
-          );
-          modHours += bd.total;
-          coreHours += bd.total;
-          presentialHours += bd.presential;
-          eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
-        });
-      } else {
-        modHours = Number(mod.hours) || 0;
+        presentialHours += bd.presential;
+        eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
+
+        if (disc.isExtension) {
+          extensionHours += hours;
+        }
+        if (disc.isInternship) {
+          internshipHours += hours;
+        }
+      });
+
+      if (modHours <= 0 && !(synced.knowledges?.length || synced.disciplines?.length)) {
+        modHours = Number(synced.hours) || 0;
         presentialHours += modHours * 0.8;
         eadHours += modHours * 0.2;
-        coreHours += modHours; // Módulos sem disciplinas internas contam para o núcleo
+        coreHours += modHours;
       }
-      mod.hours = modHours > 0 ? modHours : Number(mod.hours) || 0;
-      totalHours += mod.hours;
+
+      const hours = modHours > 0 ? modHours : Number(synced.hours) || 0;
+      totalHours += hours;
+      return { ...synced, hours };
     });
   }
 
-  // Atividades Complementares (Course / Structure level)
-  const complementaryHours = Number(structure.complementaryTotalHours) || 100;
+  // Atividades Complementares (não inventar 100h se o campo estiver vazio)
+  const complementaryHours = Number(structure.complementaryTotalHours) || 0;
   const compMod = structure.complementaryModality || 'assincrono';
-  totalHours += complementaryHours;
-  if (compMod === 'presencial') {
-    presentialHours += complementaryHours;
-  } else {
-    eadHours += complementaryHours;
+  if (complementaryHours > 0) {
+    totalHours += complementaryHours;
+    if (compMod === 'presencial') {
+      presentialHours += complementaryHours;
+    } else {
+      eadHours += complementaryHours;
+    }
   }
 
-  // Extensão (Course / Structure level)
-  const extensionHoursInput = Number(structure.extensionTotalHours) || Math.round(totalHours * 0.1);
+  // Extensão declarada: só entra no total se ainda não estiver nas componentes (isExtension)
+  const extensionDeclared = Number(structure.extensionTotalHours) || 0;
   const extMod = structure.extensionModality || 'presencial';
-  totalHours += extensionHoursInput;
-  extensionHours += extensionHoursInput;
-  if (extMod === 'presencial') {
-    presentialHours += extensionHoursInput;
-  } else {
-    eadHours += extensionHoursInput;
+  if (extensionHours > 0) {
+    // Já contabilizada nos componentes — usa o maior valor só para o indicador regulatório
+    extensionHours = Math.max(extensionHours, extensionDeclared);
+  } else if (extensionDeclared > 0) {
+    totalHours += extensionDeclared;
+    extensionHours = extensionDeclared;
+    if (extMod === 'presencial') {
+      presentialHours += extensionDeclared;
+    } else {
+      eadHours += extensionDeclared;
+    }
   }
 
   return {
     ...structure,
+    ...(structure.structureType === 'modular' && syncedModules ? { modules: syncedModules } : {}),
     calculatedTotalHours: Math.round(totalHours * 100) / 100,
     calculatedCoreHours: Math.round(coreHours * 100) / 100,
     calculatedPresentialHours: Math.round(presentialHours * 100) / 100,
@@ -158,59 +219,67 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
   };
 }
 
+async function syncMissingOrNewerToFirestore<
+  T extends { id: string; updatedAt?: string; createdAt?: string }
+>(collectionName: string, remote: T[], merged: T[]): Promise<void> {
+  const remoteById = new Map(remote.map((r) => [r.id, r]));
+  const toSync = merged.filter((item) => {
+    const existing = remoteById.get(item.id);
+    if (!existing) return true; // só no local → sobe
+    return itemTimestamp(item) > itemTimestamp(existing); // local mais novo → sobe
+  });
+  if (toSync.length > 0) {
+    await upsertFirestoreDocs(collectionName, toSync);
+  }
+}
+
+export function getCachedStructures(): CurriculumStructure[] {
+  return readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY).map((s) =>
+    calculateStructureTotals(s)
+  );
+}
+
+export function getCachedCourses(): Course[] {
+  return readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+}
+
+export function getCachedSettings(): AppSettings | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
+    if (!raw) return null;
+    return normalizeAppSettings(JSON.parse(raw) as AppSettings);
+  } catch {
+    return null;
+  }
+}
+
 export async function getCurriculumStructures(): Promise<CurriculumStructure[]> {
-  if (canUseFirestore()) {
-    try {
-      const colRef = collection(db!, STRUCTURES_COLLECTION);
-      const snapshot = await getDocs(colRef);
-      if (!snapshot.empty) {
-        const items: CurriculumStructure[] = [];
-        snapshot.forEach((d) => items.push(d.data() as CurriculumStructure));
-        localStorage.setItem(LOCAL_STORAGE_STRUCTURES_KEY, JSON.stringify(items));
-        return items;
-      }
-    } catch (err) {
-      console.warn('Firestore unavailable, falling back to local state', err);
-    }
+  const remote = await fetchFirestoreList<CurriculumStructure>(STRUCTURES_COLLECTION);
+  const local = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
+
+  // Firestore com erro de rede → só local (nunca seed de exemplo)
+  if (remote === null) {
+    return local.map((s) => calculateStructureTotals(s));
   }
 
-  const cached = localStorage.getItem(LOCAL_STORAGE_STRUCTURES_KEY);
-  if (cached) {
-    try {
-      return JSON.parse(cached);
-    } catch {
-      // ignore
-    }
-  }
+  const merged = mergeById(remote, local).map((s) => calculateStructureTotals(s));
+  localStorage.setItem(LOCAL_STORAGE_STRUCTURES_KEY, JSON.stringify(merged));
 
-  // Seed default structures to localStorage and firestore
-  const seeded = initialStructures.map(calculateStructureTotals);
-  localStorage.setItem(LOCAL_STORAGE_STRUCTURES_KEY, JSON.stringify(seeded));
-  
-  // Try async seed to firestore in background
-  if (canUseFirestore()) {
-    try {
-      for (const struct of seeded) {
-        await setDoc(doc(db!, STRUCTURES_COLLECTION, struct.id), struct);
-      }
-    } catch (seedErr) {
-      console.warn('Could not seed to firestore immediately', seedErr);
-    }
-  }
+  // NÃO regrava a coleção inteira a cada load (isso deixava o app lento no plano free)
+  await syncMissingOrNewerToFirestore(STRUCTURES_COLLECTION, remote, merged);
 
-  return seeded;
+  return merged;
 }
 
 export async function saveCurriculumStructure(structure: CurriculumStructure): Promise<CurriculumStructure> {
   const calculated = calculateStructureTotals({
     ...structure,
     updatedAt: new Date().toISOString(),
+    createdAt: structure.createdAt || new Date().toISOString(),
   });
 
-  // Local update first for instant UX
   try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_STRUCTURES_KEY);
-    const list: CurriculumStructure[] = cached ? JSON.parse(cached) : [];
+    const list = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
     const index = list.findIndex((s) => s.id === calculated.id);
     if (index >= 0) {
       list[index] = calculated;
@@ -222,26 +291,16 @@ export async function saveCurriculumStructure(structure: CurriculumStructure): P
     console.error('Error saving to localStorage', e);
   }
 
-  // Remote Firestore update
-  if (canUseFirestore()) {
-    try {
-      await setDoc(doc(db!, STRUCTURES_COLLECTION, calculated.id), calculated);
-    } catch (err) {
-      console.error('Error saving to Firestore:', err);
-    }
-  }
-
+  await upsertFirestoreDocs(STRUCTURES_COLLECTION, [calculated]);
   return calculated;
 }
 
 export async function deleteCurriculumStructure(id: string): Promise<void> {
   try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_STRUCTURES_KEY);
-    if (cached) {
-      const list: CurriculumStructure[] = JSON.parse(cached);
-      const filtered = list.filter((s) => s.id !== id);
-      localStorage.setItem(LOCAL_STORAGE_STRUCTURES_KEY, JSON.stringify(filtered));
-    }
+    const list = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY).filter(
+      (s) => s.id !== id
+    );
+    localStorage.setItem(LOCAL_STORAGE_STRUCTURES_KEY, JSON.stringify(list));
   } catch (e) {
     console.error(e);
   }
@@ -256,69 +315,43 @@ export async function deleteCurriculumStructure(id: string): Promise<void> {
 }
 
 export async function getCoursesList(): Promise<Course[]> {
-  if (canUseFirestore()) {
-    try {
-      const colRef = collection(db!, COURSES_COLLECTION);
-      const snapshot = await getDocs(colRef);
-      if (!snapshot.empty) {
-        const items: Course[] = [];
-        snapshot.forEach((d) => items.push(d.data() as Course));
-        localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(items));
-        return items;
-      }
-    } catch (err) {
-      console.warn('Could not read courses from Firestore, checking local storage', err);
-    }
+  const remote = await fetchFirestoreList<Course>(COURSES_COLLECTION);
+  const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+
+  if (remote === null) {
+    return local;
   }
 
-  const cached = localStorage.getItem(LOCAL_STORAGE_COURSES_KEY);
-  if (cached) {
-    try {
-      return JSON.parse(cached);
-    } catch {
-      // ignore
-    }
-  }
+  const merged = mergeById(remote, local);
+  localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(merged));
 
-  // Seed default courses
-  localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(initialCourses));
-  if (canUseFirestore()) {
-    try {
-      for (const c of initialCourses) {
-        await setDoc(doc(db!, COURSES_COLLECTION, c.id), c);
-      }
-    } catch (e) {
-      console.warn('Background course seed failed', e);
-    }
-  }
+  // Só envia cursos novos/ausentes no remoto — evita rewrite em massa no free tier
+  await syncMissingOrNewerToFirestore(COURSES_COLLECTION, remote, merged);
 
-  return initialCourses;
+  return merged;
 }
 
 export async function saveCourseItem(course: Course): Promise<Course> {
+  const stamped: Course = {
+    ...course,
+    // Course type may not have updatedAt — keep id stable and persist as-is
+  };
+
   try {
-    const cached = localStorage.getItem(LOCAL_STORAGE_COURSES_KEY);
-    const list: Course[] = cached ? JSON.parse(cached) : [...initialCourses];
-    const index = list.findIndex((c) => c.id === course.id);
+    const list = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+    const index = list.findIndex((c) => c.id === stamped.id);
     if (index >= 0) {
-      list[index] = course;
+      list[index] = stamped;
     } else {
-      list.push(course);
+      list.push(stamped);
     }
     localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(list));
   } catch (e) {
     console.error(e);
   }
 
-  if (canUseFirestore()) {
-    try {
-      await setDoc(doc(db!, COURSES_COLLECTION, course.id), course);
-    } catch (err) {
-      console.error('Error saving course to Firestore', err);
-    }
-  }
-
-  return course;
+  await upsertFirestoreDocs(COURSES_COLLECTION, [stamped]);
+  return stamped;
 }
 
 export async function bulkUpdateCourseHours(
@@ -402,7 +435,7 @@ export async function getAppSettings(): Promise<AppSettings> {
       const docRef = doc(db!, 'settings', SETTINGS_DOC);
       const snap = await getDoc(docRef);
       if (snap.exists()) {
-        const data = snap.data() as AppSettings;
+        const data = normalizeAppSettings(snap.data() as AppSettings);
         localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(data));
         return data;
       }
@@ -414,7 +447,7 @@ export async function getAppSettings(): Promise<AppSettings> {
   const cached = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
   if (cached) {
     try {
-      return JSON.parse(cached);
+      return normalizeAppSettings(JSON.parse(cached) as AppSettings);
     } catch {
       // ignore
     }
@@ -424,15 +457,16 @@ export async function getAppSettings(): Promise<AppSettings> {
 }
 
 export async function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
-  localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+  const normalized = normalizeAppSettings(settings);
+  localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(normalized));
   if (canUseFirestore()) {
     try {
-      await setDoc(doc(db!, 'settings', SETTINGS_DOC), settings);
+      await setDoc(doc(db!, 'settings', SETTINGS_DOC), normalized);
     } catch (err) {
       console.error('Error saving settings to Firestore', err);
     }
   }
-  return settings;
+  return normalized;
 }
 
 // Aliases for seamless imports

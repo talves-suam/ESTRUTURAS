@@ -13,6 +13,8 @@ export interface SaberesLabels {
   full: string;
 }
 
+export type SaberesColumn = 'c' | 'h' | 'a';
+
 /** Nomenclatura oficial de Saberes no site e em todos os relatórios. */
 export function getSaberesLabels(
   nomenclature: PedagogicalNomenclature = 'cha'
@@ -35,14 +37,43 @@ export function getSaberesLabels(
   };
 }
 
+/** Agrupa categorias antigas (CHA) e novas (Zabala / saber-*) na mesma coluna. */
+export function matchesSaberesColumn(
+  category: string | undefined,
+  column: SaberesColumn
+): boolean {
+  const c = (category || '').toLowerCase();
+  if (column === 'c') {
+    return c.includes('conceitual') || c.includes('conhecimento');
+  }
+  if (column === 'h') {
+    return c.includes('procedimental') || c.includes('habilidade') || c.includes('fazer');
+  }
+  return c.includes('atitudinal') || c.includes('atitude') || c.includes('ser');
+}
+
 export function labelForCategory(
   category: string,
   nomenclature: PedagogicalNomenclature = 'cha'
 ): string {
   const labels = getSaberesLabels(nomenclature);
-  const c = category.toLowerCase();
-  if (c.includes('conceitual') || c.includes('conhecimento')) return labels.c;
-  if (c.includes('procedimental') || c.includes('habilidade')) return labels.h;
-  if (c.includes('atitudinal') || c.includes('atitude')) return labels.a;
+  if (matchesSaberesColumn(category, 'c')) return labels.c;
+  if (matchesSaberesColumn(category, 'h')) return labels.h;
+  if (matchesSaberesColumn(category, 'a')) return labels.a;
   return category;
+}
+
+/** Valor canônico ao cadastrar um novo saber, conforme a nomenclatura ativa. */
+export function defaultSaberCategory(
+  column: SaberesColumn,
+  nomenclature: PedagogicalNomenclature = 'cha'
+): 'conhecimento' | 'habilidade' | 'atitude' | 'conceitual' | 'procedimental' | 'atitudinal' {
+  if (nomenclature === 'zabala') {
+    if (column === 'c') return 'conceitual';
+    if (column === 'h') return 'procedimental';
+    return 'atitudinal';
+  }
+  if (column === 'c') return 'conhecimento';
+  if (column === 'h') return 'habilidade';
+  return 'atitude';
 }

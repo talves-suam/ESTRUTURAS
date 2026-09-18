@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   CurriculumStructure, 
   Course, 
@@ -15,7 +15,16 @@ import {
   getDisciplineChBreakdown,
   ExplicitChPart,
 } from '../types/curriculum';
-import { 
+import { getSaberesLabels, defaultSaberCategory } from '../utils/nomenclature';
+import { toRoman, fromRoman, formatModuleName } from '../utils/roman';
+import { summarizeCourseDcns, generateCourseCodeFromName, courseSelectOptions, resolveCourseByNameAndModality, courseBaseName, stripAcademicCoursePrefix, findCourseByNameAndModality, findCourseTemplateByName, formatCineBrasilLabel } from '../utils/courseBatch';
+import type { RequirementLevel } from '../types/curriculum';
+import {
+  extractTextFromPdf,
+  extractTextFromSpreadsheet,
+  parseSagaReportText,
+} from '../services/sagaImportService';
+import {
   Save, 
   Plus, 
   Trash2, 
@@ -29,12 +38,15 @@ import {
   Layers,
   FileText,
   Eraser,
+  Upload,
+  Loader2,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
 } from 'lucide-react';
 import { calculateStructureTotals } from '../services/curriculumService';
 import { DcnViewerModal } from './DcnViewerModal';
-import { getSaberesLabels } from '../utils/nomenclature';
-import { summarizeCourseDcns, generateCourseCodeFromName, uniqueCourseOptions, resolveCourseByNameAndModality, courseBaseName, normalizeCourseName } from '../utils/courseBatch';
-import type { RequirementLevel } from '../types/curriculum';
+import { syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
 
 interface CurriculumFormProps {
   initialData?: CurriculumStructure | null;
@@ -46,6 +58,24 @@ interface CurriculumFormProps {
 }
 
 type SplitFlags = { hasLaboratory: boolean; hasClinical: boolean };
+
+type ListDrag =
+  | { kind: 'discipline'; periodId: string; from: number }
+  | { kind: 'knowledge'; moduleId: string; from: number };
+
+type ListDragOver = {
+  kind: ListDrag['kind'];
+  parentId: string;
+  index: number;
+};
+
+function moveItemInList<T>(list: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list;
+  const next = [...list];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
 
 function knowledgeAsDiscipline(know: KnowledgeItem, flags: SplitFlags): Discipline {
   return {
@@ -215,101 +245,87 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const isZabala = settings.pedagogicalNomenclature === 'zabala';
   const chaLabels = getSaberesLabels(settings.pedagogicalNomenclature);
 
-  // Core Header State
+  // Core Header State — nova estrutura começa vazia (sem curso pré-selecionado)
   const [selectedCourseId, setSelectedCourseId] = useState<string>(
-    initialData?.courseId || courses[0]?.id || ''
+    initialData?.courseId || ''
   );
-  const [code, setCode] = useState<string>(initialData?.code || 'TAM251');
+  const [draftCourseName, setDraftCourseName] = useState<string>(
+    initialData ? courseBaseName(initialData.courseName || '') : ''
+  );
+  const [code, setCode] = useState<string>(initialData?.code || '');
   const [modality, setModality] = useState<'Presencial' | 'Semipresencial' | 'EAD'>(
     initialData?.modality || 'Presencial'
   );
   const [activeYearSemester, setActiveYearSemester] = useState<string>(
-    initialData?.activeYearSemester || '2025.1'
+    initialData?.activeYearSemester || ''
   );
   const [structureType, setStructureType] = useState<'disciplinar' | 'modular'>(
-    initialData?.structureType || 'modular'
+    initialData?.structureType || 'disciplinar'
   );
   const [status, setStatus] = useState<'Ativa' | 'Em Desativação' | 'Em Elaboração' | 'Inativa'>(
-    initialData?.status || 'Ativa'
+    initialData?.status || 'Em Elaboração'
   );
   const [hideStatus, setHideStatus] = useState<boolean>(initialData?.hideStatus ?? false);
   const [validityStart, setValidityStart] = useState<string>(
-    initialData?.validityStart || '2025-02-01'
+    initialData?.validityStart || ''
   );
   const [hideValidity, setHideValidity] = useState<boolean>(
     initialData?.hideValidity ?? settings.hideValidityStartDefault
   );
 
-  // Regulatory sliders & values
-  const currentCourse = courses.find((c) => c.id === selectedCourseId) || courses[0];
+  // Regulatory — só herda curso se estiver editando estrutura já salva
+  const currentCourse = selectedCourseId
+    ? courses.find((c) => c.id === selectedCourseId)
+    : undefined;
   const [requiredTotalHours, setRequiredTotalHours] = useState<number>(
-    initialData?.requiredTotalHours || currentCourse?.minTotalHours || 3000
+    initialData?.requiredTotalHours || 0
   );
   const [minPresentialHoursPercent, setMinPresentialHoursPercent] = useState<number>(
-    initialData?.minPresentialHoursPercent ?? (modality === 'EAD' ? 10 : 60)
+    initialData?.minPresentialHoursPercent ?? 0
   );
   const [maxEadHoursPercent, setMaxEadHoursPercent] = useState<number>(
-    initialData?.maxEadHoursPercent ?? (modality === 'EAD' ? 90 : 40)
+    initialData?.maxEadHoursPercent ?? 100
   );
-  const [dcnRef, setDcnRef] = useState<string>(
-    initialData?.dcnRef || currentCourse?.activeDcn || 'Resolução CNE/CES Geral'
-  );
-  const [cineBrasilRef, setCineBrasilRef] = useState<string>(
-    initialData?.cineBrasilRef || currentCourse?.cineBrasilCode || '0413A01'
-  );
+  const [dcnRef, setDcnRef] = useState<string>(initialData?.dcnRef || '');
+  const [cineBrasilRef, setCineBrasilRef] = useState<string>(initialData?.cineBrasilRef || '');
   const [authorizationAct, setAuthorizationAct] = useState<string>(
-    initialData?.authorizationAct ||
-      initialData?.recognitionPortaria ||
-      currentCourse?.authorizationAct ||
-      ''
+    initialData?.authorizationAct || initialData?.recognitionPortaria || ''
   );
-  const [structureDcns, setStructureDcns] = useState<DcnDocument[]>(
-    initialData?.dcns || currentCourse?.dcns || []
-  );
+  const [structureDcns, setStructureDcns] = useState<DcnDocument[]>(initialData?.dcns || []);
   const [isDcnModalOpen, setIsDcnModalOpen] = useState(false);
 
-  const [degrees, setDegrees] = useState<Course['degrees']>(
-    initialData?.degrees || currentCourse?.degrees || 'Bacharelado'
-  );
+  const [degrees, setDegrees] = useState<Course['degrees'] | undefined>(initialData?.degrees);
   const [internshipRequirement, setInternshipRequirement] = useState<RequirementLevel>(
-    initialData?.internshipRequirement || currentCourse?.internshipRequirement || 'Não Informado'
+    initialData?.internshipRequirement || 'Não Informado'
   );
   const [minInternshipHours, setMinInternshipHours] = useState<number | undefined>(
-    initialData?.minInternshipHours ?? currentCourse?.minInternshipHours
+    initialData?.minInternshipHours
   );
   const [complementaryRequirement, setComplementaryRequirement] = useState<RequirementLevel>(
-    initialData?.complementaryRequirement ||
-      currentCourse?.complementaryRequirement ||
-      'Não Informado'
+    initialData?.complementaryRequirement || 'Não Informado'
   );
   const [finalPaperRequirement, setFinalPaperRequirement] = useState<RequirementLevel>(
-    initialData?.finalPaperRequirement || currentCourse?.finalPaperRequirement || 'Não Informado'
+    initialData?.finalPaperRequirement || 'Não Informado'
   );
-  const [coordinatorName, setCoordinatorName] = useState(
-    initialData?.coordinatorName || currentCourse?.coordinatorName || ''
-  );
-  const [coordinatorEmail, setCoordinatorEmail] = useState(
-    initialData?.coordinatorEmail || currentCourse?.coordinatorEmail || ''
-  );
+  const [coordinatorName, setCoordinatorName] = useState(initialData?.coordinatorName || '');
+  const [coordinatorEmail, setCoordinatorEmail] = useState(initialData?.coordinatorEmail || '');
 
   const [complementaryTotalHours, setComplementaryTotalHours] = useState<number>(
-    initialData?.complementaryTotalHours ?? currentCourse?.complementaryTotalHours ?? 0
+    initialData?.complementaryTotalHours ?? 0
   );
   const [complementaryModality, setComplementaryModality] = useState<DeliveryModalityFlag>(
-    initialData?.complementaryModality ?? currentCourse?.complementaryModality ?? 'assincrono'
+    initialData?.complementaryModality ?? 'assincrono'
   );
   const [extensionTotalHours, setExtensionTotalHours] = useState<number>(
-    initialData?.extensionTotalHours ?? currentCourse?.extensionTotalHours ?? 0
+    initialData?.extensionTotalHours ?? 0
   );
   const [extensionModality, setExtensionModality] = useState<DeliveryModalityFlag>(
-    initialData?.extensionModality ?? currentCourse?.extensionModality ?? 'presencial'
+    initialData?.extensionModality ?? 'presencial'
   );
   const [hasLaboratory, setHasLaboratory] = useState<boolean>(
-    initialData?.hasLaboratory ?? currentCourse?.hasLaboratory ?? false
+    initialData?.hasLaboratory ?? false
   );
-  const [hasClinical, setHasClinical] = useState<boolean>(
-    initialData?.hasClinical ?? currentCourse?.hasClinical ?? false
-  );
+  const [hasClinical, setHasClinical] = useState<boolean>(initialData?.hasClinical ?? false);
   const splitFlags: SplitFlags = { hasLaboratory, hasClinical };
   const useChSplit = hasLaboratory || hasClinical;
 
@@ -323,6 +339,13 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     initialData?.modules || []
   );
 
+  const seedFileRef = useRef<HTMLInputElement>(null);
+  const [seedImportBusy, setSeedImportBusy] = useState(false);
+  const [seedImportMsg, setSeedImportMsg] = useState<{
+    type: 'ok' | 'warn' | 'err';
+    text: string;
+  } | null>(null);
+
   // State for Add Course Modal
   const [showAddCourseModal, setShowAddCourseModal] = useState(false);
   const [newCourseName, setNewCourseName] = useState('');
@@ -330,16 +353,42 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [newCourseDcn, setNewCourseDcn] = useState('');
   const [newCourseCine, setNewCourseCine] = useState('');
   const [newCourseAuthorizationAct, setNewCourseAuthorizationAct] = useState('');
+  const [listDrag, setListDrag] = useState<ListDrag | null>(null);
+  const [listDragOver, setListDragOver] = useState<ListDragOver | null>(null);
 
-  // Update linked fields when course changes
+  // Update linked fields when course is explicitly selected
+  const clearCourseLinkedFields = () => {
+    setRequiredTotalHours(0);
+    setDcnRef('');
+    setCineBrasilRef('');
+    setAuthorizationAct('');
+    setStructureDcns([]);
+    setDegrees(undefined);
+    setInternshipRequirement('Não Informado');
+    setMinInternshipHours(undefined);
+    setComplementaryRequirement('Não Informado');
+    setComplementaryTotalHours(0);
+    setComplementaryModality('assincrono');
+    setExtensionTotalHours(0);
+    setExtensionModality('presencial');
+    setFinalPaperRequirement('Não Informado');
+    setCoordinatorName('');
+    setCoordinatorEmail('');
+    setHasLaboratory(false);
+    setHasClinical(false);
+    setMinPresentialHoursPercent(0);
+    setMaxEadHoursPercent(100);
+  };
+
   const applyCourseData = (selected: Course, opts?: { skipModality?: boolean }) => {
+    setDraftCourseName(courseBaseName(selected.name));
     setRequiredTotalHours(selected.minTotalHours);
     setDcnRef(selected.activeDcn || '');
-    setCineBrasilRef(selected.cineBrasilCode || '');
+    setCineBrasilRef(formatCineBrasilLabel(selected.cineBrasilCode, selected.cineBrasilArea));
     setAuthorizationAct(selected.authorizationAct || '');
     setStructureDcns(selected.dcns || []);
     if (selected.modality && !opts?.skipModality) setModality(selected.modality);
-    setDegrees(selected.degrees || 'Bacharelado');
+    setDegrees(selected.degrees);
     setInternshipRequirement(selected.internshipRequirement || 'Não Informado');
     setMinInternshipHours(selected.minInternshipHours);
     setComplementaryRequirement(selected.complementaryRequirement || 'Não Informado');
@@ -358,14 +407,22 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setMaxEadHoursPercent(selected.maxEadPercent ?? (selected.modality === 'EAD' ? 90 : 40));
   };
 
-  const handleCourseChange = (courseKeyOrId: string) => {
-    const selected = resolveCourseByNameAndModality(courses, courseKeyOrId, modality);
+  const handleCourseChange = (courseId: string) => {
+    if (!courseId) {
+      setSelectedCourseId('');
+      setDraftCourseName('');
+      clearCourseLinkedFields();
+      return;
+    }
+    const selected =
+      courses.find((c) => c.id === courseId) ||
+      resolveCourseByNameAndModality(courses, courseId, modality);
     if (!selected) return;
     setSelectedCourseId(selected.id);
-    applyCourseData(selected, { skipModality: true });
+    applyCourseData(selected);
   };
 
-  /** Zera períodos/módulos e reaplica só os dados do curso (planilha em lote). */
+  /** Zera matriz sem forçar curso da lista. */
   const handleClearAndStartFresh = () => {
     setPeriods([]);
     setModules([]);
@@ -373,22 +430,135 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setActiveYearSemester('');
     setValidityStart('');
     setStatus('Em Elaboração');
-    const selected = courses.find((c) => c.id === selectedCourseId) || courses[0];
-    if (selected) applyCourseData(selected);
+    setSeedImportMsg(null);
+    setSelectedCourseId('');
+    setDraftCourseName('');
+    clearCourseLinkedFields();
   };
 
-  // Após uma carga em lote a lista de cursos muda: revalida a seleção e, em
-  // estruturas novas, traz os valores importados no lugar dos que estão em tela.
-  useEffect(() => {
-    if (courses.length === 0) return;
-    const selected = courses.find((c) => c.id === selectedCourseId);
-    if (!selected) {
-      setSelectedCourseId(courses[0].id);
-      applyCourseData(courses[0]);
+  /** Pré-preenche a matriz a partir de Excel/PDF.
+   *  Se o nome do curso do arquivo bater com o cadastro, carrega os dados cadastrados. */
+  const handleSeedFile = async (file: File) => {
+    const name = file.name.toLowerCase();
+    const isPdf = file.type.includes('pdf') || name.endsWith('.pdf');
+    const isSheet =
+      /\.(xlsx|xls|csv|tsv|txt)$/.test(name) || /spreadsheet|excel|csv/.test(file.type);
+
+    if (!isPdf && !isSheet) {
+      setSeedImportMsg({
+        type: 'err',
+        text: 'Use planilha (.xlsx, .xls, .csv) ou PDF no formato do relatório SAGA.',
+      });
       return;
     }
-    if (!initialData) applyCourseData(selected);
-  }, [courses]);
+
+    setSeedImportBusy(true);
+    setSeedImportMsg(null);
+
+    try {
+      let text = '';
+      if (isPdf) {
+        text = await extractTextFromPdf(await file.arrayBuffer());
+      } else if (/\.(xlsx|xls)$/.test(name)) {
+        text = await extractTextFromSpreadsheet(await file.arrayBuffer());
+      } else {
+        text = await file.text();
+      }
+
+      const result = parseSagaReportText(text, {
+        courseName: '',
+        courseId: '',
+        modality: 'Presencial',
+        code: '',
+        activeYearSemester: '',
+        structureType: 'disciplinar',
+      });
+
+      const parsed = result.structure;
+      const hints = result.hints;
+
+      // Matriz / organização do arquivo
+      setStructureType(parsed.structureType);
+      setStatus('Em Elaboração');
+      setPeriods(parsed.periods || []);
+      setModules(parsed.modules || []);
+
+      if (hints.structureCode) setCode(hints.structureCode);
+      else if (parsed.code) setCode(parsed.code);
+
+      if (hints.semester) setActiveYearSemester(hints.semester);
+      else if (parsed.activeYearSemester) setActiveYearSemester(parsed.activeYearSemester);
+
+      const fileModality = hints.modality || 'Presencial';
+      if (hints.modality) setModality(hints.modality);
+
+      let matchedCourse: Course | undefined;
+      let matchNote = '';
+
+      if (hints.courseName) {
+        const cleanName = courseBaseName(stripAcademicCoursePrefix(hints.courseName));
+        setDraftCourseName(cleanName);
+
+        matchedCourse =
+          findCourseByNameAndModality(courses, cleanName, fileModality) ||
+          findCourseTemplateByName(courses, cleanName);
+
+        if (matchedCourse) {
+          setSelectedCourseId(matchedCourse.id);
+          // Carrega cadastro; mantém modalidade detectada no arquivo quando houver
+          applyCourseData(matchedCourse, { skipModality: Boolean(hints.modality) });
+          if (hints.modality) setModality(hints.modality);
+          matchNote = ` Curso vinculado ao cadastro: “${courseBaseName(matchedCourse.name)}” (${matchedCourse.modality}).`;
+        } else {
+          setSelectedCourseId('');
+          matchNote = ` Curso detectado: “${cleanName}” (ainda não há correspondência no cadastro — selecione ou salve para incluir).`;
+        }
+      }
+
+      // Valores do arquivo complementam / não apagam o que veio do cadastro quando não informados
+      if (hints.totalHours && hints.totalHours > 0) setRequiredTotalHours(hints.totalHours);
+      if (hints.complementaryHours != null && hints.complementaryHours > 0) {
+        setComplementaryTotalHours(hints.complementaryHours);
+      }
+
+      const discCount =
+        (parsed.periods || []).reduce((n, p) => n + (p.disciplines?.length || 0), 0) +
+        (parsed.modules || []).reduce((n, m) => n + (m.disciplines?.length || 0), 0);
+      const unitLabel =
+        parsed.structureType === 'modular'
+          ? `${(parsed.modules || []).length} módulo(s)`
+          : `${(parsed.periods || []).length} período(s)`;
+
+      const warnSuffix = result.warnings.length > 0 ? ` ${result.warnings[0]}` : '';
+      setSeedImportMsg({
+        type: discCount > 0 ? 'ok' : 'warn',
+        text:
+          discCount > 0
+            ? `Pré-preenchido a partir de “${file.name}”: ${unitLabel}, ${discCount} componente(s).${matchNote}`
+            : `Arquivo lido, mas poucos dados de matriz foram reconhecidos.${warnSuffix} Complete manualmente.`,
+      });
+    } catch (err) {
+      console.error(err);
+      setSeedImportMsg({
+        type: 'err',
+        text: isPdf
+          ? 'Não foi possível ler o PDF. Se for imagem digitalizada, preencha a estrutura manualmente ou use Importar SAGA.'
+          : 'Não foi possível ler a planilha. Verifique o arquivo ou preencha manualmente.',
+      });
+    } finally {
+      setSeedImportBusy(false);
+    }
+  };
+
+  // Não auto-seleciona curso da lista — só corrige id inválido ao editar estrutura existente
+  useEffect(() => {
+    if (!initialData?.courseId) return;
+    if (courses.length === 0) return;
+    const selected = courses.find((c) => c.id === selectedCourseId);
+    if (!selected && selectedCourseId) {
+      setSelectedCourseId('');
+    }
+  }, [courses, initialData?.courseId, selectedCourseId]);
 
   // Quick course modal submit
   const handleCreateCourse = async (e: React.FormEvent) => {
@@ -410,21 +580,52 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     };
     await onAddCourse(newCourse);
     setSelectedCourseId(newCourse.id);
-    setRequiredTotalHours(newCourse.minTotalHours);
-    setDcnRef(newCourse.activeDcn);
-    setCineBrasilRef(newCourse.cineBrasilCode);
-    setAuthorizationAct(newCourse.authorizationAct || '');
+    applyCourseData(newCourse);
     setShowAddCourseModal(false);
     setNewCourseName('');
     setNewCourseAuthorizationAct('');
   };
 
+  /** CH do módulo = soma das CH dos conhecimentos (ou disciplinas, se não houver conhecimentos). */
+  const sumModuleComponentHours = (mod: ModuleData): number => {
+    const knows = mod.knowledges || [];
+    if (knows.length > 0) {
+      return knows.reduce((acc, k) => acc + (Number(k.hours) || 0), 0);
+    }
+    const discs = mod.disciplines || [];
+    if (discs.length > 0) {
+      return discs.reduce((acc, d) => acc + (Number(d.hours) || 0), 0);
+    }
+    return 0;
+  };
+
+  /** Espelha knowledges → disciplines para a tabela/totais não perderem itens manuais. */
+  const withSyncedModules = (list: ModuleData[]): ModuleData[] =>
+    list.map((m) =>
+      syncModuleKnowledgesToDisciplines({
+        ...m,
+        disciplines: (m.disciplines || []).map((d) => ({
+          ...d,
+          hasLaboratory,
+          hasClinical,
+        })),
+        knowledges: (m.knowledges || []).map((k) => ({
+          ...k,
+          hasLaboratory,
+          hasClinical,
+        })),
+        hours: sumModuleComponentHours(m),
+      })
+    );
+
   // Calculations for current form
+  const resolvedCourseName =
+    courseBaseName(currentCourse?.name || draftCourseName || '').trim() || '';
   const currentStructurePreview: CurriculumStructure = {
     id: initialData?.id || `struct-${Date.now()}`,
     code,
     courseId: selectedCourseId,
-    courseName: courseBaseName(currentCourse?.name || '') || 'Curso Selecionado',
+    courseName: resolvedCourseName || 'Curso sem nome',
     modality,
     activeYearSemester,
     structureType,
@@ -472,19 +673,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         : undefined,
     modules:
       structureType === 'modular'
-        ? modules.map((m) => ({
-            ...m,
-            disciplines: (m.disciplines || []).map((d) => ({
-              ...d,
-              hasLaboratory,
-              hasClinical,
-            })),
-            knowledges: (m.knowledges || []).map((k) => ({
-              ...k,
-              hasLaboratory,
-              hasClinical,
-            })),
-          }))
+        ? withSyncedModules(modules)
         : undefined,
     dcnRef,
     dcns: structureDcns,
@@ -508,7 +697,11 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     : 0;
   const isEadValid = currentEadPct <= maxEadHoursPercent;
 
-  const canSave = isChTotalValid && isPresentialValid && code.trim().length > 0;
+  const canSave =
+    isChTotalValid &&
+    isPresentialValid &&
+    code.trim().length > 0 &&
+    resolvedCourseName.length > 0;
 
   // Period / Module Helpers
   const addPeriod = () => {
@@ -536,10 +729,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         const newD: Discipline = {
           id: `d-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           code: `DISC${String(p.disciplines.length + 1).padStart(3, '0')}`,
-          name: 'Nova Disciplina',
+          name: '',
           type: 'Obrigatória',
           credits: 4,
-          hours: 80,
+          hours: 0,
           evaluationForm: modality === 'EAD' ? 'Nota (EAD)' : 'Resultado Final',
           modalityDelivery: modality === 'EAD' ? 'assincrono' : 'presencial',
           hasLaboratory,
@@ -548,6 +741,29 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         };
         return { ...p, disciplines: [...p.disciplines, newD] };
       })
+    );
+  };
+
+  const clearListDrag = () => {
+    setListDrag(null);
+    setListDragOver(null);
+  };
+
+  const reorderDisciplineInPeriod = (periodId: string, from: number, to: number) => {
+    setPeriods((prev) =>
+      prev.map((p) =>
+        p.id === periodId ? { ...p, disciplines: moveItemInList(p.disciplines, from, to) } : p
+      )
+    );
+  };
+
+  const reorderKnowledgeInModule = (moduleId: string, from: number, to: number) => {
+    setModules((prev) =>
+      prev.map((m) =>
+        m.id === moduleId && m.knowledges
+          ? { ...m, knowledges: moveItemInList(m.knowledges, from, to) }
+          : m
+      )
     );
   };
 
@@ -589,13 +805,16 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       branchName: undefined,
       competence: '',
       parentModuleId,
-      title: branch ? `Módulo Específico ${nextNum}${branch}` : `Módulo Integrado ${nextNum}`,
-      hours: 325,
+      title: branch
+        ? `Módulo Específico ${toRoman(nextNum)}${branch}`
+        : `Módulo Integrado ${toRoman(nextNum)}`,
+      hours: 0,
+      meetings: 0,
       disciplines: [],
       competencies: [
-        { id: `c-1-${Date.now()}`, category: 'conhecimento', name: 'Conhecimentos teóricos do módulo' },
-        { id: `c-2-${Date.now()}`, category: 'habilidade', name: 'Habilidades procedimentais aplicadas' },
-        { id: `c-3-${Date.now()}`, category: 'atitude', name: 'Atitudes éticas e postura profissional' },
+        { id: `c-1-${Date.now()}`, category: defaultSaberCategory('c', settings.pedagogicalNomenclature), name: '' },
+        { id: `c-2-${Date.now()}`, category: defaultSaberCategory('h', settings.pedagogicalNomenclature), name: '' },
+        { id: `c-3-${Date.now()}`, category: defaultSaberCategory('a', settings.pedagogicalNomenclature), name: '' },
       ],
     };
     setModules([...modules, newMod]);
@@ -692,13 +911,14 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               </label>
               <div className="flex gap-2">
                 <select
-                  value={normalizeCourseName(courseBaseName(currentCourse?.name || ''))}
+                  value={selectedCourseId}
                   onChange={(e) => handleCourseChange(e.target.value)}
                   className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
                 >
-                  {uniqueCourseOptions(courses).map((opt) => (
-                    <option key={opt.key} value={opt.key}>
-                      {opt.name}
+                  <option value="">Selecione o curso (opcional)</option>
+                  {courseSelectOptions(courses).map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
                     </option>
                   ))}
                 </select>
@@ -710,7 +930,66 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   + Novo Curso
                 </button>
               </div>
+              {draftCourseName && !selectedCourseId && (
+                <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                  Nome a partir do arquivo: <span className="text-[#002B49]">{draftCourseName}</span>
+                  {' '}(selecione na lista só se quiser carregar dados cadastrados)
+                </p>
+              )}
             </div>
+
+            {!initialData && (
+              <div className="md:col-span-3 lg:col-span-4">
+                <input
+                  ref={seedFileRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleSeedFile(file);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={seedImportBusy}
+                  onClick={() => seedFileRef.current?.click()}
+                  className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 hover:bg-slate-50 hover:border-[#002B49]/30 text-left transition disabled:opacity-60"
+                >
+                  <span className="shrink-0 w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500">
+                    {seedImportBusy ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-[#FF6B00]" />
+                    ) : (
+                      <Upload className="w-4 h-4" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[11px] font-bold text-slate-700">
+                      {seedImportBusy
+                        ? 'Lendo arquivo…'
+                        : 'Importar Excel ou PDF para iniciar (opcional)'}
+                    </span>
+                    <span className="block text-[10px] text-slate-500 mt-0.5 leading-snug">
+                      Mesmo formato do Importar SAGA. Pré-preenche a matriz; o restante você completa aqui.
+                    </span>
+                  </span>
+                </button>
+                {seedImportMsg && (
+                  <p
+                    className={`mt-1.5 text-[10px] font-semibold leading-snug ${
+                      seedImportMsg.type === 'ok'
+                        ? 'text-emerald-700'
+                        : seedImportMsg.type === 'warn'
+                        ? 'text-amber-700'
+                        : 'text-rose-700'
+                    }`}
+                  >
+                    {seedImportMsg.text}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Código da Estrutura */}
             <div>
@@ -737,6 +1016,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 onChange={(e) => {
                   const next = e.target.value as 'Presencial' | 'Semipresencial' | 'EAD';
                   setModality(next);
+                  // Só troca o vínculo se já houver curso selecionado na lista
+                  if (!selectedCourseId) return;
                   const resolved = resolveCourseByNameAndModality(courses, selectedCourseId, next);
                   if (resolved && resolved.id !== selectedCourseId) {
                     setSelectedCourseId(resolved.id);
@@ -846,10 +1127,12 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             </div>
           </div>
 
-          {/* Dados do curso (carregados automaticamente; editáveis) */}
+          {/* Dados do curso — só vêm do cadastro se o usuário selecionar */}
           <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
             <p className="text-xs font-bold text-[#002B49] uppercase tracking-wider">
-              Dados do curso selecionado (editáveis nesta estrutura)
+              {selectedCourseId
+                ? 'Dados do curso selecionado (editáveis nesta estrutura)'
+                : 'Dados do curso (preencha manualmente ou selecione um curso na lista)'}
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-3">
               <div>
@@ -1067,21 +1350,36 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
           {/* Complementary & Extension Configuration Row */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-3 border-t border-slate-100">
-            {/* Atividades Complementares — apenas CH */}
+            {/* Atividades Complementares */}
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
               <label className="block text-xs font-bold text-slate-800">
-                Atividades Complementares (CH)
+                Atividades Complementares (CH & Modalidade)
               </label>
-              <div>
-                <span className="text-[10px] text-slate-500 block mb-1">Carga Horária (h)</span>
-                <input
-                  type="number"
-                  value={complementaryTotalHours}
-                  onChange={(e) => setComplementaryTotalHours(Number(e.target.value))}
-                  className="w-full px-2.5 py-2 rounded-lg border text-xs font-bold bg-white"
-                  placeholder="Ex: 100"
-                  min={0}
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] text-slate-500 block mb-1">Carga Horária (h)</span>
+                  <input
+                    type="number"
+                    value={complementaryTotalHours}
+                    onChange={(e) => setComplementaryTotalHours(Number(e.target.value))}
+                    className="w-full px-2.5 py-2 rounded-lg border text-xs font-bold bg-white"
+                    placeholder="Ex: 100"
+                    min={0}
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block mb-1">Modalidade / Oferta</span>
+                  <select
+                    value={complementaryModality}
+                    onChange={(e) => setComplementaryModality(e.target.value as DeliveryModalityFlag)}
+                    className="w-full px-2.5 py-2 rounded-lg border text-xs font-medium bg-white"
+                  >
+                    <option value="presencial">Presencial</option>
+                    <option value="sincrono">Síncrono</option>
+                    <option value="sincrono-mediado">Síncrono-Mediado</option>
+                    <option value="assincrono">Assíncrono</option>
+                  </select>
+                </div>
               </div>
               <p className="text-[10px] text-slate-500">
                 Deve corresponder à CH mínima de atividades complementares informada no cadastro/lote do curso.
@@ -1091,7 +1389,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             {/* Extensão */}
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
               <label className="block text-xs font-bold text-slate-800">
-                Carga Horária de Extensão (CH Total & Modalidade)
+                Carga Horária de Extensão (CH & Modalidade)
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1108,7 +1406,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   <span className="text-[10px] text-slate-500 block mb-1">Modalidade / Oferta</span>
                   <select
                     value={extensionModality}
-                    onChange={(e) => setExtensionModality(e.target.value as any)}
+                    onChange={(e) => setExtensionModality(e.target.value as DeliveryModalityFlag)}
                     className="w-full px-2.5 py-2 rounded-lg border text-xs font-medium bg-white"
                   >
                     <option value="presencial">Presencial</option>
@@ -1180,6 +1478,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 type="text"
                 value={cineBrasilRef}
                 onChange={(e) => setCineBrasilRef(e.target.value)}
+                placeholder="Ex.: 0211D01 - Produção audiovisual, de mídia e cultural"
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white text-slate-900"
               />
             </div>
@@ -1253,9 +1552,69 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   </div>
 
                   <div className="p-4 space-y-3">
-                    {period.disciplines.map((disc, dIdx) => (
-                      <div key={disc.id} className="bg-white p-3 rounded-lg border border-slate-200 grid grid-cols-1 sm:grid-cols-6 lg:grid-cols-12 gap-2 text-xs items-center">
-                        <div className="lg:col-span-2">
+                    {period.disciplines.map((disc, dIdx) => {
+                      const isDragging =
+                        listDrag?.kind === 'discipline' &&
+                        listDrag.periodId === period.id &&
+                        listDrag.from === dIdx;
+                      const isDropTarget =
+                        listDragOver?.kind === 'discipline' &&
+                        listDragOver.parentId === period.id &&
+                        listDragOver.index === dIdx &&
+                        listDrag?.from !== dIdx;
+
+                      return (
+                      <div
+                        key={disc.id}
+                        onDragOver={(e) => {
+                          if (listDrag?.kind !== 'discipline' || listDrag.periodId !== period.id) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          if (
+                            !listDragOver ||
+                            listDragOver.kind !== 'discipline' ||
+                            listDragOver.parentId !== period.id ||
+                            listDragOver.index !== dIdx
+                          ) {
+                            setListDragOver({ kind: 'discipline', parentId: period.id, index: dIdx });
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (
+                            listDragOver?.kind === 'discipline' &&
+                            listDragOver.parentId === period.id &&
+                            listDragOver.index === dIdx
+                          ) {
+                            setListDragOver(null);
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (listDrag?.kind !== 'discipline' || listDrag.periodId !== period.id) return;
+                          reorderDisciplineInPeriod(period.id, listDrag.from, dIdx);
+                          clearListDrag();
+                        }}
+                        className={`bg-white p-3 rounded-lg border grid grid-cols-1 sm:grid-cols-6 lg:grid-cols-12 gap-2 text-xs items-center transition ${
+                          isDragging ? 'opacity-40 border-slate-300' : isDropTarget ? 'border-[#FF6B00] ring-2 ring-[#FF6B00]/30' : 'border-slate-200'
+                        }`}
+                      >
+                        <div className="lg:col-span-2 flex items-end gap-1">
+                          <button
+                            type="button"
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.effectAllowed = 'move';
+                              e.dataTransfer.setData('text/plain', disc.id);
+                              setListDrag({ kind: 'discipline', periodId: period.id, from: dIdx });
+                            }}
+                            onDragEnd={clearListDrag}
+                            className="text-slate-400 hover:text-[#002B49] cursor-grab active:cursor-grabbing p-1 mb-0.5 shrink-0"
+                            title="Arrastar para reordenar"
+                            aria-label="Arrastar disciplina"
+                          >
+                            <GripVertical className="w-4 h-4" />
+                          </button>
+                          <div className="flex-1 min-w-0">
                           <label className="text-[10px] text-slate-400 block">Código</label>
                           <input
                             type="text"
@@ -1267,6 +1626,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             }}
                             className="w-full px-2 py-1 border rounded font-mono font-bold text-xs"
                           />
+                          </div>
                         </div>
 
                         <div className="lg:col-span-3">
@@ -1279,6 +1639,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               updated[pIdx].disciplines[dIdx].name = e.target.value;
                               setPeriods(updated);
                             }}
+                            placeholder="Nova disciplina"
                             className="w-full px-2 py-1 border rounded text-xs"
                           />
                         </div>
@@ -1373,9 +1734,41 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           </>
                         )}
 
-                        <div className={`${useChSplit ? 'lg:col-span-4' : 'lg:col-span-1'} flex items-center justify-between gap-1 pt-3`}>
+                        <div className={`${useChSplit ? 'lg:col-span-4' : 'lg:col-span-1'} flex items-center justify-end gap-0.5 pt-3`}>
+                          <button
+                            type="button"
+                            disabled={dIdx === 0}
+                            onClick={() => {
+                              const updated = [...periods];
+                              const list = [...updated[pIdx].disciplines];
+                              if (dIdx <= 0) return;
+                              [list[dIdx - 1], list[dIdx]] = [list[dIdx], list[dIdx - 1]];
+                              updated[pIdx].disciplines = list;
+                              setPeriods(updated);
+                            }}
+                            className="text-slate-400 hover:text-[#002B49] p-1 disabled:opacity-30"
+                            title="Mover para cima"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={dIdx === period.disciplines.length - 1}
+                            onClick={() => {
+                              const updated = [...periods];
+                              const list = [...updated[pIdx].disciplines];
+                              if (dIdx >= list.length - 1) return;
+                              [list[dIdx + 1], list[dIdx]] = [list[dIdx], list[dIdx + 1]];
+                              updated[pIdx].disciplines = list;
+                              setPeriods(updated);
+                            }}
+                            className="text-slate-400 hover:text-[#002B49] p-1 disabled:opacity-30"
+                            title="Mover para baixo"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
                           <label
-                            className="text-[10px] text-slate-700 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                            className="text-[10px] text-slate-700 flex items-center gap-1 cursor-pointer whitespace-nowrap ml-1"
                             title="Disciplina de Extensão"
                           >
                             <input
@@ -1417,7 +1810,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -1487,33 +1881,41 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   }`}
                 >
                   <div className="bg-[#002B49] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded bg-[#FF6B00] text-xs font-black text-white">
-                        Módulo {mod.number}
-                        {mod.branch ? mod.branch : ''}
-                      </span>
+                    <div className="flex items-center gap-2 min-w-0">
                       {mod.branch && (
-                        <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-xs font-bold">
+                        <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-xs font-bold shrink-0">
                           Trilha {mod.branch}
                         </span>
                       )}
-                      <span className="font-bold text-xs truncate max-w-[280px]">{mod.title}</span>
+                      <span className="font-bold text-xs truncate">
+                        {formatModuleName(mod.number, mod.title, mod.branch)}
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1 text-xs">
+                      <div className="flex items-center gap-1 text-xs" title="Soma automática das CH dos conhecimentos">
                         <span>CH Módulo:</span>
+                        <span className="min-w-[2.5rem] px-1.5 py-0.5 text-slate-900 bg-white/95 rounded font-black text-center text-xs tabular-nums">
+                          {sumModuleComponentHours(mod)}
+                        </span>
+                        <span>h</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-xs" title="Quantidade de encontros deste módulo">
+                        <span>Encontros:</span>
                         <input
                           type="number"
-                          value={mod.hours}
+                          min={0}
+                          value={mod.meetings ?? 0}
                           onChange={(e) => {
                             const updated = [...modules];
-                            updated[mIdx].hours = Number(e.target.value);
+                            updated[mIdx] = {
+                              ...updated[mIdx],
+                              meetings: Math.max(0, Number(e.target.value) || 0),
+                            };
                             setModules(updated);
                           }}
-                          className="w-16 px-1.5 py-0.5 text-slate-900 bg-white rounded font-bold text-center text-xs"
+                          className="w-14 px-1.5 py-0.5 text-slate-900 bg-white rounded font-black text-center text-xs tabular-nums border-0 focus:ring-2 focus:ring-[#FF6B00]"
                         />
-                        <span>h</span>
                       </div>
                       <button
                         type="button"
@@ -1530,23 +1932,24 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Nº do Módulo
+                          Nº do Módulo (romano)
                         </label>
                         <input
-                          type="number"
-                          min={1}
-                          value={mod.number}
+                          type="text"
+                          value={toRoman(mod.number)}
                           onChange={(e) => {
                             const updated = [...modules];
-                            updated[mIdx].number = Number(e.target.value) || 1;
-                            updated[mIdx].code = `MOD-${String(updated[mIdx].number).padStart(2, '0')}${
+                            const nextNum = fromRoman(e.target.value);
+                            updated[mIdx].number = nextNum;
+                            updated[mIdx].code = `MOD-${String(nextNum).padStart(2, '0')}${
                               updated[mIdx].branch || ''
                             }`;
                             setModules(updated);
                           }}
-                          className="w-full px-3 py-1.5 border rounded text-xs bg-white"
+                          className="w-full px-3 py-1.5 border rounded text-xs bg-white font-bold uppercase tracking-wide"
+                          placeholder="I, II, III…"
                         />
-                        <p className="text-[9px] text-slate-400 mt-0.5">Ex.: 1, 2… (romano no Excel)</p>
+                        <p className="text-[9px] text-slate-400 mt-0.5">Ex.: I, II, III, IV…</p>
                       </div>
                       <div className="md:col-span-2">
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
@@ -1635,8 +2038,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             const updated = [...modules];
                             updated[mIdx].competencies.push({
                               id: `comp-${Date.now()}`,
-                              category: isZabala ? 'conceitual' : 'conhecimento',
-                              name: 'Novo saber aplicado',
+                              category: defaultSaberCategory('c', settings.pedagogicalNomenclature),
+                              name: '',
                             });
                             setModules(updated);
                           }}
@@ -1658,23 +2061,33 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               }}
                               className="px-2 py-1 rounded border text-[11px] font-bold bg-white"
                             >
-                              <option value={isZabala ? 'conceitual' : 'conhecimento'}>{chaLabels.c}</option>
-                              <option value={isZabala ? 'procedimental' : 'habilidade'}>{chaLabels.h}</option>
-                              <option value={isZabala ? 'atitudinal' : 'atitude'}>{chaLabels.a}</option>
-                              {/* Compatibilidade com valores já salvos */}
-                              {!isZabala && (
-                                <>
-                                  <option value="conceitual">{chaLabels.c}</option>
-                                  <option value="procedimental">{chaLabels.h}</option>
-                                  <option value="atitudinal">{chaLabels.a}</option>
-                                </>
+                              <option value={defaultSaberCategory('c', settings.pedagogicalNomenclature)}>
+                                {chaLabels.c}
+                              </option>
+                              <option value={defaultSaberCategory('h', settings.pedagogicalNomenclature)}>
+                                {chaLabels.h}
+                              </option>
+                              <option value={defaultSaberCategory('a', settings.pedagogicalNomenclature)}>
+                                {chaLabels.a}
+                              </option>
+                              {/* Mantém valor legado selecionável com o rótulo da nomenclatura ativa */}
+                              {comp.category === 'conhecimento' && isZabala && (
+                                <option value="conhecimento">{chaLabels.c}</option>
                               )}
-                              {isZabala && (
-                                <>
-                                  <option value="conhecimento">{chaLabels.c}</option>
-                                  <option value="habilidade">{chaLabels.h}</option>
-                                  <option value="atitude">{chaLabels.a}</option>
-                                </>
+                              {comp.category === 'habilidade' && isZabala && (
+                                <option value="habilidade">{chaLabels.h}</option>
+                              )}
+                              {comp.category === 'atitude' && isZabala && (
+                                <option value="atitude">{chaLabels.a}</option>
+                              )}
+                              {comp.category === 'conceitual' && !isZabala && (
+                                <option value="conceitual">{chaLabels.c}</option>
+                              )}
+                              {comp.category === 'procedimental' && !isZabala && (
+                                <option value="procedimental">{chaLabels.h}</option>
+                              )}
+                              {comp.category === 'atitudinal' && !isZabala && (
+                                <option value="atitudinal">{chaLabels.a}</option>
                               )}
                             </select>
 
@@ -1686,7 +2099,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                 updated[mIdx].competencies[cIdx].name = e.target.value;
                                 setModules(updated);
                               }}
-                              placeholder="Descrição do saber"
+                              placeholder="Novo saber aplicado"
                               className="flex-1 min-w-[200px] px-2 py-1 border rounded text-xs"
                             />
 
@@ -1719,9 +2132,9 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             if (!updated[mIdx].knowledges) updated[mIdx].knowledges = [];
                             updated[mIdx].knowledges.push({
                               id: `know-${Date.now()}`,
-                              name: 'Novo conhecimento aplicado',
+                              name: '',
                               category: 'saber-conceitual',
-                              hours: 20,
+                              hours: 0,
                               modalityDelivery: 'presencial',
                               hasLaboratory,
                               hasClinical,
@@ -1735,24 +2148,71 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                       </div>
 
                       <div className="space-y-2">
-                        {mod.knowledges?.map((know, kIdx) => (
-                          <div key={know.id} className="bg-white p-2 rounded border border-sky-200/80 flex flex-wrap items-center gap-2 text-xs">
-                            <select
-                              value={know.category}
-                              onChange={(e) => {
-                                const updated = [...modules];
-                                if (updated[mIdx].knowledges) {
-                                  updated[mIdx].knowledges[kIdx].category = e.target.value as any;
-                                  setModules(updated);
-                                }
-                              }}
-                              className="px-2 py-1 rounded border text-[11px] font-bold bg-white text-sky-900"
-                            >
-                              <option value="saber-conceitual">Conceitual (Saber)</option>
-                              <option value="saber-procedimental">Procedimental (Fazer)</option>
-                              <option value="saber-atitudinal">Atitudinal (Ser/Agir)</option>
-                            </select>
+                        {mod.knowledges?.map((know, kIdx) => {
+                          const isDragging =
+                            listDrag?.kind === 'knowledge' &&
+                            listDrag.moduleId === mod.id &&
+                            listDrag.from === kIdx;
+                          const isDropTarget =
+                            listDragOver?.kind === 'knowledge' &&
+                            listDragOver.parentId === mod.id &&
+                            listDragOver.index === kIdx &&
+                            listDrag?.from !== kIdx;
 
+                          return (
+                          <div
+                            key={know.id}
+                            onDragOver={(e) => {
+                              if (listDrag?.kind !== 'knowledge' || listDrag.moduleId !== mod.id) return;
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                              if (
+                                !listDragOver ||
+                                listDragOver.kind !== 'knowledge' ||
+                                listDragOver.parentId !== mod.id ||
+                                listDragOver.index !== kIdx
+                              ) {
+                                setListDragOver({ kind: 'knowledge', parentId: mod.id, index: kIdx });
+                              }
+                            }}
+                            onDragLeave={() => {
+                              if (
+                                listDragOver?.kind === 'knowledge' &&
+                                listDragOver.parentId === mod.id &&
+                                listDragOver.index === kIdx
+                              ) {
+                                setListDragOver(null);
+                              }
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (listDrag?.kind !== 'knowledge' || listDrag.moduleId !== mod.id) return;
+                              reorderKnowledgeInModule(mod.id, listDrag.from, kIdx);
+                              clearListDrag();
+                            }}
+                            className={`bg-white p-2 rounded border flex flex-wrap items-center gap-2 text-xs transition ${
+                              isDragging
+                                ? 'opacity-40 border-sky-200/80'
+                                : isDropTarget
+                                ? 'border-[#FF6B00] ring-2 ring-[#FF6B00]/30'
+                                : 'border-sky-200/80'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.effectAllowed = 'move';
+                                e.dataTransfer.setData('text/plain', know.id);
+                                setListDrag({ kind: 'knowledge', moduleId: mod.id, from: kIdx });
+                              }}
+                              onDragEnd={clearListDrag}
+                              className="text-slate-400 hover:text-[#002B49] cursor-grab active:cursor-grabbing p-0.5 shrink-0"
+                              title="Arrastar para reordenar"
+                              aria-label="Arrastar conhecimento"
+                            >
+                              <GripVertical className="w-3.5 h-3.5" />
+                            </button>
                             <input
                               type="text"
                               value={know.name}
@@ -1763,7 +2223,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                   setModules(updated);
                                 }
                               }}
-                              placeholder="Nome do conhecimento"
+                              placeholder="Novo conhecimento aplicado"
                               className="flex-1 min-w-[180px] px-2 py-1 border rounded text-xs"
                             />
 
@@ -1842,6 +2302,40 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
                             <button
                               type="button"
+                              disabled={kIdx === 0}
+                              onClick={() => {
+                                const updated = [...modules];
+                                if (!updated[mIdx].knowledges) return;
+                                const list = [...updated[mIdx].knowledges];
+                                if (kIdx <= 0) return;
+                                [list[kIdx - 1], list[kIdx]] = [list[kIdx], list[kIdx - 1]];
+                                updated[mIdx].knowledges = list;
+                                setModules(updated);
+                              }}
+                              className="text-slate-400 hover:text-[#002B49] p-1 disabled:opacity-30"
+                              title="Mover para cima"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={kIdx === (mod.knowledges?.length || 0) - 1}
+                              onClick={() => {
+                                const updated = [...modules];
+                                if (!updated[mIdx].knowledges) return;
+                                const list = [...updated[mIdx].knowledges];
+                                if (kIdx >= list.length - 1) return;
+                                [list[kIdx + 1], list[kIdx]] = [list[kIdx], list[kIdx + 1]];
+                                updated[mIdx].knowledges = list;
+                                setModules(updated);
+                              }}
+                              className="text-slate-400 hover:text-[#002B49] p-1 disabled:opacity-30"
+                              title="Mover para baixo"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => {
                                 const updated = [...modules];
                                 if (updated[mIdx].knowledges) {
@@ -1854,7 +2348,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               <Trash2 className="w-3 h-3" />
                             </button>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -2017,6 +2512,15 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     <div>
                       <strong className="block font-bold">Código da Estrutura Vazio:</strong>
                       É obrigatório informar o código identificador da estrutura curricular (ex: TAM242).
+                    </div>
+                  </li>
+                )}
+                {resolvedCourseName.length === 0 && (
+                  <li className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 flex items-start gap-2">
+                    <span className="font-bold mt-0.5 text-rose-600">▪</span>
+                    <div>
+                      <strong className="block font-bold">Curso não informado:</strong>
+                      Importe um arquivo com o nome do curso, selecione um curso na lista ou cadastre um novo.
                     </div>
                   </li>
                 )}

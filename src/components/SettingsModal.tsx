@@ -1,11 +1,13 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   AppSettings,
   Course,
   ModalityType,
+  PedagogicalNomenclature,
   ReportNoteBlock,
   RequirementLevel,
 } from '../types/curriculum';
+import { getSaberesLabels } from '../utils/nomenclature';
 import { 
   Settings, 
   Save, 
@@ -27,7 +29,7 @@ import {
 } from 'lucide-react';
 import { DcnViewerModal } from './DcnViewerModal';
 import { exportCourseBatchTemplate, readCourseBatchFile } from '../services/exportService';
-import { DEFAULT_REPORT_NOTES_TITLE, createReportNoteBlock } from '../services/reportNotes';
+import { DEFAULT_REPORT_NOTES_TITLE, createReportNoteBlock, normalizeReportNotesTitle } from '../services/reportNotes';
 import {
   COURSE_BATCH_HEADERS,
   applyCourseBatchRows,
@@ -58,12 +60,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [hideValidityDefault, setHideValidityDefault] = useState(
     settings.hideValidityStartDefault
   );
+
+  useEffect(() => {
+    setNomenclature(settings.pedagogicalNomenclature);
+  }, [settings.pedagogicalNomenclature]);
   const [institutionName, setInstitutionName] = useState(settings.institutionName);
   const [defaultEadLimit, setDefaultEadLimit] = useState(settings.defaultEadPercentLimit);
   const [defaultExtensionMin, setDefaultExtensionMin] = useState(settings.defaultExtensionPercentMin);
 
   const [reportNotesTitle, setReportNotesTitle] = useState(
-    settings.reportNotesTitle || DEFAULT_REPORT_NOTES_TITLE
+    normalizeReportNotesTitle(settings.reportNotesTitle)
   );
   const [reportNotes, setReportNotes] = useState<{
     disciplinar: ReportNoteBlock[];
@@ -179,21 +185,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTimeout(() => setSaveSuccessMsg(null), 5000);
   };
 
-  const handleSaveAll = async () => {
-    const updatedSettings: AppSettings = {
-      pedagogicalNomenclature: nomenclature,
-      hideValidityStartDefault: hideValidityDefault,
-      institutionName,
-      defaultEadPercentLimit: defaultEadLimit,
-      defaultPresentialPercentMin: settings.defaultPresentialPercentMin || 60,
-      defaultExtensionPercentMin: defaultExtensionMin,
-      campusDefault: settings.campusDefault || 'Sede: UNISUAM-RJ',
-      reportNotesTitle: reportNotesTitle.trim() || DEFAULT_REPORT_NOTES_TITLE,
-      reportNotesDisciplinar: reportNotes.disciplinar,
-      reportNotesModular: reportNotes.modular,
-    };
+  const buildSettingsDraft = (nomen: PedagogicalNomenclature = nomenclature): AppSettings => ({
+    pedagogicalNomenclature: nomen,
+    hideValidityStartDefault: hideValidityDefault,
+    institutionName,
+    defaultEadPercentLimit: defaultEadLimit,
+    defaultPresentialPercentMin: settings.defaultPresentialPercentMin || 60,
+    defaultExtensionPercentMin: defaultExtensionMin,
+    campusDefault: settings.campusDefault || 'Sede: UNISUAM-RJ',
+    reportNotesTitle: normalizeReportNotesTitle(reportNotesTitle),
+    reportNotesDisciplinar: reportNotes.disciplinar,
+    reportNotesModular: reportNotes.modular,
+  });
 
-    await onSaveSettings(updatedSettings);
+  /** Troca CHA ↔ Zabala e aplica na hora em todas as estruturas já cadastradas. */
+  const handleNomenclatureChange = async (next: PedagogicalNomenclature) => {
+    if (next === nomenclature) return;
+    setNomenclature(next);
+    await onSaveSettings(buildSettingsDraft(next));
+    const labels = getSaberesLabels(next);
+    setSaveSuccessMsg(
+      next === 'zabala'
+        ? `Nomenclatura Zabala ativa: ${labels.c}, ${labels.h} e ${labels.a} — já vale para todas as estruturas.`
+        : `Nomenclatura CHA ativa: ${labels.c}, ${labels.h} e ${labels.a} — já vale para todas as estruturas.`
+    );
+    setTimeout(() => setSaveSuccessMsg(null), 4500);
+  };
+
+  const handleSaveAll = async () => {
+    await onSaveSettings(buildSettingsDraft());
     await onBatchUpdateCourses(editableCourses);
     setSaveSuccessMsg('Configurações e carga em lote salvas!');
     setTimeout(() => setSaveSuccessMsg(null), 3000);
@@ -246,13 +266,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             1. Nomenclatura Pedagógica dos Módulos
           </h3>
           <p className="text-xs text-slate-500">
-            Escolha o modelo taxonômico para os cursos modulares em todo o sistema, relatórios impressos, PDF, Excel e HTML interativo.
+            A troca vale na hora para tabelas, mapa, formulário e exportações das estruturas já cadastradas — sem regravar cada curso.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Opção CHA */}
             <div
-              onClick={() => setNomenclature('cha')}
+              onClick={() => void handleNomenclatureChange('cha')}
               className={`p-4 rounded-xl border cursor-pointer transition select-none ${
                 nomenclature === 'cha'
                   ? 'border-[#002B49] bg-blue-50/50 ring-2 ring-[#002B49]'
@@ -272,7 +292,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* Opção Antoni Zabala */}
             <div
-              onClick={() => setNomenclature('zabala')}
+              onClick={() => void handleNomenclatureChange('zabala')}
               className={`p-4 rounded-xl border cursor-pointer transition select-none ${
                 nomenclature === 'zabala'
                   ? 'border-[#FF6B00] bg-orange-50/50 ring-2 ring-[#FF6B00]'
@@ -349,7 +369,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div>
             <h3 className="text-sm font-bold text-[#002B49] uppercase tracking-wider flex items-center gap-2">
               <NotebookPen className="w-4 h-4 text-[#FF6B00]" />
-              3. Página de Observações, Regras e Explicações da Ementa
+              3. Página de Observações, Regras e Explicações da Estrutura
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-4xl">
               Este conteúdo é gerado como 2ª página nas exportações em PDF, PNG e HTML, com o mesmo
@@ -452,7 +472,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <textarea
                   value={block.text}
                   onChange={(e) => handleNoteBlockChange(block.id, 'text', e.target.value)}
-                  placeholder="Texto da observação, regra ou explicação sobre o conteúdo da ementa."
+                  placeholder="Texto da observação, regra ou explicação sobre o conteúdo da estrutura."
                   rows={4}
                   className="w-full px-3 py-2 border rounded-lg text-xs leading-relaxed"
                 />
@@ -540,7 +560,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onChange={(e) => setCsvText(e.target.value)}
                 placeholder={
                   COURSE_BATCH_HEADERS.join(';') +
-                  '\nAdministração;Bacharelado;Presencial;3000;Obrigatório;300;300;Obrigatório;100;Obrigatório;Maria Silva;maria@unisuam.edu.br;Portaria nº 123/2022;DCN Administração;https://drive.google.com/file/d/xxx/view'
+                  '\nDesign Gráfico;Tecnológico;Presencial;1600;Não Informado;Não Informado;160;Obrigatório;220;Não Informado;0211D01;Produção audiovisual, de mídia e cultural;Maria Silva;maria@unisuam.edu.br;Portaria nº 123/2022;Não;Não;DCN Design;https://drive.google.com/file/d/xxx/view'
                 }
                 className="flex-1 h-28 p-2 border rounded font-mono text-[11px] bg-white leading-relaxed"
               />
@@ -555,7 +575,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[28rem]">
-            <table className="w-full text-[11px] text-left min-w-[2100px]">
+            <table className="w-full text-[11px] text-left min-w-[2400px]">
               <thead className="bg-slate-100 text-slate-700 uppercase font-bold sticky top-0 border-b border-slate-200 z-10">
                 <tr>
                   <th className="px-2.5 py-2">Curso</th>
@@ -568,6 +588,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <th className="px-2.5 py-2">Ativ. Comp.</th>
                   <th className="px-2.5 py-2">CH Ativ. Comp.</th>
                   <th className="px-2.5 py-2">TCC</th>
+                  <th className="px-2.5 py-2">Código Cine</th>
+                  <th className="px-2.5 py-2">Cine Área</th>
                   <th className="px-2.5 py-2">Coordenador</th>
                   <th className="px-2.5 py-2">E-mail</th>
                   <th className="px-2.5 py-2">Ato Autorizativo</th>
@@ -730,6 +752,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="px-2.5 py-1.5">
+                      <input
+                        type="text"
+                        value={c.cineBrasilCode || ''}
+                        onChange={(e) =>
+                          handleCourseFieldChange(c.id, 'cineBrasilCode', e.target.value)
+                        }
+                        placeholder="0211D01"
+                        className="w-24 px-1.5 py-1 border rounded bg-slate-50 font-mono"
+                      />
+                    </td>
+                    <td className="px-2.5 py-1.5">
+                      <input
+                        type="text"
+                        value={c.cineBrasilArea || ''}
+                        onChange={(e) =>
+                          handleCourseFieldChange(c.id, 'cineBrasilArea', e.target.value)
+                        }
+                        placeholder="Produção audiovisual..."
+                        className="w-48 px-1.5 py-1 border rounded bg-slate-50"
+                      />
                     </td>
                     <td className="px-2.5 py-1.5">
                       <input

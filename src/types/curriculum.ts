@@ -417,6 +417,8 @@ export interface ModuleData {
   parentModuleId?: string; // ID do módulo que antecede na árvore
   title: string;
   hours: number;
+  /** Quantidade de encontros do módulo (estrutura modular). */
+  meetings?: number;
   disciplines: Discipline[];
   competencies: CompetencyCHA[];
   knowledges?: KnowledgeItem[]; // Conhecimentos com regras de Presencial, Síncrono-Mediado e Assíncrono

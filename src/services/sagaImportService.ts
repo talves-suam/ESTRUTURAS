@@ -27,6 +27,9 @@ export interface SagaHeaderHints {
   structureCode?: string;
   semester?: string;
   modality?: ModalityType;
+  structureType?: 'disciplinar' | 'modular';
+  totalHours?: number;
+  complementaryHours?: number;
 }
 
 export interface SagaParseResult {
@@ -115,13 +118,29 @@ function rebuildPageLines(items: TextContentItem[]): string {
 
 export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
   const hints: SagaHeaderHints = {};
-  const head = rawText.slice(0, 2500);
+  const head = rawText.slice(0, 3500);
+  const full = rawText;
 
-  const courseMatch = head.match(
-    /(?:curso|nome do curso)\s*[:\-]\s*([A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç0-9][^\n]{2,80})/i
+  const courseLabeled = head.match(
+    /(?:curso|nome do curso)\s*[:\-]\s*([A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç0-9][^\n]{2,100})/i
   );
-  if (courseMatch) {
-    hints.courseName = courseMatch[1].replace(/\s+/g, ' ').trim();
+  if (courseLabeled) {
+    hints.courseName = courseLabeled[1].replace(/\s+/g, ' ').trim();
+  } else {
+    const courseLine = head.match(
+      /^\s*((?:Curso\s+Superior\s+de\s+Tecnologia\s+em|CST\s+em|Tecn[oó]logo\s+em|Bacharelado\s+em|Licenciatura\s+em|Curso\s+de)\s+[^\n]{3,80})/im
+    );
+    if (courseLine) {
+      hints.courseName = courseLine[1]
+        .replace(/\s*[—–-]\s*Estrutura.*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    } else {
+      const cstShort = head.match(/\bCST\s+em\s+([^\n—–-]{3,60})/i);
+      if (cstShort) {
+        hints.courseName = `CST em ${cstShort[1].replace(/\s+/g, ' ').trim()}`;
+      }
+    }
   }
 
   const codeMatch = head.match(
@@ -139,12 +158,34 @@ export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
     hints.semester = semMatch[1].replace(/\s+/g, '').replace('/', '.');
   }
 
-  if (/\b(semipresencial|semi[\s-]?presencial)\b/i.test(head)) {
+  if (/\b(semipresencial|semi[\s-]?presencial|h[ií]brido)\b/i.test(head)) {
     hints.modality = 'Semipresencial';
   } else if (/\b(ead|a dist[aâ]ncia|educa[cç][aã]o a dist[aâ]ncia)\b/i.test(head)) {
     hints.modality = 'EAD';
   } else if (/\bpresencial\b/i.test(head)) {
     hints.modality = 'Presencial';
+  }
+
+  const modularSignals =
+    /m[oó]dulo\s*(?:[ivxlcdm]+|\d+)/i.test(full) ||
+    /m[oó]dulos?\s+tem[aá]ticos?/i.test(full) ||
+    /componente\s+curricular\s*\/\s*conhecimento/i.test(full);
+  if (modularSignals) {
+    hints.structureType = 'modular';
+  } else if (/\d+\s*[ºo°]?\s*per[íi]odo/i.test(full)) {
+    hints.structureType = 'disciplinar';
+  }
+
+  const totalMatch = full.match(
+    /(?:carga\s+hor[aá]ria\s+total(?:\s+do\s+curso)?|ch\s+total)\s*[:\-]?\s*([\d.]+)\s*h/i
+  );
+  if (totalMatch) {
+    hints.totalHours = Number(totalMatch[1].replace(/\./g, ''));
+  }
+
+  const compMatch = full.match(/atividades\s+complementares\s+([\d.]+)\s*h/i);
+  if (compMatch) {
+    hints.complementaryHours = Number(compMatch[1].replace(/\./g, ''));
   }
 
   return hints;
@@ -160,10 +201,118 @@ function detectDelivery(text: string, fallbackModality: ModalityType): DeliveryM
   return undefined;
 }
 
+/** Junta nomes quebrados em linhas com a linha de horas da matriz modular. */
+function coalesceMatrixLines(lines: string[]): string[] {
+  const hoursOnly =
+    /^(\d+(?:[.,]\d+)?\s+){5}\d+(?:[.,]\d+)?\s+\d+(?:[.,]\d+)?\s*h?$/i;
+  const isNoise = (l: string) =>
+    /^(subtotal|total|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]\.|pr[aá]t\.|t-p|consolida|legendas|carga hor[aá]ria|p[aá]gina\s+\d)/i.test(
+      l
+    ) || /^m[oó]dulo\s/i.test(l);
+
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (hoursOnly.test(line) && out.length > 0) {
+      let name = out.pop()!;
+      if (isNoise(name) || /\d+\s*h\s*$/i.test(name)) {
+        out.push(name);
+        out.push(line);
+        continue;
+      }
+      while (
+        i + 1 < lines.length &&
+        !hoursOnly.test(lines[i + 1]) &&
+        !isNoise(lines[i + 1]) &&
+        !/\d+\s*h\s*$/i.test(lines[i + 1]) &&
+        lines[i + 1].length < 80
+      ) {
+        name = `${name} ${lines[++i]}`.replace(/\s+/g, ' ').trim();
+      }
+      out.push(`${name} ${line}`.replace(/\s+/g, ' ').trim());
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Linha de matriz modular:
+ * Nome  TEÓ PRÁT T-P  TEÓ PRÁT T-P  TOTALh
+ * (presencial)         (a distância)
+ */
+function parseMatrixComponentLine(line: string): Discipline | null {
+  const skipped =
+    /^(subtotal|total|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome|estrutura|relat[oó]rio|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]|pr[aá]t|consolida|legendas)/i;
+  if (skipped.test(line)) return null;
+
+  const match = line.match(
+    /^(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*h?\s*$/i
+  );
+  if (!match) return null;
+
+  const name = match[1].replace(/\s+/g, ' ').trim();
+  if (!name || name.length < 2) return null;
+  if (/^m[oó]dulo\b/i.test(name)) return null;
+
+  const pTheo = Number(match[2]) || 0;
+  const pPrat = Number(match[3]) || 0;
+  const pTp = Number(match[4]) || 0;
+  const dTheo = Number(match[5]) || 0;
+  const dPrat = Number(match[6]) || 0;
+  const dTp = Number(match[7]) || 0;
+  const total = Number(match[8]) || 0;
+
+  const presential = pTheo + pPrat + pTp;
+  const ead = dTheo + dPrat + dTp;
+  const hours = total || presential + ead;
+  if (hours <= 0) return null;
+
+  const isExt = /extens[aã]o/i.test(name);
+  const isIntern = /est[aá]gio|pr[aá]tica supervisionada/i.test(name);
+
+  let modalityDelivery: DeliveryModalityFlag = 'presencial';
+  if (presential > 0 && ead > 0) modalityDelivery = 'presencial';
+  else if (ead > 0) modalityDelivery = 'assincrono';
+  else modalityDelivery = 'presencial';
+
+  let pedagogicalNature: Discipline['pedagogicalNature'];
+  const prat = pPrat + dPrat;
+  const theo = pTheo + dTheo;
+  const tp = pTp + dTp;
+  if (tp > 0 && prat === 0 && theo === 0) pedagogicalNature = 'teorico-pratica';
+  else if (prat > 0 && theo === 0 && tp === 0) pedagogicalNature = 'pratica';
+  else if (theo > 0 && prat === 0 && tp === 0) pedagogicalNature = 'teorica';
+  else if (prat > 0 || tp > 0) pedagogicalNature = 'teorico-pratica';
+  else pedagogicalNature = 'teorica';
+
+  return {
+    id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    code: '',
+    name,
+    type: 'Obrigatória',
+    credits: 0,
+    hours,
+    modalityDelivery,
+    pedagogicalNature,
+    chPresential: presential || undefined,
+    chTheoretical: presential > 0 ? pTheo + pTp : undefined,
+    chLaboratory: presential > 0 && pPrat > 0 ? pPrat : undefined,
+    hasLaboratory: pPrat > 0 || undefined,
+    chAsync: ead || undefined,
+    isExtension: isExt || undefined,
+    isInternship: isIntern || undefined,
+  };
+}
+
 function parseDisciplineLine(
   line: string,
   fallbackModality: ModalityType
 ): Discipline | null {
+  const fromMatrix = parseMatrixComponentLine(line);
+  if (fromMatrix) return fromMatrix;
+
   const skipped =
     /^(subtotal|total|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome da disciplina|estrutura curricular|relat[oó]rio)/i;
   if (skipped.test(line)) return null;
@@ -223,6 +372,15 @@ function parseDisciplineLine(
   };
 }
 
+function romanOrDigitToNumber(token: string): number {
+  const t = token.trim().toLowerCase();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  const map: Record<string, number> = {
+    i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
+  };
+  return map[t] || 0;
+}
+
 function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules?: ModuleData[]): CurriculumStructure {
   const safePeriods = periods || [];
   const safeModules = modules || [];
@@ -234,10 +392,18 @@ function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules
     params.structureType === 'modular'
       ? 0
       : safePeriods.reduce((acc, p) => acc + (p.totalCredits || 0), 0);
-  const extensionHours = safePeriods.reduce(
-    (sum, p) => sum + p.disciplines.filter((d) => d.isExtension).reduce((s, d) => s + (d.hours || 0), 0),
-    0
-  );
+  const extensionHours =
+    params.structureType === 'modular'
+      ? safeModules.reduce(
+          (sum, m) =>
+            sum + (m.disciplines || []).filter((d) => d.isExtension).reduce((s, d) => s + (d.hours || 0), 0),
+          0
+        )
+      : safePeriods.reduce(
+          (sum, p) =>
+            sum + p.disciplines.filter((d) => d.isExtension).reduce((s, d) => s + (d.hours || 0), 0),
+          0
+        );
 
   return {
     id: `saga-${Date.now()}`,
@@ -273,7 +439,8 @@ function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules
 export function parseSagaReportText(rawText: string, params: SagaParseParams): SagaParseResult {
   const hints = extractSagaHeaderHints(rawText);
   const warnings: string[] = [];
-  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const rawLines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = coalesceMatrixLines(rawLines);
 
   if (!rawText.trim()) {
     warnings.push('Nenhum texto foi extraído. O PDF pode ser digitalizado (imagem). Preencha a estrutura manualmente.');
@@ -285,12 +452,16 @@ export function parseSagaReportText(rawText: string, params: SagaParseParams): S
     };
   }
 
+  const structureType = hints.structureType || params.structureType || 'disciplinar';
+
   const resolvedParams: SagaParseParams = {
     ...params,
     code: params.code || hints.structureCode || '',
     activeYearSemester: params.activeYearSemester || hints.semester || '',
     modality: hints.modality || params.modality,
     courseName: params.courseName || hints.courseName || '',
+    structureType,
+    requiredTotalHours: params.requiredTotalHours || hints.totalHours,
   };
 
   if (resolvedParams.structureType === 'modular') {
@@ -380,26 +551,50 @@ function parseModular(
 ): SagaParseResult {
   const modules: ModuleData[] = [];
   let current: ModuleData | null = null;
-  let modNumber = 1;
   let withoutHours = 0;
   let withoutCredits = 0;
 
+  const moduleHeader =
+    /^m[oó]dulo\s+([ivxlcdm]+|\d+)\s*[—–:\-.]?\s*(.*)$/i;
+
   for (const line of lines) {
-    if (/^(m[oó]dulo\s*\d*|conhecimentos)\b/i.test(line)) {
-      const title =
-        line.replace(/^(m[oó]dulo\s*\d*[:.\-]?\s*|conhecimentos[:.\-]?\s*)/i, '').trim() ||
-        `Módulo ${modNumber}`;
+    const modMatch = line.match(moduleHeader);
+    if (modMatch) {
+      const num = romanOrDigitToNumber(modMatch[1]) || modules.length + 1;
+      let title = (modMatch[2] || '')
+        .replace(/\s*Presencial\s*:.*/i, '')
+        .replace(/\s*EaD\s*:.*/i, '')
+        .replace(/\s*Total\s*:.*/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!title) title = '';
+
       current = {
-        id: `mod-${modNumber}-${Date.now()}`,
-        number: modNumber,
+        id: `mod-${num}-${Date.now()}`,
+        number: num,
         code: '',
         title,
         hours: 0,
         disciplines: [],
         competencies: [],
+        knowledges: [],
       };
       modules.push(current);
-      modNumber++;
+      continue;
+    }
+
+    if (/^conhecimentos\b/i.test(line) && !current) {
+      current = {
+        id: `mod-${modules.length + 1}-${Date.now()}`,
+        number: modules.length + 1,
+        code: '',
+        title: line.replace(/^conhecimentos[:.\-]?\s*/i, '').trim() || '',
+        hours: 0,
+        disciplines: [],
+        competencies: [],
+        knowledges: [],
+      };
+      modules.push(current);
       continue;
     }
 
@@ -408,20 +603,49 @@ function parseModular(
       if (!disc.hours) withoutHours++;
       if (!disc.credits) withoutCredits++;
       current.disciplines.push(disc);
+      current.knowledges = current.knowledges || [];
+      current.knowledges.push({
+        id: `know-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: disc.name,
+        category: 'conhecimento',
+        hours: disc.hours,
+        modalityDelivery: disc.modalityDelivery,
+        chPresential: disc.chPresential,
+        chTheoretical: disc.chTheoretical,
+        chLaboratory: disc.chLaboratory,
+        chAsync: disc.chAsync,
+        hasLaboratory: disc.hasLaboratory,
+      });
       current.hours += disc.hours || 0;
     }
   }
+
+  modules.sort((a, b) => a.number - b.number);
 
   const disciplines = modules.reduce((acc, m) => acc + m.disciplines.length, 0);
   if (modules.length === 0) {
     warnings.push('Nenhum módulo foi identificado no PDF. O coordenador deve preencher a estrutura.');
   }
+  if (disciplines === 0) {
+    warnings.push('Nenhum componente curricular foi identificado nos módulos.');
+  }
   if (withoutHours > 0) {
-    warnings.push(`${withoutHours} disciplina(s) sem carga horária — preencha no editor.`);
+    warnings.push(`${withoutHours} componente(s) sem carga horária — preencha no editor.`);
+  }
+  if (hints.complementaryHours && hints.complementaryHours > 0) {
+    // aplicado no modal via hints; aviso informativo
+  }
+
+  const structure = emptyStructure(params, [], modules);
+  if (hints.complementaryHours) {
+    structure.complementaryTotalHours = hints.complementaryHours;
+  }
+  if (hints.totalHours && structure.requiredTotalHours <= 0) {
+    structure.requiredTotalHours = hints.totalHours;
   }
 
   return {
-    structure: emptyStructure(params, [], modules),
+    structure,
     hints,
     warnings,
     stats: {

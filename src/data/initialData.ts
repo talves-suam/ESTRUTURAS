@@ -9,7 +9,7 @@ export const initialSettings: AppSettings = {
   defaultExtensionPercentMin: 10,
   institutionName: 'UNISUAM - Centro Universitário Augusto Motta',
   campusDefault: 'Sede: UNISUAM-RJ (Bonsucesso)',
-  reportNotesTitle: 'Observações, Regras e Explicações da Ementa',
+  reportNotesTitle: 'Observações, Regras e Explicações da Estrutura',
   reportNotesDisciplinar: [],
   reportNotesModular: [],
 };

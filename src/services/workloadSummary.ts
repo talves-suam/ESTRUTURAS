@@ -5,6 +5,8 @@ import {
   getPresentialSplitFlags,
   withStructurePresentialFlags,
 } from '../types/curriculum';
+import { getModularComponents } from '../utils/modularComponents';
+import { formatModuleName, toRoman } from '../utils/roman';
 
 export interface WorkloadSummaryRow {
   id: string;
@@ -23,37 +25,9 @@ function collectDisciplines(structure: CurriculumStructure): Discipline[] {
       .map((d) => withStructurePresentialFlags(d, structure));
   }
   if (structure.structureType === 'modular' && structure.modules) {
-    const fromDisc = structure.modules.flatMap((m) => m.disciplines || []);
-    if (fromDisc.length > 0) {
-      return fromDisc.map((d) => withStructurePresentialFlags(d, structure));
-    }
-
-    // Fallback: conhecimentos do módulo como componentes de CH
-    return structure.modules.flatMap((m) =>
-      (m.knowledges || []).map(
-        (k): Discipline =>
-          withStructurePresentialFlags(
-            {
-              id: k.id,
-              code: m.code || '',
-              name: k.name,
-              type: 'Obrigatória',
-              credits: 0,
-              hours: k.hours || 0,
-              modalityDelivery: k.modalityDelivery,
-              hasLaboratory: k.hasLaboratory,
-              hasClinical: k.hasClinical,
-              chTheoretical: k.chTheoretical,
-              chLaboratory: k.chLaboratory,
-              chClinical: k.chClinical,
-              chPresential: k.chPresential,
-              chSyncMediated: k.chSyncMediated,
-              chAsync: k.chAsync,
-            },
-            structure
-          )
-      )
-    );
+    return structure.modules
+      .flatMap((m) => getModularComponents(m))
+      .map((d) => withStructurePresentialFlags(d, structure));
   }
   return [];
 }
@@ -275,4 +249,39 @@ export function formatWorkloadHours(value: number): string {
 
 export function formatWorkloadPercent(value: number): string {
   return formatPercent(value);
+}
+
+export interface ModuleMeetingsRow {
+  id: string;
+  label: string;
+  shortLabel: string;
+  meetings: number;
+}
+
+/** Quadro horizontal de encontros por módulo (estrutura modular). */
+export function buildModuleMeetingsSummary(structure: CurriculumStructure): {
+  rows: ModuleMeetingsRow[];
+  totalMeetings: number;
+} | null {
+  if (structure.structureType !== 'modular' || !structure.modules?.length) return null;
+
+  const modules = [...structure.modules].sort((a, b) => {
+    const byNum = a.number - b.number;
+    if (byNum !== 0) return byNum;
+    return (a.branch || '').localeCompare(b.branch || '', 'pt-BR');
+  });
+
+  const rows: ModuleMeetingsRow[] = modules.map((mod) => {
+    const roman = toRoman(mod.number) || String(mod.number);
+    const branch = mod.branch ? ` ${mod.branch}` : '';
+    return {
+      id: mod.id,
+      label: formatModuleName(mod.number, mod.title, mod.branch),
+      shortLabel: `${roman}${branch}`.trim(),
+      meetings: Math.max(0, Number(mod.meetings) || 0),
+    };
+  });
+
+  const totalMeetings = rows.reduce((acc, r) => acc + r.meetings, 0);
+  return { rows, totalMeetings };
 }

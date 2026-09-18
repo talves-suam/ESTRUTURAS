@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { CurriculumStructure, AppSettings } from '../types/curriculum';
 import { 
   Search, 
@@ -35,6 +35,8 @@ interface StructuresListProps {
   onOpenSagaImport: () => void;
 }
 
+type StructureSortMode = 'name' | 'date';
+
 export const StructuresList: React.FC<StructuresListProps> = ({
   structures,
   settings,
@@ -49,22 +51,38 @@ export const StructuresList: React.FC<StructuresListProps> = ({
   const [selectedModality, setSelectedModality] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<StructureSortMode>('name');
   const [dcnModalStructure, setDcnModalStructure] = useState<CurriculumStructure | null>(null);
 
-  const filteredStructures = structures.filter((s) => {
-    if (selectedModality !== 'all' && s.modality !== selectedModality) return false;
-    if (selectedType !== 'all' && s.structureType !== selectedType) return false;
-    if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+  const filteredStructures = useMemo(() => {
+    const filtered = structures.filter((s) => {
+      if (selectedModality !== 'all' && s.modality !== selectedModality) return false;
+      if (selectedType !== 'all' && s.structureType !== selectedType) return false;
+      if (statusFilter !== 'all' && s.status !== statusFilter) return false;
 
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      s.courseName.toLowerCase().includes(term) ||
-      s.code.toLowerCase().includes(term) ||
-      s.activeYearSemester.toLowerCase().includes(term) ||
-      (s.dcnRef && s.dcnRef.toLowerCase().includes(term))
-    );
-  });
+      if (!searchTerm) return true;
+      const term = searchTerm.toLowerCase();
+      return (
+        s.courseName.toLowerCase().includes(term) ||
+        s.code.toLowerCase().includes(term) ||
+        s.activeYearSemester.toLowerCase().includes(term) ||
+        (s.dcnRef && s.dcnRef.toLowerCase().includes(term))
+      );
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'date') {
+        const ta = Date.parse(a.updatedAt || a.createdAt || '') || 0;
+        const tb = Date.parse(b.updatedAt || b.createdAt || '') || 0;
+        if (tb !== ta) return tb - ta;
+      }
+      const byName = (a.courseName || '').localeCompare(b.courseName || '', 'pt-BR', {
+        sensitivity: 'base',
+      });
+      if (byName !== 0) return byName;
+      return (a.code || '').localeCompare(b.code || '', 'pt-BR');
+    });
+  }, [structures, selectedModality, selectedType, statusFilter, searchTerm, sortBy]);
 
   return (
     <div className="space-y-6">
@@ -195,6 +213,16 @@ export const StructuresList: React.FC<StructuresListProps> = ({
             <option value="Ativa">Ativa</option>
             <option value="Em Desativação">Em Desativação</option>
             <option value="Em Elaboração">Em Elaboração</option>
+          </select>
+
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as StructureSortMode)}
+            className="px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-700 font-semibold"
+            title="Ordenar listagem"
+          >
+            <option value="name">Ordenar: Nome</option>
+            <option value="date">Ordenar: Data</option>
           </select>
         </div>
       </div>

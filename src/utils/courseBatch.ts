@@ -1,4 +1,4 @@
-import { Course, DcnDocument, ModalityType, RequirementLevel } from '../types/curriculum';
+import { Course, DcnDocument, ModalityType, RequirementLevel, CurriculumStructure } from '../types/curriculum';
 
 export const COURSE_BATCH_HEADERS = [
   'Curso',
@@ -11,6 +11,8 @@ export const COURSE_BATCH_HEADERS = [
   'Atividade Complementar',
   'CH Mínima de Atividade Complementar',
   'TCC/Projeto Final',
+  'Código Cine',
+  'Cine Área',
   'Nome Coordenador',
   'E-mail Coordenador',
   'Ato Autorizativo',
@@ -19,6 +21,26 @@ export const COURSE_BATCH_HEADERS = [
   'Nome DCN',
   'Link DCN',
 ] as const;
+
+/** Monta o rótulo CINE exibido na estrutura: "0211D01 - Produção audiovisual..." */
+export function formatCineBrasilLabel(code?: string, area?: string): string {
+  const c = String(code || '').trim();
+  const a = String(area || '').trim();
+  if (c && a) return `${c} - ${a}`;
+  return c || a || '';
+}
+
+/** Separa "código - área" (ou só código / só área) a partir do campo concatenado. */
+export function parseCineBrasilLabel(ref?: string): { code: string; area: string } {
+  const s = String(ref || '').trim();
+  if (!s) return { code: '', area: '' };
+  const idx = s.indexOf(' - ');
+  if (idx >= 0) {
+    return { code: s.slice(0, idx).trim(), area: s.slice(idx + 3).trim() };
+  }
+  if (/^\d{4}[A-Za-z0-9]+$/.test(s)) return { code: s, area: '' };
+  return { code: '', area: s };
+}
 
 export function normalizeCourseName(name: string): string {
   return name
@@ -29,10 +51,21 @@ export function normalizeCourseName(name: string): string {
     .trim();
 }
 
+/** Remove prefixos acadêmicos para casar com o nome cadastrado (ex.: CST em Design Gráfico → Design Gráfico). */
+export function stripAcademicCoursePrefix(name: string): string {
+  return String(name || '')
+    .replace(
+      /^(curso\s+superior\s+de\s+tecnologia\s+em|curso\s+superior\s+de\s+tecnologia|cst\s+em|tecn[oó]logo\s+em|tecnologia\s+em|bacharelado\s+em|licenciatura\s+em|curso\s+de\s+gradua[cç][aã]o\s+em|curso\s+de|gradua[cç][aã]o\s+em)\s+/i,
+      ''
+    )
+    .replace(/\s*[—–-]\s*estrutura\s+curricular.*$/i, '')
+    .trim();
+}
+
 /** Remove sufixo de modalidade do nome (EAD/Presencial), pois isso vai em campo próprio. */
 export function courseBaseName(name: string): string {
   return String(name || '')
-    .replace(/\s*\((EAD|Presencial|Semipresencial|A Dist[âa]ncia)\)\s*$/i, '')
+    .replace(/\s*\((EAD|Presencial|Semipresencial|A Dist[âa]ncia|H[ií]brido)\)\s*$/i, '')
     .trim();
 }
 
@@ -48,6 +81,22 @@ export function uniqueCourseOptions(courses: Course[]): { key: string; name: str
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
 
+/** Lista completa de cursos para o select (nome + modalidade), sem ocultar variantes. */
+export function courseSelectOptions(
+  courses: Course[]
+): { id: string; label: string }[] {
+  return [...courses]
+    .sort((a, b) => {
+      const byName = courseBaseName(a.name).localeCompare(courseBaseName(b.name), 'pt-BR');
+      if (byName !== 0) return byName;
+      return a.modality.localeCompare(b.modality, 'pt-BR');
+    })
+    .map((c) => ({
+      id: c.id,
+      label: `${courseBaseName(c.name)} (${c.modality})`,
+    }));
+}
+
 export function resolveCourseByNameAndModality(
   courses: Course[],
   nameOrIdOrKey: string,
@@ -59,6 +108,116 @@ export function resolveCourseByNameAndModality(
   const group = courses.filter((c) => normalizeCourseName(courseBaseName(c.name)) === key);
   if (group.length === 0) return byId;
   return group.find((c) => c.modality === modality) || group[0];
+}
+
+/** Curso com mesmo nome-base e mesma modalidade. */
+export function findCourseByNameAndModality(
+  courses: Course[],
+  name: string,
+  modality: ModalityType
+): Course | undefined {
+  const key = normalizeCourseName(stripAcademicCoursePrefix(courseBaseName(name)));
+  if (!key) return undefined;
+  const group = courses.filter((c) => {
+    const ck = normalizeCourseName(stripAcademicCoursePrefix(courseBaseName(c.name)));
+    return ck === key || ck.includes(key) || key.includes(ck);
+  });
+  if (group.length === 0) return undefined;
+  return group.find((c) => c.modality === modality) || undefined;
+}
+
+/** Qualquer cadastro do mesmo curso (outra modalidade), para clonar parâmetros. */
+export function findCourseTemplateByName(courses: Course[], name: string): Course | undefined {
+  const key = normalizeCourseName(stripAcademicCoursePrefix(courseBaseName(name)));
+  if (!key) return undefined;
+  const group = courses.filter((c) => {
+    const ck = normalizeCourseName(stripAcademicCoursePrefix(courseBaseName(c.name)));
+    return ck === key || ck.includes(key) || key.includes(ck);
+  });
+  if (group.length === 0) return undefined;
+  // Preferência: match exato de nome, senão o primeiro parcial
+  const exact = group.find(
+    (c) => normalizeCourseName(stripAcademicCoursePrefix(courseBaseName(c.name))) === key
+  );
+  return exact || group[0];
+}
+
+function modalityCodeSuffix(modality: ModalityType): string {
+  if (modality === 'EAD') return 'EAD';
+  if (modality === 'Semipresencial') return 'SEMI';
+  return 'PRES';
+}
+
+/**
+ * Garante curso na lista para a estrutura: cria se não existir o par nome+modalidade.
+ * Se o nome já existir em outra modalidade, clona os dados do cadastro existente.
+ */
+export function ensureCourseForStructure(
+  structure: CurriculumStructure,
+  courses: Course[]
+): { course: Course; created: boolean; clonedFromModality?: ModalityType } {
+  const name = courseBaseName(structure.courseName || '').trim();
+  const modality = structure.modality;
+
+  const exact = findCourseByNameAndModality(courses, name, modality);
+  if (exact) {
+    return { course: exact, created: false };
+  }
+
+  const template = findCourseTemplateByName(courses, name);
+  const baseCode = template?.code
+    ? template.code.replace(/-(EAD|SEMI|PRES)$/i, '')
+    : generateCourseCodeFromName(name || 'CURSO');
+
+  const course: Course = {
+    id: `course-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    code: `${baseCode}-${modalityCodeSuffix(modality)}`,
+    name: name || 'Curso sem nome',
+    modality,
+    cineBrasilCode: (() => {
+      const fromRef = parseCineBrasilLabel(structure.cineBrasilRef);
+      return fromRef.code || template?.cineBrasilCode || '0413A01';
+    })(),
+    cineBrasilArea: (() => {
+      const fromRef = parseCineBrasilLabel(structure.cineBrasilRef);
+      return fromRef.area || template?.cineBrasilArea || 'Área Acadêmica Geral';
+    })(),
+    activeDcn: structure.dcnRef || template?.activeDcn || '',
+    dcnLink: template?.dcnLink,
+    authorizationAct: structure.authorizationAct || template?.authorizationAct || '',
+    dcns: structure.dcns || template?.dcns,
+    minTotalHours:
+      structure.requiredTotalHours || template?.minTotalHours || structure.calculatedTotalHours || 0,
+    minPresentialPercent:
+      structure.minPresentialHoursPercent ||
+      template?.minPresentialPercent ||
+      (modality === 'EAD' ? 10 : 60),
+    maxEadPercent:
+      structure.maxEadHoursPercent || template?.maxEadPercent || (modality === 'EAD' ? 90 : 40),
+    minExtensionPercent: structure.minExtensionPercent ?? template?.minExtensionPercent ?? 10,
+    minInternshipHours: structure.minInternshipHours ?? template?.minInternshipHours,
+    complementaryTotalHours:
+      structure.complementaryTotalHours ?? template?.complementaryTotalHours,
+    complementaryModality: structure.complementaryModality ?? template?.complementaryModality,
+    extensionTotalHours: structure.extensionTotalHours ?? template?.extensionTotalHours,
+    extensionModality: structure.extensionModality ?? template?.extensionModality,
+    degrees: structure.degrees ?? template?.degrees,
+    internshipRequirement: structure.internshipRequirement ?? template?.internshipRequirement,
+    complementaryRequirement:
+      structure.complementaryRequirement ?? template?.complementaryRequirement,
+    finalPaperRequirement: structure.finalPaperRequirement ?? template?.finalPaperRequirement,
+    coordinatorName: structure.coordinatorName ?? template?.coordinatorName,
+    coordinatorEmail: structure.coordinatorEmail ?? template?.coordinatorEmail,
+    totalSemesters: template?.totalSemesters,
+    hasLaboratory: structure.hasLaboratory ?? template?.hasLaboratory,
+    hasClinical: structure.hasClinical ?? template?.hasClinical,
+  };
+
+  return {
+    course,
+    created: true,
+    clonedFromModality: template?.modality,
+  };
 }
 
 export function generateCourseCodeFromName(name: string): string {
@@ -316,6 +475,8 @@ export type CourseBatchField =
   | 'ativCompReq'
   | 'chAtivComp'
   | 'tcc'
+  | 'cineCodigo'
+  | 'cineArea'
   | 'coordenador'
   | 'email'
   | 'ato'
@@ -334,7 +495,7 @@ export function mapBatchHeaderToField(header: string): CourseBatchField | null {
     .trim();
 
   if (!h) return null;
-  if (h === 'curso' || h.includes('nome do curso') || (h === 'nome' && !h.includes('dcn'))) {
+  if (h === 'curso' || h.includes('nome do curso') || (h === 'nome' && !h.includes('dcn') && !h.includes('coordenador'))) {
     return 'curso';
   }
   if (h.includes('grau') || h.includes('titulacao')) return 'grau';
@@ -365,6 +526,22 @@ export function mapBatchHeaderToField(header: string): CourseBatchField | null {
   }
   if (h.includes('tcc') || h.includes('projeto final') || h.includes('trabalho de conclusao')) {
     return 'tcc';
+  }
+  if (
+    (h.includes('codigo') && h.includes('cine')) ||
+    h === 'codigo cine' ||
+    h === 'cine codigo' ||
+    h === 'cine code'
+  ) {
+    return 'cineCodigo';
+  }
+  if (
+    (h.includes('cine') && h.includes('area')) ||
+    h === 'cine area' ||
+    h === 'area cine' ||
+    h === 'cine brasil area'
+  ) {
+    return 'cineArea';
   }
   if (h.includes('coordenador') && h.includes('mail')) return 'email';
   if (h.includes('e-mail') || h.includes('email')) return 'email';
@@ -430,6 +607,8 @@ export function normalizeCourseBatchMatrix(matrix: string[][]): string[][] {
     'ativCompReq',
     'chAtivComp',
     'tcc',
+    'cineCodigo',
+    'cineArea',
     'coordenador',
     'email',
     'ato',
@@ -516,6 +695,8 @@ export function courseToBatchRow(course: Course): (string | number)[] {
     formatRequirementDisplay(course.complementaryRequirement),
     formatHoursDisplay(course.complementaryTotalHours),
     formatRequirementDisplay(course.finalPaperRequirement),
+    course.cineBrasilCode || '',
+    course.cineBrasilArea || '',
     course.coordinatorName || '',
     course.coordinatorEmail || '',
     course.authorizationAct || '',
@@ -538,7 +719,7 @@ export function isCourseBatchHeaderRow(parts: string[]): boolean {
   const first = (parts[0] ? cellToString(parts[0]) : '').toLowerCase();
   if (first.includes('curso') || first === 'nome') return true;
   // Cabeçalho típico do relatório mesmo se a 1ª coluna não for "Curso"
-  const hits = ['curso', 'modalidade', 'grau', 'dcn', 'coordenador', 'carga'].filter((k) =>
+  const hits = ['curso', 'modalidade', 'grau', 'dcn', 'coordenador', 'carga', 'cine'].filter((k) =>
     joined.includes(k)
   );
   return hits.length >= 2;
@@ -585,6 +766,8 @@ export function applyCourseBatchRows(
       complementaryReqRaw = '',
       chComplementaryRaw = '',
       finalPaperReqRaw = '',
+      cineCodigoRaw = '',
+      cineAreaRaw = '',
       coordinatorNameRaw = '',
       coordinatorEmailRaw = '',
       authorizationActRaw = '',
@@ -599,7 +782,7 @@ export function applyCourseBatchRows(
     let dcnNamesRaw = dcnNamesCell;
     let dcnLinksRaw = dcnLinksCell;
 
-    // Compat: planilha antiga com só a coluna DCN (links) na 14ª posição
+    // Compat: planilha antiga com só a coluna DCN (links) na posição de nomes
     if (!dcnLinksRaw && dcnNamesRaw && (/https?:\/\//i.test(dcnNamesRaw) || /drive\.google\.com/i.test(dcnNamesRaw))) {
       dcnLinksRaw = dcnNamesRaw;
       dcnNamesRaw = '';
@@ -640,6 +823,8 @@ export function applyCourseBatchRows(
       if (complementaryReqRaw) current.complementaryRequirement = complementaryRequirement;
       if (chComplementaryRaw) current.complementaryTotalHours = complementaryTotalHours;
       if (finalPaperReqRaw) current.finalPaperRequirement = finalPaperRequirement;
+      if (cineCodigoRaw) current.cineBrasilCode = cineCodigoRaw;
+      if (cineAreaRaw) current.cineBrasilArea = cineAreaRaw;
       if (coordinatorNameRaw) current.coordinatorName = coordinatorNameRaw;
       if (coordinatorEmailRaw) current.coordinatorEmail = coordinatorEmailRaw;
       if (authorizationActRaw) current.authorizationAct = authorizationActRaw;
@@ -675,8 +860,8 @@ export function applyCourseBatchRows(
         activeDcn: dcns.length ? dcns.map((d) => d.title).join('; ') : '',
         dcnLink: dcns.map((d) => d.pdfUrl).join(' | '),
         dcns,
-        cineBrasilCode: '',
-        cineBrasilArea: '',
+        cineBrasilCode: cineCodigoRaw || '',
+        cineBrasilArea: cineAreaRaw || '',
         minPresentialPercent: 60,
         maxEadPercent: 40,
         minExtensionPercent: 10,
