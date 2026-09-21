@@ -36,12 +36,19 @@ import {
   parseCourseBatchText,
   summarizeCourseDcns,
 } from '../utils/courseBatch';
+import { exportLocalAppBackup } from '../services/curriculumService';
+import { FirebaseSetupPanel } from './FirebaseSetupPanel';
 
 interface SettingsModalProps {
   settings: AppSettings;
   courses: Course[];
+  firebaseOnline?: boolean;
+  connectingServer?: boolean;
+  onConnectFirebase?: (paste: string) => Promise<void>;
+  onDisconnectFirebase?: () => void;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
   onBatchUpdateCourses: (courses: Course[]) => Promise<void>;
+  onRestoreLocalBackup?: (raw: string) => void;
   onClose: () => void;
 }
 
@@ -50,8 +57,13 @@ const REQUIREMENT_OPTIONS: RequirementLevel[] = ['Obrigatório', 'Opcional', 'N�
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   settings,
   courses,
+  firebaseOnline = false,
+  connectingServer = false,
+  onConnectFirebase,
+  onDisconnectFirebase,
   onSaveSettings,
   onBatchUpdateCourses,
+  onRestoreLocalBackup,
   onClose,
 }) => {
   const [nomenclature, setNomenclature] = useState<'cha' | 'zabala'>(
@@ -84,7 +96,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [selectedDcnCourse, setSelectedDcnCourse] = useState<Course | null>(null);
   const [csvText, setCsvText] = useState('');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [backupText, setBackupText] = useState('');
   const batchFileInputRef = useRef<HTMLInputElement>(null);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleCourseFieldChange = <K extends keyof Course>(
     courseId: string,
@@ -258,6 +272,100 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {saveSuccessMsg}
           </div>
         )}
+
+        {onConnectFirebase && (
+          <div className="mt-6">
+            <FirebaseSetupPanel
+              firebaseOnline={firebaseOnline}
+              busy={connectingServer}
+              onConnect={onConnectFirebase}
+              onDisconnect={onDisconnectFirebase}
+            />
+          </div>
+        )}
+
+        <div className="mt-6 p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+          <h3 className="text-sm font-bold text-[#002B49] uppercase tracking-wider flex items-center gap-2">
+            <Database className="w-4 h-4 text-[#FF6B00]" />
+            Backup dos cadastros neste navegador
+          </h3>
+          <p className="text-xs text-slate-500">
+            {firebaseOnline
+              ? 'O servidor está ligado. Ainda assim, baixe um backup JSON para segurança.'
+              : 'Ainda não há servidor: os cadastros não saem deste navegador. Cada endereço (porta 3000 vs 5173) guarda uma cópia diferente. Se você cadastrou em outro computador, só um backup JSON recupera.'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const blob = new Blob([JSON.stringify(exportLocalAppBackup(), null, 2)], {
+                  type: 'application/json',
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `estruturas-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-xs font-bold text-slate-700 flex items-center gap-1.5 hover:bg-slate-100"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Baixar backup
+            </button>
+            <button
+              type="button"
+              onClick={() => backupFileInputRef.current?.click()}
+              className="px-3 py-1.5 rounded-lg bg-[#002B49] text-white text-xs font-bold flex items-center gap-1.5 hover:bg-[#003860]"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              Restaurar arquivo JSON
+            </button>
+            <input
+              ref={backupFileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!file || !onRestoreLocalBackup) return;
+                try {
+                  onRestoreLocalBackup(await file.text());
+                  setSaveSuccessMsg('Backup restaurado.');
+                } catch (err) {
+                  setSaveSuccessMsg(
+                    err instanceof Error ? err.message : 'Não foi possível ler o backup.'
+                  );
+                }
+              }}
+            />
+          </div>
+          <textarea
+            value={backupText}
+            onChange={(e) => setBackupText(e.target.value)}
+            placeholder="Ou cole aqui o JSON copiado do console em localhost:3000"
+            className="w-full h-24 p-2 border border-slate-300 rounded-lg font-mono text-[11px] bg-white"
+          />
+          <button
+            type="button"
+            disabled={!backupText.trim() || !onRestoreLocalBackup}
+            onClick={() => {
+              try {
+                onRestoreLocalBackup?.(backupText);
+                setBackupText('');
+                setSaveSuccessMsg('Backup restaurado.');
+              } catch (err) {
+                setSaveSuccessMsg(
+                  err instanceof Error ? err.message : 'JSON inválido.'
+                );
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-bold disabled:opacity-50"
+          >
+            Restaurar texto colado
+          </button>
+        </div>
 
         {/* Section 1: Pedagogical Nomenclature */}
         <div className="py-6 border-b border-slate-200 space-y-4">

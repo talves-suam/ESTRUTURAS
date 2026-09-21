@@ -1,4 +1,12 @@
-import { doc, getDoc, getDocs, setDoc, deleteDoc, collection } from 'firebase/firestore';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  setDoc,
+} from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../firebase/config';
 import { CurriculumStructure, Course, AppSettings, getDisciplineChBreakdown, withStructurePresentialFlags } from '../types/curriculum';
 import { initialSettings } from '../data/initialData';
@@ -15,6 +23,22 @@ const LOCAL_STORAGE_SETTINGS_KEY = 'unisuam_app_settings';
 
 function canUseFirestore(): boolean {
   return isFirebaseConfigured && db !== null;
+}
+
+function toFirestorePayload(item: object): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(item)) as Record<string, unknown>;
+}
+
+export function firestoreErrorMessage(err: unknown): string {
+  const code = typeof err === 'object' && err && 'code' in err ? String((err as { code?: string }).code) : '';
+  const message = err instanceof Error ? err.message : String(err);
+  if (code.includes('permission-denied') || /permission/i.test(message)) {
+    return 'O banco recusou a escrita. No Firebase, abra Firestore → Regras, cole as regras de teste e clique em Publicar.';
+  }
+  if (code.includes('not-found') || /not found|404/i.test(message)) {
+    return 'O Firestore ainda não existe. No Console do Firebase: Build → Firestore Database → Criar banco (modo de teste).';
+  }
+  return message || 'Falha ao falar com o servidor.';
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
@@ -83,11 +107,121 @@ async function upsertFirestoreDocs<T extends { id: string }>(
   if (!canUseFirestore() || items.length === 0) return;
   try {
     for (const item of items) {
-      await setDoc(doc(db!, collectionName, item.id), item as Record<string, unknown>);
+      await setDoc(doc(db!, collectionName, item.id), toFirestorePayload(item));
     }
   } catch (err) {
     console.error(`Erro ao gravar ${collectionName} no Firestore`, err);
+    throw new Error(firestoreErrorMessage(err));
   }
+}
+
+function cacheList<T>(key: string, items: T[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch (err) {
+    console.error('Error saving to localStorage', err);
+  }
+}
+
+export async function testFirestoreConnection(): Promise<void> {
+  if (!canUseFirestore()) {
+    throw new Error('O Firebase não inicializou. Confira o firebaseConfig colado.');
+  }
+  try {
+    const ref = doc(db!, '_health', 'ping');
+    await setDoc(ref, { ok: true, at: new Date().toISOString() });
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+      throw new Error('O servidor não confirmou o teste de escrita.');
+    }
+  } catch (err) {
+    throw new Error(firestoreErrorMessage(err));
+  }
+}
+
+export async function pushLocalCacheToServer(): Promise<void> {
+  if (!canUseFirestore()) {
+    throw new Error('Servidor ainda não está conectado.');
+  }
+  const structures = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
+  const courses = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+  await upsertFirestoreDocs(STRUCTURES_COLLECTION, structures);
+  await upsertFirestoreDocs(COURSES_COLLECTION, courses);
+  const settings = getCachedSettings();
+  if (settings) {
+    await setDoc(doc(db!, 'settings', SETTINGS_DOC), toFirestorePayload(settings));
+  }
+}
+
+export function subscribeCurriculumData(handlers: {
+  onStructures: (items: CurriculumStructure[]) => void;
+  onCourses: (items: Course[]) => void;
+  onError?: (err: Error) => void;
+}): () => void {
+  if (!canUseFirestore()) {
+    handlers.onStructures(getCachedStructures());
+    handlers.onCourses(getCachedCourses());
+    return () => {};
+  }
+
+  let offeredLocalStructures = false;
+  let offeredLocalCourses = false;
+
+  const unsubStructures = onSnapshot(
+    collection(db!, STRUCTURES_COLLECTION),
+    (snapshot) => {
+      const items: CurriculumStructure[] = [];
+      snapshot.forEach((d) => {
+        const data = d.data() as CurriculumStructure;
+        items.push({ ...data, id: data.id || d.id });
+      });
+      if (items.length === 0 && !offeredLocalStructures) {
+        offeredLocalStructures = true;
+        const local = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
+        if (local.length > 0) {
+          void upsertFirestoreDocs(STRUCTURES_COLLECTION, local).catch((err) =>
+            handlers.onError?.(new Error(firestoreErrorMessage(err)))
+          );
+          handlers.onStructures(local.map((s) => calculateStructureTotals(s)));
+          return;
+        }
+      }
+      const withTotals = items.map((s) => calculateStructureTotals(s));
+      cacheList(LOCAL_STORAGE_STRUCTURES_KEY, withTotals);
+      handlers.onStructures(withTotals);
+    },
+    (err) => handlers.onError?.(new Error(firestoreErrorMessage(err)))
+  );
+
+  const unsubCourses = onSnapshot(
+    collection(db!, COURSES_COLLECTION),
+    (snapshot) => {
+      const items: Course[] = [];
+      snapshot.forEach((d) => {
+        const data = d.data() as Course;
+        items.push({ ...data, id: data.id || d.id });
+      });
+      if (items.length === 0 && !offeredLocalCourses) {
+        offeredLocalCourses = true;
+        const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+        if (local.length > 0) {
+          void upsertFirestoreDocs(COURSES_COLLECTION, local).catch((err) =>
+            handlers.onError?.(new Error(firestoreErrorMessage(err)))
+          );
+          handlers.onCourses(local);
+          return;
+        }
+      }
+      cacheList(LOCAL_STORAGE_COURSES_KEY, items);
+      handlers.onCourses(items);
+    },
+    (err) => handlers.onError?.(new Error(firestoreErrorMessage(err)))
+  );
+
+  return () => {
+    unsubStructures();
+    unsubCourses();
+  };
 }
 
 export function calculateStructureTotals(structure: CurriculumStructure): CurriculumStructure {
@@ -291,7 +425,9 @@ export async function saveCurriculumStructure(structure: CurriculumStructure): P
     console.error('Error saving to localStorage', e);
   }
 
-  await upsertFirestoreDocs(STRUCTURES_COLLECTION, [calculated]);
+  if (canUseFirestore()) {
+    await upsertFirestoreDocs(STRUCTURES_COLLECTION, [calculated]);
+  }
   return calculated;
 }
 
@@ -350,7 +486,9 @@ export async function saveCourseItem(course: Course): Promise<Course> {
     console.error(e);
   }
 
-  await upsertFirestoreDocs(COURSES_COLLECTION, [stamped]);
+  if (canUseFirestore()) {
+    await upsertFirestoreDocs(COURSES_COLLECTION, [stamped]);
+  }
   return stamped;
 }
 
@@ -461,9 +599,10 @@ export async function saveAppSettings(settings: AppSettings): Promise<AppSetting
   localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(normalized));
   if (canUseFirestore()) {
     try {
-      await setDoc(doc(db!, 'settings', SETTINGS_DOC), normalized);
+        await setDoc(doc(db!, 'settings', SETTINGS_DOC), toFirestorePayload(normalized));
     } catch (err) {
       console.error('Error saving settings to Firestore', err);
+      throw new Error(firestoreErrorMessage(err));
     }
   }
   return normalized;
@@ -496,4 +635,63 @@ export const saveAllCoursesToFirestore = async (courses: Course[]): Promise<void
 };
 export const getSettingsFromFirestore = getAppSettings;
 export const saveSettingsToFirestore = saveAppSettings;
+
+export type LocalAppBackup = {
+  version: 1;
+  exportedAt: string;
+  structures: CurriculumStructure[];
+  courses: Course[];
+  settings: AppSettings | null;
+};
+
+function asList<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as T[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export function exportLocalAppBackup(): LocalAppBackup {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    structures: readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY),
+    courses: readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY),
+    settings: getCachedSettings(),
+  };
+}
+
+/** Aceita backup deste app ou dump cru do localStorage (porta 3000). */
+export function applyLocalAppBackup(raw: string): { structures: number; courses: number } {
+  const data = JSON.parse(raw) as Record<string, unknown>;
+  const structures = asList<CurriculumStructure>(
+    data.structures ?? data.unisuam_curriculum_structures
+  );
+  const courses = asList<Course>(data.courses ?? data.unisuam_curriculum_courses);
+  const settingsRaw = data.settings ?? data.unisuam_app_settings;
+
+  if (structures.length === 0 && courses.length === 0 && !settingsRaw) {
+    throw new Error('O arquivo não contém estruturas nem cursos.');
+  }
+
+  if (structures.length > 0) {
+    localStorage.setItem(LOCAL_STORAGE_STRUCTURES_KEY, JSON.stringify(structures));
+  }
+  if (courses.length > 0) {
+    localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(courses));
+  }
+  if (settingsRaw) {
+    const settings =
+      typeof settingsRaw === 'string' ? JSON.parse(settingsRaw) : settingsRaw;
+    localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  return { structures: structures.length, courses: courses.length };
+}
 

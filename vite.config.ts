@@ -32,6 +32,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host: 'localhost',
       port: 3000,
+      strictPort: true,
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },

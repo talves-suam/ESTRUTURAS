@@ -14,9 +14,10 @@ interface NavbarProps {
   activeTab: NavbarTab;
   setActiveTab: (tab: NavbarTab) => void;
   structuresCount: number;
+  firebaseOnline?: boolean;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structuresCount }) => {
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structuresCount, firebaseOnline = false }) => {
   const navItem = (
     id: string,
     tab: NavbarTab,
@@ -124,11 +125,19 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structu
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-800 text-[11px] font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <button
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${
+              firebaseOnline
+                ? 'bg-emerald-50 border-emerald-200/80 text-emerald-800'
+                : 'bg-amber-50 border-amber-200 text-amber-900'
+            }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${firebaseOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
               <Database className="w-3.5 h-3.5 text-[#FF6B00]" />
-              <span className="hidden lg:inline">Online</span>
-            </span>
+              <span className="hidden lg:inline">{firebaseOnline ? 'Servidor' : 'Só neste navegador'}</span>
+            </button>
           </div>
         </div>
 

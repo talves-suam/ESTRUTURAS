@@ -9,6 +9,7 @@ import {
   Discipline,
   getDisciplineChBreakdown,
   structureHasPresentialSplit,
+  showsComponentCodeColumn,
 } from '../types/curriculum';
 import {
   buildWorkloadSummary,
@@ -204,9 +205,11 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
             totalRow
               ? `<tfoot>
             <tr class="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
-              <th class="px-2.5 py-1.5 text-left uppercase tracking-wider">Total</th>
-              <td colspan="${componentRows.length}" class="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">
-                ${formatWorkloadHours(totalRow.hours)} horas
+              <td colspan="${componentRows.length + 1}" class="relative px-2.5 py-1.5">
+                <span class="uppercase tracking-wider">Total</span>
+                <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none">
+                  ${formatWorkloadHours(totalRow.hours)} horas
+                </span>
               </td>
             </tr>
           </tfoot>`
@@ -759,6 +762,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   // Use landscape A4 (297 x 210 mm) for academic matrixes with granular CH columns
   const doc = new jsPDF('l', 'mm', 'a4');
   const usePresentialSplit = structureHasPresentialSplit(structure);
+  const showCodeCol = showsComponentCodeColumn(structure);
   const saberes = getSaberesLabels(settings?.pedagogicalNomenclature);
   const chaTitle =
     settings?.pedagogicalNomenclature === 'zabala' ? saberes.full : saberes.sectionTitle;
@@ -880,8 +884,12 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.rect(margin, y, contentWidth, 5, 'F');
       doc.setTextColor(0, 43, 73);
       doc.setFontSize(6.2);
-      doc.text('Código', margin + 2, y + 3.5);
-      doc.text('Nome da Disciplina', margin + 20, y + 3.5);
+      if (showCodeCol) {
+        doc.text('Código', margin + 2, y + 3.5);
+        doc.text('Nome da Disciplina', margin + 20, y + 3.5);
+      } else {
+        doc.text('Nome da Disciplina', margin + 2, y + 3.5);
+      }
       doc.text('Tipo', margin + 100, y + 3.5);
       doc.text('Créd.', margin + 120, y + 3.5);
       if (usePresentialSplit) {
@@ -928,10 +936,15 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setDrawColor(240, 240, 240);
         doc.line(margin, y + 4.2, margin + contentWidth, y + 4.2);
 
-        doc.setFont('helvetica', 'bold');
-        doc.text(disc.code, margin + 2, y + 3.2);
-        doc.setFont('helvetica', 'normal');
-        doc.text(disc.name.substring(0, 42), margin + 20, y + 3.2);
+        if (showCodeCol) {
+          doc.setFont('helvetica', 'bold');
+          doc.text(disc.code, margin + 2, y + 3.2);
+          doc.setFont('helvetica', 'normal');
+          doc.text(disc.name.substring(0, 42), margin + 20, y + 3.2);
+        } else {
+          doc.setFont('helvetica', 'normal');
+          doc.text(disc.name.substring(0, 52), margin + 2, y + 3.2);
+        }
         doc.text(disc.type.substring(0, 10), margin + 100, y + 3.2);
         doc.text(`${disc.credits}`, margin + 122, y + 3.2);
         if (usePresentialSplit) {
@@ -980,7 +993,13 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
       const branchIndicator = mod.branch ? ` [Trilha ${mod.branch}]` : '';
-      doc.text(`${formatModuleName(mod.number, mod.title)}${branchIndicator} (${mod.hours}h · ${mod.meetings ?? 0} encontros)`, margin + 3, y + 4.2);
+      doc.text(
+        `${formatModuleName(mod.number, mod.title)}${branchIndicator} (${
+          structure.hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`
+        })`,
+        margin + 3,
+        y + 4.2
+      );
       y += 6;
       if (mod.competence) {
         doc.setFont('helvetica', 'normal');
@@ -997,8 +1016,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.rect(margin, y, contentWidth, 4.5, 'F');
         doc.setTextColor(0, 43, 73);
         doc.setFontSize(6.8);
-        doc.text('Código', margin + 2, y + 3.2);
-        doc.text('Conhecimento', margin + 22, y + 3.2);
+        doc.text('Conhecimento', margin + 2, y + 3.2);
         doc.text('Tipo', margin + 110, y + 3.2);
         if (usePresentialSplit) {
           doc.text('Teór.', margin + 140, y + 3.2);
@@ -1037,8 +1055,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
           mSyncMed += syncMed;
           mAsync += bd.async;
 
-          doc.text(d.code, margin + 2, y + 3.2);
-          doc.text(d.name.substring(0, 48), margin + 22, y + 3.2);
+          doc.text(d.name.substring(0, 58), margin + 2, y + 3.2);
           doc.text(d.type.substring(0, 12), margin + 110, y + 3.2);
           if (usePresentialSplit) {
             doc.text(`${bd.theoretical}`, margin + 142, y + 3.2);
@@ -1184,7 +1201,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.text('TOTAL', tableX + 2, y + 4.6);
       doc.text(
         `${formatWorkloadHours(totalRow.hours)} horas`,
-        tableX + colLabel + (tableW - colLabel) / 2,
+        tableX + tableW / 2,
         y + 4.6,
         { align: 'center' }
       );
@@ -1370,6 +1387,7 @@ export async function generateInteractiveHtml(
   const workload = buildWorkloadSummary(structure);
   const hoursOf = (id: string) => workload.rows.find((r) => r.id === id)?.hours || 0;
   const usePresentialSplit = structureHasPresentialSplit(structure);
+  const showCodeCol = showsComponentCodeColumn(structure);
   const logoDataUrl = await getLogoDataUrl().catch(() => '');
 
   const dataJson = JSON.stringify(structure);
@@ -1493,7 +1511,7 @@ export async function generateInteractiveHtml(
                 ${
                   usePresentialSplit
                     ? `<tr>
-                  <th rowspan="2" class="px-3 py-2 align-bottom">Código</th>
+                  ${showCodeCol ? `<th rowspan="2" class="px-3 py-2 align-bottom">Código</th>` : ''}
                   <th rowspan="2" class="px-3 py-2 min-w-[180px] align-bottom">Disciplina</th>
                   <th rowspan="2" class="px-2.5 py-2 align-bottom">Tipo</th>
                   <th rowspan="2" class="px-2.5 py-2 align-bottom">Avaliação</th>
@@ -1509,7 +1527,7 @@ export async function generateInteractiveHtml(
                   <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Clínica</th>
                 </tr>`
                     : `<tr>
-                  <th class="px-3 py-3">Código</th>
+                  ${showCodeCol ? `<th class="px-3 py-3">Código</th>` : ''}
                   <th class="px-3 py-3 min-w-[200px]">Disciplina</th>
                   <th class="px-2.5 py-3">Tipo</th>
                   <th class="px-2.5 py-3">Avaliação</th>
@@ -1529,7 +1547,7 @@ export async function generateInteractiveHtml(
                     return usePresentialSplit
                       ? `
                   <tr class="item-row hover:bg-blue-50/50 transition">
-                    <td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>
+                    ${showCodeCol ? `<td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>` : ''}
                     <td class="px-3 py-3 font-medium text-slate-900">${disc.name}</td>
                     <td class="px-2.5 py-3 text-xs text-slate-600">${disc.type}</td>
                     <td class="px-2.5 py-3 text-xs text-slate-500">${disc.evaluationForm || 'Nota'}</td>
@@ -1544,7 +1562,7 @@ export async function generateInteractiveHtml(
                 `
                       : `
                   <tr class="item-row hover:bg-blue-50/50 transition">
-                    <td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>
+                    ${showCodeCol ? `<td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>` : ''}
                     <td class="px-3 py-3 font-medium text-slate-900">${disc.name}</td>
                     <td class="px-2.5 py-3 text-xs text-slate-600">${disc.type}</td>
                     <td class="px-2.5 py-3 text-xs text-slate-500">${disc.evaluationForm || 'Nota'}</td>
@@ -1573,7 +1591,7 @@ export async function generateInteractiveHtml(
                   return usePresentialSplit
                     ? `
                 <tr>
-                  <td colspan="4" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
+                  <td colspan="${showCodeCol ? 4 : 3}" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
                   <td class="px-2 py-2.5 text-center text-slate-900">${period.totalCredits}</td>
                   <td class="px-1.5 py-2.5 text-center text-blue-900">${pTheo}h</td>
                   <td class="px-1.5 py-2.5 text-center text-teal-800">${pLab}h</td>
@@ -1584,7 +1602,7 @@ export async function generateInteractiveHtml(
                 </tr>`
                     : `
                 <tr>
-                  <td colspan="4" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
+                  <td colspan="${showCodeCol ? 4 : 3}" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
                   <td class="px-2 py-2.5 text-center text-slate-900">${period.totalCredits}</td>
                   <td class="px-2.5 py-2.5 text-center text-blue-900">${pPres}h</td>
                   <td class="px-2.5 py-2.5 text-center text-indigo-900">${pSyncMed}h</td>
@@ -1607,7 +1625,6 @@ export async function generateInteractiveHtml(
           <div class="bg-[#002B49] px-6 py-4 flex flex-wrap justify-between items-center text-white gap-2">
             <div>
               <div class="flex items-center gap-2">
-                <span class="px-2 py-0.5 rounded bg-[#FF6B00] text-xs font-bold text-white">${mod.code}</span>
                 ${mod.branch ? `<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-xs font-semibold">Trilha ${mod.branch}</span>` : ''}
               </div>
               <h3 class="font-bold text-base mt-1 text-white">${formatModuleName(mod.number, mod.title)}</h3>
@@ -1615,9 +1632,13 @@ export async function generateInteractiveHtml(
             </div>
             <div class="flex items-center gap-3">
               <span class="text-sm font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${mod.hours}h</span>
-              <span class="text-sm font-extrabold text-[#002B49] bg-white px-3 py-1 rounded shadow-sm">${mod.meetings ?? 0} encontros</span>
               ${
-                !structure.hideCompetenciesInReport
+                !structure.hideMeetings
+                  ? `<span class="text-sm font-extrabold text-[#002B49] bg-white px-3 py-1 rounded shadow-sm">${mod.meetings ?? 0} encontros</span>`
+                  : ''
+              }
+              ${
+                !structure.hideCompetenciesInReport && (mod.competencies || []).length > 0
                   ? `<button onclick="toggleDetails('mod-details-${mod.id}')" class="text-xs px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-white transition no-print">
                 Ver Saberes / CHA
               </button>`
@@ -1648,7 +1669,6 @@ export async function generateInteractiveHtml(
                   ${
                     usePresentialSplit
                       ? `<tr>
-                    <th rowspan="2" class="px-3 py-2 align-bottom">Código</th>
                     <th rowspan="2" class="px-3 py-2 align-bottom">Conhecimento</th>
                     <th rowspan="2" class="px-2 py-2 text-center align-bottom">Tipo</th>
                     <th colspan="3" class="px-2 py-1 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
@@ -1661,7 +1681,6 @@ export async function generateInteractiveHtml(
                     <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Clínica</th>
                   </tr>`
                       : `<tr>
-                    <th class="px-3 py-2.5">Código</th>
                     <th class="px-3 py-2.5">Conhecimento</th>
                     <th class="px-2 py-2.5 text-center">Tipo</th>
                     <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]">CH Presencial</th>
@@ -1677,7 +1696,6 @@ export async function generateInteractiveHtml(
                       const syncMed = (chBd.syncMediated || 0) + (chBd.sync || 0);
                       return usePresentialSplit
                         ? `<tr class="item-row">
-                    <td class="px-3 py-2.5 font-mono text-xs font-semibold text-[#002B49]">${d.code}</td>
                     <td class="px-3 py-2.5 font-medium text-slate-900">${d.name}</td>
                     <td class="px-2 py-2.5 text-xs text-center text-slate-600">${d.type}</td>
                     <td class="px-1.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.theoretical}h</td>
@@ -1687,7 +1705,6 @@ export async function generateInteractiveHtml(
                     <td class="px-2 py-2.5 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
                   </tr>`
                         : `<tr class="item-row">
-                    <td class="px-3 py-2.5 font-mono text-xs font-semibold text-[#002B49]">${d.code}</td>
                     <td class="px-3 py-2.5 font-medium text-slate-900">${d.name}</td>
                     <td class="px-2 py-2.5 text-xs text-center text-slate-600">${d.type}</td>
                     <td class="px-2.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.presential}h</td>
@@ -1701,7 +1718,7 @@ export async function generateInteractiveHtml(
                   ${
                     usePresentialSplit
                       ? `<tr>
-                    <td colspan="3" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
+                    <td colspan="2" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
                     <td class="px-1.5 py-2.5 text-center text-blue-900">${mTheo}h</td>
                     <td class="px-1.5 py-2.5 text-center text-teal-800">${mLab}h</td>
                     <td class="px-1.5 py-2.5 text-center text-rose-800">${mClin}h</td>
@@ -1709,7 +1726,7 @@ export async function generateInteractiveHtml(
                     <td class="px-2 py-2.5 text-center text-purple-900">${mAsync}h</td>
                   </tr>`
                       : `<tr>
-                    <td colspan="3" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
+                    <td colspan="2" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
                     <td class="px-2.5 py-2.5 text-center text-blue-900">${mPres}h</td>
                     <td class="px-2.5 py-2.5 text-center text-indigo-900">${mSyncMed}h</td>
                     <td class="px-2.5 py-2.5 text-center text-purple-900">${mAsync}h</td>
@@ -1723,7 +1740,7 @@ export async function generateInteractiveHtml(
             }
 
             ${
-              !structure.hideCompetenciesInReport
+              !structure.hideCompetenciesInReport && (mod.competencies || []).length > 0
                 ? `<!-- Saberes -->
             <div id="mod-details-${mod.id}" class="cha-panel mt-4 p-4 rounded-lg bg-orange-50/60 border border-orange-200 space-y-3">
               <div class="flex items-center justify-between border-b border-orange-200/60 pb-2">

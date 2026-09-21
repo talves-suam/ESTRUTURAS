@@ -368,6 +368,20 @@ export function structureHasPresentialSplit(
   return getPresentialSplitFlags(structure).enabled;
 }
 
+export function isFilledComponentCode(code?: string | null): boolean {
+  return !!(code && String(code).trim());
+}
+
+/** Coluna de código do componente: só no disciplinar, e só se houver ao menos um código preenchido. */
+export function showsComponentCodeColumn(
+  structure: Pick<CurriculumStructure, 'structureType' | 'periods'>
+): boolean {
+  if (structure.structureType !== 'disciplinar') return false;
+  return (structure.periods || []).some((period) =>
+    (period.disciplines || []).some((disc) => isFilledComponentCode(disc.code))
+  );
+}
+
 /** Aplica as flags do curso/estrutura no componente para o breakdown de CH. */
 export function withStructurePresentialFlags(
   disc: Discipline,
@@ -405,6 +419,7 @@ export interface KnowledgeItem {
   chAsync?: number;
   description?: string;
   competencyId?: string; // Opcional: vínculo com competência
+  type?: Discipline['type'];
 }
 
 export interface ModuleData {
@@ -499,6 +514,8 @@ export interface CurriculumStructure {
   hideCompetenciesInReport?: boolean; // Ocultar competências/saberes nos relatórios
   hideKnowledgesInReport?: boolean; // Ocultar conhecimentos nos relatórios
   hideWorkloadSummaryInReport?: boolean; // Ocultar quadro de resumo de carga horária
+  /** Ocultar quantidade de encontros nos módulos, no mapa e no quadro de encontros. */
+  hideMeetings?: boolean;
 
   // Parâmetros de Carga Horária e Validação
   requiredTotalHours: number; // Carga horária total exigida

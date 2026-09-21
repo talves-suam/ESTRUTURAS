@@ -82,7 +82,7 @@ function knowledgeAsDiscipline(know: KnowledgeItem, flags: SplitFlags): Discipli
     id: know.id,
     code: '',
     name: know.name,
-    type: 'Obrigatória',
+    type: know.type || 'Obrigatória',
     credits: 0,
     hours: know.hours,
     modalityDelivery: know.modalityDelivery,
@@ -101,6 +101,7 @@ function knowledgeFromDiscipline(know: KnowledgeItem, next: Discipline): Knowled
   return {
     ...know,
     hours: next.hours,
+    type: next.type,
     modalityDelivery: next.modalityDelivery,
     hasLaboratory: next.hasLaboratory,
     hasClinical: next.hasClinical,
@@ -113,16 +114,47 @@ function knowledgeFromDiscipline(know: KnowledgeItem, next: Discipline): Knowled
   };
 }
 
+function ChHoursInput({
+  value,
+  onChange,
+  tone,
+  label,
+}: {
+  value: number;
+  onChange: (raw: string) => void;
+  tone: 'blue' | 'indigo' | 'purple' | 'teal' | 'rose';
+  label: string;
+}) {
+  const toneCls =
+    value > 0
+      ? {
+          blue: 'text-blue-900',
+          indigo: 'text-indigo-800',
+          purple: 'text-purple-800',
+          teal: 'text-teal-800',
+          rose: 'text-rose-800',
+        }[tone]
+      : 'text-slate-300';
+  return (
+    <input
+      type="number"
+      min={0}
+      aria-label={label}
+      value={Number.isFinite(value) ? value : 0}
+      onChange={(e) => onChange(e.target.value)}
+      className={`w-16 mx-auto block bg-transparent text-center font-black text-xs tabular-nums border-0 rounded py-1 focus:outline-none focus:ring-1 focus:ring-[#002B49]/30 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${toneCls}`}
+    />
+  );
+}
+
 function ChSplitFields({
   disc,
   flags,
   onChange,
-  compact = false,
 }: {
   disc: Discipline;
   flags: SplitFlags;
   onChange: (next: Discipline) => void;
-  compact?: boolean;
 }) {
   const bd = getDisciplineChBreakdown({
     ...disc,
@@ -130,9 +162,7 @@ function ChSplitFields({
     hasClinical: flags.hasClinical,
   });
   const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
-  const inputCls = compact
-    ? 'w-full min-w-[3.25rem] px-1 py-0.5 border rounded text-xs text-center font-bold bg-white'
-    : 'w-full px-2 py-1 border rounded text-xs text-center font-bold bg-white';
+  const splitPresential = flags.hasLaboratory || flags.hasClinical;
 
   const patch = (part: ExplicitChPart, raw: string) => {
     onChange(
@@ -145,91 +175,72 @@ function ChSplitFields({
   };
 
   return (
-    <div className="space-y-1">
-      {!compact && (
-        <span className="text-[10px] font-bold uppercase tracking-wide text-[#002B49]">
-          Carga horária
-        </span>
-      )}
-      <div className="flex flex-wrap gap-1.5">
-        <div className="flex-1 min-w-[7rem] rounded-lg border border-blue-100 bg-blue-50/70 px-2 py-1.5 space-y-1">
-          <span className="text-[9px] font-bold uppercase tracking-wide text-[#002B49] block text-center">
-            Presencial
-          </span>
-          <div className={`grid gap-1.5 ${flags.hasLaboratory && flags.hasClinical ? 'grid-cols-3' : flags.hasLaboratory || flags.hasClinical ? 'grid-cols-2' : 'grid-cols-1'}`}>
-            <label className="block">
-              <span className="text-[9px] text-slate-500 block text-center">Teórico</span>
-              <input
-                type="number"
-                min={0}
-                value={bd.theoretical}
-                onChange={(e) => patch('theoretical', e.target.value)}
-                className={`${inputCls} text-blue-900`}
-              />
-            </label>
-            {flags.hasLaboratory && (
-              <label className="block">
-                <span className="text-[9px] text-slate-500 block text-center">Laboratório</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={bd.laboratory}
-                  onChange={(e) => patch('laboratory', e.target.value)}
-                  className={`${inputCls} text-teal-800`}
-                />
-              </label>
+    <div className="overflow-x-auto">
+      <table className={`w-full text-left text-xs bg-slate-50/50 rounded-lg border border-slate-200 overflow-hidden ${splitPresential ? 'min-w-[520px]' : 'min-w-[420px]'}`}>
+        <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px]">
+          {splitPresential ? (
+            <>
+              <tr>
+                <th colSpan={1 + (flags.hasLaboratory ? 1 : 0) + (flags.hasClinical ? 1 : 0)} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">
+                  Presencial
+                </th>
+                <th rowSpan={2} className="px-2 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 align-bottom whitespace-nowrap">
+                  CH Síncrona-Mediada
+                </th>
+                <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200 align-bottom">
+                  CH Assíncrona
+                </th>
+              </tr>
+              <tr>
+                <th className="px-1.5 py-1 text-center bg-blue-50/50 text-[#002B49] border-l border-slate-200">Teórico</th>
+                {flags.hasLaboratory && (
+                  <th className="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Laboratório</th>
+                )}
+                {flags.hasClinical && (
+                  <th className="px-1.5 py-1 text-center bg-blue-50/50 text-[#002B49]">Clínica</th>
+                )}
+              </tr>
+            </>
+          ) : (
+            <tr>
+              <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
+              <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
+              <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
+            </tr>
+          )}
+        </thead>
+        <tbody className="bg-white">
+          <tr>
+            {splitPresential ? (
+              <>
+                <td className="px-1.5 py-1 text-center bg-blue-50/20 border-l border-slate-100">
+                  <ChHoursInput label="Teórico" tone="blue" value={bd.theoretical} onChange={(raw) => patch('theoretical', raw)} />
+                </td>
+                {flags.hasLaboratory && (
+                  <td className="px-1.5 py-1 text-center bg-blue-50/10">
+                    <ChHoursInput label="Laboratório" tone="teal" value={bd.laboratory} onChange={(raw) => patch('laboratory', raw)} />
+                  </td>
+                )}
+                {flags.hasClinical && (
+                  <td className="px-1.5 py-1 text-center bg-blue-50/20">
+                    <ChHoursInput label="Clínica" tone="rose" value={bd.clinical} onChange={(raw) => patch('clinical', raw)} />
+                  </td>
+                )}
+              </>
+            ) : (
+              <td className="px-2.5 py-1 text-center bg-blue-50/20 border-l border-slate-100">
+                <ChHoursInput label="CH Presencial" tone="blue" value={bd.presential} onChange={(raw) => patch('theoretical', raw)} />
+              </td>
             )}
-            {flags.hasClinical && (
-              <label className="block">
-                <span className="text-[9px] text-slate-500 block text-center">Clínica</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={bd.clinical}
-                  onChange={(e) => patch('clinical', e.target.value)}
-                  className={`${inputCls} text-rose-800`}
-                />
-              </label>
-            )}
-          </div>
-        </div>
-        <label className="flex-1 min-w-[5.5rem] rounded-lg border border-indigo-100 bg-indigo-50/70 px-2 py-1.5">
-          <span className="text-[9px] font-bold uppercase tracking-wide text-indigo-900 block text-center">
-            Síncrono-Mediado
-          </span>
-          <input
-            type="number"
-            min={0}
-            value={syncMed}
-            onChange={(e) => patch('syncMediated', e.target.value)}
-            className={`${inputCls} text-indigo-900 mt-1`}
-          />
-        </label>
-        <label className="flex-1 min-w-[5rem] rounded-lg border border-purple-100 bg-purple-50/70 px-2 py-1.5">
-          <span className="text-[9px] font-bold uppercase tracking-wide text-purple-900 block text-center">
-            Assíncrono
-          </span>
-          <input
-            type="number"
-            min={0}
-            value={bd.async}
-            onChange={(e) => patch('async', e.target.value)}
-            className={`${inputCls} text-purple-900 mt-1`}
-          />
-        </label>
-        <label className="w-[4.75rem] rounded-lg border border-orange-100 bg-orange-50/60 px-2 py-1.5">
-          <span className="text-[9px] font-bold uppercase tracking-wide text-slate-600 block text-center">
-            Total
-          </span>
-          <input
-            type="number"
-            readOnly
-            value={bd.total}
-            className={`${inputCls} text-[#FF6B00] mt-1 bg-slate-50 cursor-default`}
-            title="Total = soma das colunas"
-          />
-        </label>
-      </div>
+            <td className="px-2 py-1 text-center bg-indigo-50/20 border-l border-slate-100">
+              <ChHoursInput label="CH Síncrona-Mediada" tone="indigo" value={syncMed} onChange={(raw) => patch('syncMediated', raw)} />
+            </td>
+            <td className="px-2 py-1 text-center bg-purple-50/20 border-l border-slate-100">
+              <ChHoursInput label="CH Assíncrona" tone="purple" value={bd.async} onChange={(raw) => patch('async', raw)} />
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -272,6 +283,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [hideValidity, setHideValidity] = useState<boolean>(
     initialData?.hideValidity ?? settings.hideValidityStartDefault
   );
+  const [hideMeetings, setHideMeetings] = useState<boolean>(initialData?.hideMeetings ?? false);
 
   // Regulatory — só herda curso se estiver editando estrutura já salva
   const currentCourse = selectedCourseId
@@ -327,7 +339,6 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   );
   const [hasClinical, setHasClinical] = useState<boolean>(initialData?.hasClinical ?? false);
   const splitFlags: SplitFlags = { hasLaboratory, hasClinical };
-  const useChSplit = hasLaboratory || hasClinical;
 
   // Periods (for disciplinar) — nova estrutura começa vazia (dados do curso vêm da planilha)
   const [periods, setPeriods] = useState<PeriodData[]>(
@@ -390,12 +401,28 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     if (selected.modality && !opts?.skipModality) setModality(selected.modality);
     setDegrees(selected.degrees);
     setInternshipRequirement(selected.internshipRequirement || 'Não Informado');
-    setMinInternshipHours(selected.minInternshipHours);
-    setComplementaryRequirement(selected.complementaryRequirement || 'Não Informado');
-    setComplementaryTotalHours(selected.complementaryTotalHours ?? 0);
-    setComplementaryModality(selected.complementaryModality ?? 'assincrono');
-    setExtensionTotalHours(selected.extensionTotalHours ?? 0);
-    setExtensionModality(selected.extensionModality ?? 'presencial');
+    const overwriteHours = !initialData;
+    if (overwriteHours) {
+      setMinInternshipHours(selected.minInternshipHours);
+      setComplementaryRequirement(selected.complementaryRequirement || 'Não Informado');
+      setComplementaryTotalHours(selected.complementaryTotalHours ?? 0);
+      setComplementaryModality(selected.complementaryModality ?? 'assincrono');
+      setExtensionTotalHours(selected.extensionTotalHours ?? 0);
+      setExtensionModality(selected.extensionModality ?? 'presencial');
+    } else {
+      setComplementaryRequirement(
+        (prev) => prev === 'Não Informado'
+          ? (selected.complementaryRequirement || 'Não Informado')
+          : prev
+      );
+      setMinInternshipHours((prev) => prev ?? selected.minInternshipHours);
+      setComplementaryTotalHours((prev) =>
+        prev > 0 ? prev : (selected.complementaryTotalHours ?? 0)
+      );
+      setExtensionTotalHours((prev) =>
+        prev > 0 ? prev : (selected.extensionTotalHours ?? 0)
+      );
+    }
     setFinalPaperRequirement(selected.finalPaperRequirement || 'Não Informado');
     setCoordinatorName(selected.coordinatorName || '');
     setCoordinatorEmail(selected.coordinatorEmail || '');
@@ -633,6 +660,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     hideStatus,
     validityStart,
     hideValidity,
+    hideMeetings,
     // Opções de exibição em relatório são controladas na tela de geração (não no cadastro)
     hideCompetenciesInReport: initialData?.hideCompetenciesInReport ?? false,
     hideKnowledgesInReport: initialData?.hideKnowledgesInReport ?? false,
@@ -728,7 +756,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         if (p.id !== periodId) return p;
         const newD: Discipline = {
           id: `d-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-          code: `DISC${String(p.disciplines.length + 1).padStart(3, '0')}`,
+          code: '',
           name: '',
           type: 'Obrigatória',
           credits: 4,
@@ -1076,14 +1104,27 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 Tipo de Organização *
               </label>
-              <select
-                value={structureType}
-                onChange={(e) => setStructureType(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold bg-white text-[#002B49] focus:ring-2 focus:ring-[#002B49]"
-              >
-                <option value="modular">Modular (com ramificações & CHA)</option>
-                <option value="disciplinar">Disciplinar (Períodos Letivos)</option>
-              </select>
+              <div className="flex items-center gap-3">
+                <select
+                  value={structureType}
+                  onChange={(e) => setStructureType(e.target.value as any)}
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg border border-slate-300 text-xs font-bold bg-white text-[#002B49] focus:ring-2 focus:ring-[#002B49]"
+                >
+                  <option value="modular">Modular (com ramificações & CHA)</option>
+                  <option value="disciplinar">Disciplinar (Períodos Letivos)</option>
+                </select>
+                {structureType === 'modular' && (
+                  <label className="flex items-center gap-1.5 shrink-0 text-[11px] text-slate-600 cursor-pointer whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={hideMeetings}
+                      onChange={(e) => setHideMeetings(e.target.checked)}
+                      className="rounded text-[#002B49]"
+                    />
+                    <span>Ocultar encontros</span>
+                  </label>
+                )}
+              </div>
             </div>
 
             {/* Ato Autorizativo */}
@@ -1615,7 +1656,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             <GripVertical className="w-4 h-4" />
                           </button>
                           <div className="flex-1 min-w-0">
-                          <label className="text-[10px] text-slate-400 block">Código</label>
+                          <label className="text-[10px] text-slate-400 block">Código (opcional)</label>
                           <input
                             type="text"
                             value={disc.code}
@@ -1624,6 +1665,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               updated[pIdx].disciplines[dIdx].code = e.target.value;
                               setPeriods(updated);
                             }}
+                            placeholder="Em branco some nos relatórios"
                             className="w-full px-2 py-1 border rounded font-mono font-bold text-xs"
                           />
                           </div>
@@ -1675,66 +1717,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           />
                         </div>
 
-                        {!useChSplit && (
-                          <>
-                            <div className="lg:col-span-1">
-                              <label className="text-[10px] text-slate-400 block">Horas (h)</label>
-                              <input
-                                type="number"
-                                value={disc.hours || ''}
-                                onChange={(e) => {
-                                  const updated = [...periods];
-                                  const hours = Number(e.target.value);
-                                  const current = updated[pIdx].disciplines[dIdx];
-                                  updated[pIdx].disciplines[dIdx] = {
-                                    ...current,
-                                    hours,
-                                    chPresential:
-                                      current.modalityDelivery === 'presencial' ? hours : current.chPresential,
-                                    chTheoretical:
-                                      current.modalityDelivery === 'presencial' ? hours : current.chTheoretical,
-                                  };
-                                  setPeriods(updated);
-                                }}
-                                className="w-full px-2 py-1 border rounded text-xs text-center font-bold text-[#FF6B00]"
-                              />
-                            </div>
-
-                            <div className="lg:col-span-2">
-                              <label className="text-[10px] text-slate-400 block">Oferta</label>
-                              <select
-                                value={disc.modalityDelivery}
-                                onChange={(e) => {
-                                  const updated = [...periods];
-                                  const modalityDelivery = e.target.value as Discipline['modalityDelivery'];
-                                  let next: Discipline = {
-                                    ...updated[pIdx].disciplines[dIdx],
-                                    modalityDelivery,
-                                  };
-                                  if (modalityDelivery !== 'presencial') {
-                                    next.chTheoretical = undefined;
-                                    next.chLaboratory = undefined;
-                                    next.chClinical = undefined;
-                                    next.chPresential = undefined;
-                                  } else {
-                                    next.chTheoretical = next.hours;
-                                    next.chPresential = next.hours;
-                                  }
-                                  updated[pIdx].disciplines[dIdx] = next;
-                                  setPeriods(updated);
-                                }}
-                                className="w-full px-2 py-1 border rounded text-xs font-medium"
-                              >
-                                <option value="presencial">Presencial (padrão)</option>
-                                <option value="sincrono">Síncrono</option>
-                                <option value="sincrono-mediado">Síncrono-Mediado</option>
-                                <option value="assincrono">Assíncrono</option>
-                              </select>
-                            </div>
-                          </>
-                        )}
-
-                        <div className={`${useChSplit ? 'lg:col-span-4' : 'lg:col-span-1'} flex items-center justify-end gap-0.5 pt-3`}>
+                        <div className="lg:col-span-4 flex items-center justify-end gap-0.5 pt-3">
                           <button
                             type="button"
                             disabled={dIdx === 0}
@@ -1796,8 +1779,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           </button>
                         </div>
 
-                        {useChSplit && (
-                          <div className="lg:col-span-12 mt-1">
+                        <div className="lg:col-span-12 mt-1">
                             <ChSplitFields
                               disc={{ ...disc, hasLaboratory, hasClinical }}
                               flags={splitFlags}
@@ -1808,7 +1790,6 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               }}
                             />
                           </div>
-                        )}
                       </div>
                       );
                     })}
@@ -1900,6 +1881,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                         </span>
                         <span>h</span>
                       </div>
+                      {!hideMeetings && (
                       <div className="flex items-center gap-1 text-xs" title="Quantidade de encontros deste módulo">
                         <span>Encontros:</span>
                         <input
@@ -1917,6 +1899,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           className="w-14 px-1.5 py-0.5 text-slate-900 bg-white rounded font-black text-center text-xs tabular-nums border-0 focus:ring-2 focus:ring-[#FF6B00]"
                         />
                       </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => removeModule(mod.id)}
@@ -2119,11 +2102,11 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                       </div>
                     </div>
 
-                    {/* Conhecimentos do Módulo */}
-                    <div className="bg-sky-50/50 p-3.5 rounded-lg border border-sky-200 space-y-2">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-bold text-sky-950 uppercase tracking-wider">
-                          Conhecimentos
+                    {/* Conhecimentos do Módulo — mesma grelha da matriz */}
+                    <div className="rounded-lg border border-slate-200 overflow-hidden bg-white">
+                      <div className="flex justify-between items-center px-3 py-2 bg-slate-50 border-b border-slate-200">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                          Conhecimentos{mod.knowledges?.length ? ` (${mod.knowledges.length})` : ''}
                         </span>
                         <button
                           type="button"
@@ -2136,6 +2119,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               category: 'saber-conceitual',
                               hours: 0,
                               modalityDelivery: 'presencial',
+                              type: 'Obrigatória',
                               hasLaboratory,
                               hasClinical,
                             });
@@ -2147,209 +2131,291 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                         </button>
                       </div>
 
-                      <div className="space-y-2">
-                        {mod.knowledges?.map((know, kIdx) => {
-                          const isDragging =
-                            listDrag?.kind === 'knowledge' &&
-                            listDrag.moduleId === mod.id &&
-                            listDrag.from === kIdx;
-                          const isDropTarget =
-                            listDragOver?.kind === 'knowledge' &&
-                            listDragOver.parentId === mod.id &&
-                            listDragOver.index === kIdx &&
-                            listDrag?.from !== kIdx;
-
-                          return (
-                          <div
-                            key={know.id}
-                            onDragOver={(e) => {
-                              if (listDrag?.kind !== 'knowledge' || listDrag.moduleId !== mod.id) return;
-                              e.preventDefault();
-                              e.dataTransfer.dropEffect = 'move';
-                              if (
-                                !listDragOver ||
-                                listDragOver.kind !== 'knowledge' ||
-                                listDragOver.parentId !== mod.id ||
-                                listDragOver.index !== kIdx
-                              ) {
-                                setListDragOver({ kind: 'knowledge', parentId: mod.id, index: kIdx });
-                              }
-                            }}
-                            onDragLeave={() => {
-                              if (
+                      <div className="overflow-x-auto">
+                        <table className={`w-full text-left text-xs ${hasLaboratory || hasClinical ? 'min-w-[860px]' : 'min-w-[700px]'}`}>
+                          <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10">
+                            {hasLaboratory || hasClinical ? (
+                              <>
+                                <tr>
+                                  <th rowSpan={2} className="px-3 py-2 min-w-[240px] align-bottom">Conhecimento</th>
+                                  <th rowSpan={2} className="px-2 py-2 text-center w-24 align-bottom">Tipo</th>
+                                  <th colSpan={1 + (hasLaboratory ? 1 : 0) + (hasClinical ? 1 : 0)} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">
+                                    Presencial
+                                  </th>
+                                  <th rowSpan={2} className="px-2 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 align-bottom whitespace-nowrap">
+                                    CH Síncrona-Mediada
+                                  </th>
+                                  <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200 align-bottom">
+                                    CH Assíncrona
+                                  </th>
+                                  <th rowSpan={2} className="w-16 align-bottom" />
+                                </tr>
+                                <tr>
+                                  <th className="px-1.5 py-1 text-center bg-blue-50/50 text-[#002B49] border-l border-slate-200">Teórico</th>
+                                  {hasLaboratory && (
+                                    <th className="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Laboratório</th>
+                                  )}
+                                  {hasClinical && (
+                                    <th className="px-1.5 py-1 text-center bg-blue-50/50 text-[#002B49]">Clínica</th>
+                                  )}
+                                </tr>
+                              </>
+                            ) : (
+                              <tr>
+                                  <th className="px-3 py-2 min-w-[240px]">Conhecimento</th>
+                                <th className="px-2 py-2 text-center w-24">Tipo</th>
+                                <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
+                                <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
+                                <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
+                                <th className="w-16" />
+                              </tr>
+                            )}
+                          </thead>
+                          <tbody className="divide-y divide-slate-200/60 bg-white">
+                            {(mod.knowledges || []).map((know, kIdx) => {
+                              const isDragging =
+                                listDrag?.kind === 'knowledge' &&
+                                listDrag.moduleId === mod.id &&
+                                listDrag.from === kIdx;
+                              const isDropTarget =
                                 listDragOver?.kind === 'knowledge' &&
                                 listDragOver.parentId === mod.id &&
-                                listDragOver.index === kIdx
-                              ) {
-                                setListDragOver(null);
-                              }
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              if (listDrag?.kind !== 'knowledge' || listDrag.moduleId !== mod.id) return;
-                              reorderKnowledgeInModule(mod.id, listDrag.from, kIdx);
-                              clearListDrag();
-                            }}
-                            className={`bg-white p-2 rounded border flex flex-wrap items-center gap-2 text-xs transition ${
-                              isDragging
-                                ? 'opacity-40 border-sky-200/80'
-                                : isDropTarget
-                                ? 'border-[#FF6B00] ring-2 ring-[#FF6B00]/30'
-                                : 'border-sky-200/80'
-                            }`}
-                          >
-                            <button
-                              type="button"
-                              draggable
-                              onDragStart={(e) => {
-                                e.dataTransfer.effectAllowed = 'move';
-                                e.dataTransfer.setData('text/plain', know.id);
-                                setListDrag({ kind: 'knowledge', moduleId: mod.id, from: kIdx });
-                              }}
-                              onDragEnd={clearListDrag}
-                              className="text-slate-400 hover:text-[#002B49] cursor-grab active:cursor-grabbing p-0.5 shrink-0"
-                              title="Arrastar para reordenar"
-                              aria-label="Arrastar conhecimento"
-                            >
-                              <GripVertical className="w-3.5 h-3.5" />
-                            </button>
-                            <input
-                              type="text"
-                              value={know.name}
-                              onChange={(e) => {
+                                listDragOver.index === kIdx &&
+                                listDrag?.from !== kIdx;
+                              const disc = knowledgeAsDiscipline(know, splitFlags);
+                              const bd = getDisciplineChBreakdown(disc);
+                              const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
+                              const patchKnow = (part: ExplicitChPart, raw: string) => {
                                 const updated = [...modules];
-                                if (updated[mIdx].knowledges) {
-                                  updated[mIdx].knowledges[kIdx].name = e.target.value;
-                                  setModules(updated);
-                                }
-                              }}
-                              placeholder="Novo conhecimento aplicado"
-                              className="flex-1 min-w-[180px] px-2 py-1 border rounded text-xs"
-                            />
+                                if (!updated[mIdx].knowledges) return;
+                                updated[mIdx].knowledges[kIdx] = knowledgeFromDiscipline(
+                                  know,
+                                  applyExplicitChBreakdown(disc, splitFlags, { [part]: Number(raw) })
+                                );
+                                setModules(updated);
+                              };
 
-                            {!useChSplit && (
-                              <>
-                                <select
-                                  value={know.modalityDelivery}
-                                  onChange={(e) => {
-                                    const updated = [...modules];
-                                    if (updated[mIdx].knowledges) {
-                                      const modalityDelivery = e.target.value as KnowledgeItem['modalityDelivery'];
-                                      const k = { ...updated[mIdx].knowledges[kIdx], modalityDelivery };
-                                      if (modalityDelivery !== 'presencial') {
-                                        k.chTheoretical = undefined;
-                                        k.chLaboratory = undefined;
-                                        k.chClinical = undefined;
-                                        k.chPresential = undefined;
-                                      }
-                                      updated[mIdx].knowledges[kIdx] = k;
-                                      setModules(updated);
+                              return (
+                                <tr
+                                  key={know.id}
+                                  onDragOver={(e) => {
+                                    if (listDrag?.kind !== 'knowledge' || listDrag.moduleId !== mod.id) return;
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = 'move';
+                                    if (
+                                      !listDragOver ||
+                                      listDragOver.kind !== 'knowledge' ||
+                                      listDragOver.parentId !== mod.id ||
+                                      listDragOver.index !== kIdx
+                                    ) {
+                                      setListDragOver({ kind: 'knowledge', parentId: mod.id, index: kIdx });
                                     }
                                   }}
-                                  className="px-2 py-1 rounded border text-[11px] font-medium bg-white"
-                                >
-                                  <option value="presencial">Presencial</option>
-                                  <option value="sincrono">Síncrono</option>
-                                  <option value="sincrono-mediado">Síncrono-Mediado</option>
-                                  <option value="assincrono">Assíncrono</option>
-                                </select>
-
-                                <div className="flex items-center gap-1">
-                                  <input
-                                    type="number"
-                                    value={know.hours}
-                                    onChange={(e) => {
-                                      const updated = [...modules];
-                                      if (updated[mIdx].knowledges) {
-                                        const hours = Number(e.target.value);
-                                        updated[mIdx].knowledges[kIdx] = {
-                                          ...updated[mIdx].knowledges[kIdx],
-                                          hours,
-                                          chPresential:
-                                            updated[mIdx].knowledges[kIdx].modalityDelivery === 'presencial'
-                                              ? hours
-                                              : updated[mIdx].knowledges[kIdx].chPresential,
-                                          chTheoretical:
-                                            updated[mIdx].knowledges[kIdx].modalityDelivery === 'presencial'
-                                              ? hours
-                                              : updated[mIdx].knowledges[kIdx].chTheoretical,
-                                        };
-                                        setModules(updated);
-                                      }
-                                    }}
-                                    className="w-14 px-1.5 py-1 border rounded text-xs text-center font-bold text-sky-900"
-                                  />
-                                  <span className="text-[10px] text-slate-500">h</span>
-                                </div>
-                              </>
-                            )}
-
-                            {useChSplit && (
-                              <div className="w-full">
-                                <ChSplitFields
-                                  compact
-                                  disc={knowledgeAsDiscipline(know, splitFlags)}
-                                  flags={splitFlags}
-                                  onChange={(next) => {
-                                    const updated = [...modules];
-                                    if (!updated[mIdx].knowledges) return;
-                                    updated[mIdx].knowledges[kIdx] = knowledgeFromDiscipline(know, next);
-                                    setModules(updated);
+                                  onDragLeave={() => {
+                                    if (
+                                      listDragOver?.kind === 'knowledge' &&
+                                      listDragOver.parentId === mod.id &&
+                                      listDragOver.index === kIdx
+                                    ) {
+                                      setListDragOver(null);
+                                    }
                                   }}
-                                />
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              disabled={kIdx === 0}
-                              onClick={() => {
-                                const updated = [...modules];
-                                if (!updated[mIdx].knowledges) return;
-                                const list = [...updated[mIdx].knowledges];
-                                if (kIdx <= 0) return;
-                                [list[kIdx - 1], list[kIdx]] = [list[kIdx], list[kIdx - 1]];
-                                updated[mIdx].knowledges = list;
-                                setModules(updated);
-                              }}
-                              className="text-slate-400 hover:text-[#002B49] p-1 disabled:opacity-30"
-                              title="Mover para cima"
-                            >
-                              <ArrowUp className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={kIdx === (mod.knowledges?.length || 0) - 1}
-                              onClick={() => {
-                                const updated = [...modules];
-                                if (!updated[mIdx].knowledges) return;
-                                const list = [...updated[mIdx].knowledges];
-                                if (kIdx >= list.length - 1) return;
-                                [list[kIdx + 1], list[kIdx]] = [list[kIdx], list[kIdx + 1]];
-                                updated[mIdx].knowledges = list;
-                                setModules(updated);
-                              }}
-                              className="text-slate-400 hover:text-[#002B49] p-1 disabled:opacity-30"
-                              title="Mover para baixo"
-                            >
-                              <ArrowDown className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated = [...modules];
-                                if (updated[mIdx].knowledges) {
-                                  updated[mIdx].knowledges = updated[mIdx].knowledges.filter((_, i) => i !== kIdx);
-                                  setModules(updated);
-                                }
-                              }}
-                              className="text-slate-400 hover:text-red-600 p-1"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                          );
-                        })}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    if (listDrag?.kind !== 'knowledge' || listDrag.moduleId !== mod.id) return;
+                                    reorderKnowledgeInModule(mod.id, listDrag.from, kIdx);
+                                    clearListDrag();
+                                  }}
+                                  className={`transition ${
+                                    isDragging
+                                      ? 'opacity-40'
+                                      : isDropTarget
+                                      ? 'ring-2 ring-inset ring-[#FF6B00]/40'
+                                      : 'hover:bg-blue-50/30'
+                                  }`}
+                                >
+                                  <td className="px-2 py-1.5">
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        draggable
+                                        onDragStart={(e) => {
+                                          e.dataTransfer.effectAllowed = 'move';
+                                          e.dataTransfer.setData('text/plain', know.id);
+                                          setListDrag({ kind: 'knowledge', moduleId: mod.id, from: kIdx });
+                                        }}
+                                        onDragEnd={clearListDrag}
+                                        className="text-slate-400 hover:text-[#002B49] cursor-grab active:cursor-grabbing p-0.5 shrink-0"
+                                        title="Arrastar para reordenar"
+                                        aria-label="Arrastar conhecimento"
+                                      >
+                                        <GripVertical className="w-3.5 h-3.5" />
+                                      </button>
+                                      <textarea
+                                        rows={2}
+                                        value={know.name}
+                                        onChange={(e) => {
+                                          const updated = [...modules];
+                                          if (updated[mIdx].knowledges) {
+                                            updated[mIdx].knowledges[kIdx].name = e.target.value;
+                                            setModules(updated);
+                                          }
+                                        }}
+                                        placeholder="Novo conhecimento aplicado"
+                                        className="w-full min-w-[160px] px-1.5 py-1 border border-transparent hover:border-slate-200 focus:border-[#002B49] rounded text-xs font-medium text-slate-900 bg-transparent leading-snug resize-none"
+                                      />
+                                    </div>
+                                  </td>
+                                  <td className="px-2 py-1.5 text-center">
+                                    <select
+                                      value={know.type || 'Obrigatória'}
+                                      onChange={(e) => {
+                                        const updated = [...modules];
+                                        if (updated[mIdx].knowledges) {
+                                          updated[mIdx].knowledges[kIdx].type = e.target.value as Discipline['type'];
+                                          setModules(updated);
+                                        }
+                                      }}
+                                      className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 border-0 font-medium"
+                                    >
+                                      <option value="Obrigatória">Obrigatória</option>
+                                      <option value="Eletiva">Eletiva</option>
+                                      <option value="Optativa">Optativa</option>
+                                    </select>
+                                  </td>
+                                  {hasLaboratory || hasClinical ? (
+                                    <>
+                                      <td className="px-1.5 py-1 text-center font-bold bg-blue-50/20 border-l border-slate-100">
+                                        <ChHoursInput label="Teórico" tone="blue" value={bd.theoretical} onChange={(raw) => patchKnow('theoretical', raw)} />
+                                      </td>
+                                      {hasLaboratory && (
+                                        <td className="px-1.5 py-1 text-center font-bold bg-blue-50/10">
+                                          <ChHoursInput label="Laboratório" tone="teal" value={bd.laboratory} onChange={(raw) => patchKnow('laboratory', raw)} />
+                                        </td>
+                                      )}
+                                      {hasClinical && (
+                                        <td className="px-1.5 py-1 text-center font-bold bg-blue-50/20">
+                                          <ChHoursInput label="Clínica" tone="rose" value={bd.clinical} onChange={(raw) => patchKnow('clinical', raw)} />
+                                        </td>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <td className="px-2.5 py-1 text-center font-bold bg-blue-50/20 border-l border-slate-100">
+                                      <ChHoursInput label="CH Presencial" tone="blue" value={bd.presential} onChange={(raw) => patchKnow('theoretical', raw)} />
+                                    </td>
+                                  )}
+                                  <td className="px-2 py-1 text-center font-bold bg-indigo-50/20 border-l border-slate-100">
+                                    <ChHoursInput label="CH Síncrona-Mediada" tone="indigo" value={syncMed} onChange={(raw) => patchKnow('syncMediated', raw)} />
+                                  </td>
+                                  <td className="px-2 py-1 text-center font-bold bg-purple-50/20 border-l border-slate-100">
+                                    <ChHoursInput label="CH Assíncrona" tone="purple" value={bd.async} onChange={(raw) => patchKnow('async', raw)} />
+                                  </td>
+                                  <td className="px-1 py-1.5">
+                                    <div className="flex items-center justify-end gap-0.5">
+                                      <button
+                                        type="button"
+                                        disabled={kIdx === 0}
+                                        onClick={() => {
+                                          const updated = [...modules];
+                                          if (!updated[mIdx].knowledges) return;
+                                          const list = [...updated[mIdx].knowledges];
+                                          if (kIdx <= 0) return;
+                                          [list[kIdx - 1], list[kIdx]] = [list[kIdx], list[kIdx - 1]];
+                                          updated[mIdx].knowledges = list;
+                                          setModules(updated);
+                                        }}
+                                        className="text-slate-400 hover:text-[#002B49] p-0.5 disabled:opacity-30"
+                                        title="Mover para cima"
+                                      >
+                                        <ArrowUp className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={kIdx === (mod.knowledges?.length || 0) - 1}
+                                        onClick={() => {
+                                          const updated = [...modules];
+                                          if (!updated[mIdx].knowledges) return;
+                                          const list = [...updated[mIdx].knowledges];
+                                          if (kIdx >= list.length - 1) return;
+                                          [list[kIdx + 1], list[kIdx]] = [list[kIdx], list[kIdx + 1]];
+                                          updated[mIdx].knowledges = list;
+                                          setModules(updated);
+                                        }}
+                                        className="text-slate-400 hover:text-[#002B49] p-0.5 disabled:opacity-30"
+                                        title="Mover para baixo"
+                                      >
+                                        <ArrowDown className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = [...modules];
+                                          if (updated[mIdx].knowledges) {
+                                            updated[mIdx].knowledges = updated[mIdx].knowledges.filter((_, i) => i !== kIdx);
+                                            setModules(updated);
+                                          }
+                                        }}
+                                        className="text-slate-400 hover:text-red-600 p-0.5"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          {(mod.knowledges || []).length > 0 && (
+                            <tfoot className="bg-slate-100/90 border-t border-slate-200 text-xs font-bold text-slate-700">
+                              {(() => {
+                                const items = (mod.knowledges || []).map((k) =>
+                                  getDisciplineChBreakdown(knowledgeAsDiscipline(k, splitFlags))
+                                );
+                                const mPres = items.reduce((acc, bd) => acc + bd.presential, 0);
+                                const mTheo = items.reduce((acc, bd) => acc + bd.theoretical, 0);
+                                const mLab = items.reduce((acc, bd) => acc + bd.laboratory, 0);
+                                const mClin = items.reduce((acc, bd) => acc + bd.clinical, 0);
+                                const mSyncMed = items.reduce((acc, bd) => acc + bd.syncMediated + (bd.sync || 0), 0);
+                                const mAsync = items.reduce((acc, bd) => acc + bd.async, 0);
+                                return (
+                                  <tr>
+                                    <td colSpan={2} className="px-3 py-2.5 text-slate-600 text-right">
+                                      Subtotal dos Conhecimentos
+                                    </td>
+                                    {hasLaboratory || hasClinical ? (
+                                      <>
+                                        <td className="px-1.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                          {mTheo}h
+                                        </td>
+                                        {hasLaboratory && (
+                                          <td className="px-1.5 py-2.5 text-center text-teal-900 font-black bg-blue-50/40">
+                                            {mLab}h
+                                          </td>
+                                        )}
+                                        {hasClinical && (
+                                          <td className="px-1.5 py-2.5 text-center text-rose-900 font-black bg-blue-50/50">
+                                            {mClin}h
+                                          </td>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <td className="px-2.5 py-2.5 text-center text-blue-900 font-black border-l border-slate-200 bg-blue-50/50">
+                                        {mPres}h
+                                      </td>
+                                    )}
+                                    <td className="px-2 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
+                                      {mSyncMed}h
+                                    </td>
+                                    <td className="px-2 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
+                                      {mAsync}h
+                                    </td>
+                                    <td />
+                                  </tr>
+                                );
+                              })()}
+                            </tfoot>
+                          )}
+                        </table>
                       </div>
                     </div>
                   </div>

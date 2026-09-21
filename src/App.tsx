@@ -11,27 +11,38 @@ import { CurriculumGraphView } from './components/CurriculumGraphView';
 import { CurriculumForm } from './components/CurriculumForm';
 import { SagaImportModal } from './components/SagaImportModal';
 import { SettingsModal } from './components/SettingsModal';
-
 import { CurriculumStructure, Course, AppSettings } from './types/curriculum';
+import {
+  FIREBASE_CHANGED_EVENT,
+  applyRuntimeFirebaseConfig,
+  clearRuntimeFirebaseConfig,
+  isFirebaseConfigured,
+  notifyFirebaseChanged,
+  parseFirebaseConfigPaste,
+  toEnvLocalContents,
+} from './firebase/config';
 import { 
-  getStructuresFromFirestore, 
+  getSettingsFromFirestore, 
   saveStructureToFirestore, 
   deleteStructureFromFirestore, 
-  getCoursesFromFirestore, 
   saveCourseToFirestore, 
   saveAllCoursesToFirestore, 
-  getSettingsFromFirestore, 
   saveSettingsToFirestore,
   calculateStructureTotals,
   getCachedStructures,
   getCachedCourses,
   getCachedSettings,
+  applyLocalAppBackup,
+  subscribeCurriculumData,
+  testFirestoreConnection,
+  pushLocalCacheToServer,
 } from './services/curriculumService';
 import { ensureCourseForStructure, courseBaseName } from './utils/courseBatch';
 import { 
   CheckCircle2, 
   AlertCircle, 
-  ArrowLeft
+  ArrowLeft,
+  CloudOff
 } from 'lucide-react';
 
 export default function App() {
@@ -52,6 +63,8 @@ export default function App() {
   const [currentViewMode, setCurrentViewMode] = useState<'list' | 'table' | 'graph' | 'form'>('list');
   const [editingStructure, setEditingStructure] = useState<CurriculumStructure | null>(null);
   const [loading, setLoading] = useState(true);
+  const [firebaseOnline, setFirebaseOnline] = useState(isFirebaseConfigured);
+  const [connectingServer, setConnectingServer] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -59,7 +72,6 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Load data: pinta cache local na hora, depois sincroniza com Firestore em background
   useEffect(() => {
     const cachedStructures = getCachedStructures();
     const cachedCourses = getCachedCourses();
@@ -73,37 +85,42 @@ export default function App() {
       setLoading(false);
     }
 
-    async function loadData() {
-      try {
-        if (cachedStructures.length === 0 && cachedCourses.length === 0) {
-          setLoading(true);
-        }
-        const [loadedStructures, loadedCourses, loadedSettings] = await Promise.all([
-          getStructuresFromFirestore(),
-          getCoursesFromFirestore(),
-          getSettingsFromFirestore(),
-        ]);
-        setStructures(loadedStructures);
-        setCourses(loadedCourses);
-        setSettings(loadedSettings);
-        if (loadedStructures.length > 0) {
-          setSelectedStructure((prev) => {
-            if (prev && loadedStructures.some((s) => s.id === prev.id)) {
-              return loadedStructures.find((s) => s.id === prev.id) || loadedStructures[0];
-            }
-            return loadedStructures[0];
-          });
-        }
-      } catch (err) {
-        console.error('Erro ao carregar dados:', err);
-        if (cachedStructures.length === 0) {
-          showToast('Não foi possível sincronizar. Usando dados locais, se houver.', 'error');
-        }
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
+    let stop = () => {};
+    const startListening = () => {
+      setFirebaseOnline(isFirebaseConfigured);
+      stop();
+      stop = subscribeCurriculumData({
+        onStructures: (loadedStructures) => {
+          setStructures(loadedStructures);
+          if (loadedStructures.length > 0) {
+            setSelectedStructure((prev) => {
+              if (prev && loadedStructures.some((s) => s.id === prev.id)) {
+                return loadedStructures.find((s) => s.id === prev.id) || loadedStructures[0];
+              }
+              return loadedStructures[0];
+            });
+          }
+          setLoading(false);
+        },
+        onCourses: (loadedCourses) => {
+          setCourses(loadedCourses);
+          setLoading(false);
+        },
+        onError: (err) => {
+          console.error('Erro ao sincronizar:', err);
+          showToast(err.message, 'error');
+          setLoading(false);
+        },
+      });
+      void getSettingsFromFirestore().then(setSettings);
+    };
+
+    startListening();
+    window.addEventListener(FIREBASE_CHANGED_EVENT, startListening);
+    return () => {
+      stop();
+      window.removeEventListener(FIREBASE_CHANGED_EVENT, startListening);
+    };
   }, []);
 
   // Handlers
@@ -147,14 +164,20 @@ export default function App() {
           ? ` (a partir do cadastro ${clonedFromModality})`
           : '';
         showToast(
-          `Estrutura [${calculated.code}] salva. Curso ${course.name} (${course.modality}) incluído no cadastro${cloneNote}.`
+          firebaseOnline
+            ? `Estrutura [${calculated.code}] salva no servidor. Curso ${course.name} (${course.modality}) incluído${cloneNote}.`
+            : `Estrutura [${calculated.code}] salva SÓ neste computador. Colegas não vão ver até conectar o servidor.`
         );
       } else {
-        showToast(`Estrutura [${calculated.code}] salva com sucesso no Firebase!`);
+        showToast(
+          firebaseOnline
+            ? `Estrutura [${calculated.code}] salva no servidor.`
+            : `Estrutura [${calculated.code}] salva SÓ neste computador. Conecte o servidor em Configurações.`
+        );
       }
     } catch (err) {
       console.error(err);
-      showToast('Erro ao salvar estrutura.', 'error');
+      showToast(err instanceof Error ? err.message : 'Erro ao salvar estrutura.', 'error');
     }
   };
 
@@ -206,6 +229,67 @@ export default function App() {
     showToast('Configurações atualizadas com sucesso!');
   };
 
+  const handleRestoreLocalBackup = (raw: string) => {
+    try {
+      const result = applyLocalAppBackup(raw);
+      setStructures(getCachedStructures());
+      setCourses(getCachedCourses());
+      const restoredSettings = getCachedSettings();
+      if (restoredSettings) setSettings(restoredSettings);
+      const list = getCachedStructures();
+      if (list.length > 0) setSelectedStructure(list[0]);
+      showToast(
+        `Restauradas ${result.structures} estrutura(s) e ${result.courses} curso(s) neste navegador.`
+      );
+      if (isFirebaseConfigured) {
+        void pushLocalCacheToServer()
+          .then(() => showToast('Backup também enviado ao servidor.'))
+          .catch((err) =>
+            showToast(err instanceof Error ? err.message : 'Backup local ok, mas o servidor recusou.', 'error')
+          );
+      }
+      setActiveTab('structures');
+      setCurrentViewMode('list');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Backup inválido.';
+      showToast(message, 'error');
+      throw err;
+    }
+  };
+
+  const handleConnectFirebase = async (paste: string) => {
+    setConnectingServer(true);
+    try {
+      const config = parseFirebaseConfigPaste(paste);
+      await applyRuntimeFirebaseConfig(config);
+      await testFirestoreConnection();
+      await pushLocalCacheToServer();
+      notifyFirebaseChanged();
+      setFirebaseOnline(true);
+      const blob = new Blob([toEnvLocalContents(config)], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'env.local';
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Servidor conectado. Os cadastros agora são compartilhados. Guarde o arquivo env.local baixado.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível conectar.';
+      showToast(message, 'error');
+      throw err;
+    } finally {
+      setConnectingServer(false);
+    }
+  };
+
+  const handleDisconnectFirebase = () => {
+    void clearRuntimeFirebaseConfig().then(() => {
+      setFirebaseOnline(isFirebaseConfigured);
+      showToast('Este navegador voltou a usar só os dados locais.');
+    });
+  };
+
   const handleSagaImportComplete = (parsed: CurriculumStructure) => {
     setEditingStructure(parsed);
     setCurrentViewMode('form');
@@ -228,7 +312,26 @@ export default function App() {
           }
         }}
         structuresCount={structures.length}
+        firebaseOnline={firebaseOnline}
       />
+
+      {!firebaseOnline && (
+        <div className="bg-amber-50 border-b border-amber-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-amber-950 font-medium flex items-center gap-2">
+              <CloudOff className="w-4 h-4 text-amber-700 shrink-0" />
+              Isto ainda não está na nuvem. O que você cadastra fica só neste navegador — colegas e você em outro computador não veem.
+            </p>
+            <button
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className="px-3 py-1.5 rounded-lg bg-[#002B49] text-white text-[11px] font-black"
+            >
+              Conectar servidor
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -262,6 +365,8 @@ export default function App() {
               <StructuresList
                 structures={structures}
                 settings={settings}
+                firebaseOnline={firebaseOnline}
+                onOpenSettings={() => setActiveTab('settings')}
                 onSelectStructure={(struct, view) => {
                   setSelectedStructure(struct);
                   setCurrentViewMode(view);
@@ -357,8 +462,13 @@ export default function App() {
               <SettingsModal
                 settings={settings}
                 courses={courses}
+                firebaseOnline={firebaseOnline}
+                connectingServer={connectingServer}
+                onConnectFirebase={handleConnectFirebase}
+                onDisconnectFirebase={handleDisconnectFirebase}
                 onSaveSettings={handleSaveSettings}
                 onBatchUpdateCourses={handleBatchUpdateCourses}
+                onRestoreLocalBackup={handleRestoreLocalBackup}
                 onClose={() => setActiveTab('structures')}
               />
             )}

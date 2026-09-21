@@ -87,14 +87,14 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
           {totalRow && (
             <tfoot>
               <tr className="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
-                <th scope="row" className="px-2.5 py-1.5 text-left uppercase tracking-wider">
-                  Total
-                </th>
                 <td
-                  colSpan={componentRows.length}
-                  className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap"
+                  colSpan={componentRows.length + 1}
+                  className="relative px-2.5 py-1.5"
                 >
-                  {formatWorkloadHours(totalRow.hours)} horas
+                  <span className="uppercase tracking-wider">Total</span>
+                  <span className="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none">
+                    {formatWorkloadHours(totalRow.hours)} horas
+                  </span>
                 </td>
               </tr>
             </tfoot>

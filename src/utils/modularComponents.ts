@@ -7,14 +7,13 @@ import type { Discipline, KnowledgeItem, ModuleData } from '../types/curriculum'
  */
 export function knowledgeToDiscipline(
   know: KnowledgeItem,
-  existing?: Discipline,
-  moduleCode?: string
+  existing?: Discipline
 ): Discipline {
   return {
     id: know.id,
-    code: existing?.code || moduleCode || '',
+    code: '',
     name: know.name,
-    type: existing?.type || 'Obrigatória',
+    type: know.type || existing?.type || 'Obrigatória',
     credits: existing?.credits ?? 0,
     hours: know.hours || 0,
     modalityDelivery: know.modalityDelivery,
@@ -51,7 +50,7 @@ export function getModularComponents(mod: ModuleData): Discipline[] {
   const knowledges = mod.knowledges || [];
   if (knowledges.length > 0) {
     return knowledges.map((k) =>
-      knowledgeToDiscipline(k, findMatchingDiscipline(k, mod.disciplines), mod.code)
+      knowledgeToDiscipline(k, findMatchingDiscipline(k, mod.disciplines))
     );
   }
   return [...(mod.disciplines || [])];

@@ -258,12 +258,18 @@ export interface ModuleMeetingsRow {
   meetings: number;
 }
 
-/** Quadro horizontal de encontros por módulo (estrutura modular). */
+/** Quadro horizontal de encontros por módulo. Null se disciplinar, sem módulos ou oculto. */
+export function showsModuleMeetings(
+  structure: Pick<CurriculumStructure, 'structureType' | 'hideMeetings'>
+): boolean {
+  return structure.structureType === 'modular' && !structure.hideMeetings;
+}
+
 export function buildModuleMeetingsSummary(structure: CurriculumStructure): {
   rows: ModuleMeetingsRow[];
   totalMeetings: number;
 } | null {
-  if (structure.structureType !== 'modular' || !structure.modules?.length) return null;
+  if (!showsModuleMeetings(structure) || !structure.modules?.length) return null;
 
   const modules = [...structure.modules].sort((a, b) => {
     const byNum = a.number - b.number;

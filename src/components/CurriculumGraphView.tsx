@@ -13,6 +13,7 @@ import {
   Discipline,
   CompetencyCHA,
   PeriodData,
+  isFilledComponentCode,
 } from '../types/curriculum';
 import { getModularComponents } from '../utils/modularComponents';
 import {
@@ -35,6 +36,7 @@ import { exportToPNG, exportElementToPDF, exportMapToHTML } from '../services/ex
 import { WorkloadSummaryCard } from './WorkloadSummaryCard';
 import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
 import { StructureOfficialHeader } from './StructureOfficialHeader';
+import { showsModuleMeetings } from '../services/workloadSummary';
 import { labelForCategory } from '../utils/nomenclature';
 import { formatModuleName } from '../utils/roman';
 
@@ -230,9 +232,11 @@ function Stem({ direction }: { direction: 'up' | 'down' }) {
 function ModuleNode({
   mod,
   nodeRef,
+  hideMeetings,
 }: {
   mod: ModuleData;
   nodeRef?: React.Ref<HTMLDivElement>;
+  hideMeetings?: boolean;
 }) {
   return (
     <div
@@ -248,7 +252,7 @@ function ModuleNode({
         <p className="text-[9px] text-blue-100/90 mt-1 font-medium leading-snug">{mod.competence}</p>
       ) : null}
       <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
-        {mod.hours}h · {mod.meetings ?? 0} encontros
+        {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
       </p>
     </div>
   );
@@ -277,6 +281,7 @@ function ModuleChain({
   firstModuleRef,
   lastModuleRef,
   nomenclature = 'cha',
+  hideMeetings = false,
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
@@ -284,6 +289,7 @@ function ModuleChain({
   firstModuleRef?: React.Ref<HTMLDivElement>;
   lastModuleRef?: React.Ref<HTMLDivElement>;
   nomenclature?: AppSettings['pedagogicalNomenclature'];
+  hideMeetings?: boolean;
 }) {
   if (modules.length === 0) return null;
 
@@ -359,7 +365,7 @@ function ModuleChain({
               className="flex items-center justify-center px-1"
               style={{ gridColumn: idx * 2 + 1, gridRow: 2 }}
             >
-              <ModuleNode mod={mod} nodeRef={ref} />
+              <ModuleNode mod={mod} nodeRef={ref} hideMeetings={hideMeetings} />
             </div>
             {idx < modules.length - 1 && (
               <div
@@ -481,7 +487,7 @@ function PeriodColumn({
             <div key={d.id} className="w-full flex justify-center">
               <ItemNode
                 kind="conhecimento"
-                label={d.code || 'Disciplina'}
+                label={isFilledComponentCode(d.code) ? d.code : 'Disciplina'}
                 name={d.name}
                 hours={d.hours}
               />
@@ -654,11 +660,13 @@ function ModularCurriculumMap({
   showConhecimentos,
   showSaberes,
   nomenclature = 'cha',
+  hideMeetings = false,
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
   showSaberes: boolean;
   nomenclature?: AppSettings['pedagogicalNomenclature'];
+  hideMeetings?: boolean;
 }) {
   const { trunk, branches } = useMemo(() => partitionModules(modules), [modules]);
 
@@ -802,6 +810,7 @@ function ModularCurriculumMap({
               showConhecimentos={showConhecimentos}
               showSaberes={showSaberes}
               nomenclature={nomenclature}
+              hideMeetings={hideMeetings}
             />
           ) : (
             <div
@@ -817,7 +826,8 @@ function ModularCurriculumMap({
                   modules={displayTrunk}
                   showConhecimentos={showConhecimentos}
                   showSaberes={showSaberes}
-                      nomenclature={nomenclature}
+                  nomenclature={nomenclature}
+                  hideMeetings={hideMeetings}
                   lastModuleRef={trunkEndRef}
                 />
               </div>
@@ -830,7 +840,8 @@ function ModularCurriculumMap({
                       modules={upperBranch.modules}
                       showConhecimentos={showConhecimentos}
                       showSaberes={showSaberes}
-                      nomenclature={nomenclature}
+                  nomenclature={nomenclature}
+                  hideMeetings={hideMeetings}
                       firstModuleRef={upperStartRef}
                     />
                     <BranchLaneLabel
@@ -855,7 +866,8 @@ function ModularCurriculumMap({
                       modules={lowerBranch.modules}
                       showConhecimentos={showConhecimentos}
                       showSaberes={showSaberes}
-                      nomenclature={nomenclature}
+                  nomenclature={nomenclature}
+                  hideMeetings={hideMeetings}
                       firstModuleRef={lowerStartRef}
                     />
                   </>
@@ -867,7 +879,8 @@ function ModularCurriculumMap({
                       modules={br.modules}
                       showConhecimentos={showConhecimentos}
                       showSaberes={showSaberes}
-                      nomenclature={nomenclature}
+                  nomenclature={nomenclature}
+                  hideMeetings={hideMeetings}
                     />
                   </div>
                 ))}
@@ -1108,6 +1121,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
                 showConhecimentos={showConhecimentosOnMap}
                 showSaberes={showSaberesOnMap}
                 nomenclature={settings.pedagogicalNomenclature}
+                hideMeetings={!!structure.hideMeetings}
               />
             )
           ) : periods.length === 0 ? (
@@ -1121,11 +1135,13 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
           {showWorkloadSummaryOnMap && (
             <div
               className={`mt-4 grid gap-4 ${
-                isModular ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'
+                showsModuleMeetings(structure)
+                  ? 'grid-cols-1 xl:grid-cols-2'
+                  : 'grid-cols-1'
               }`}
             >
               <WorkloadSummaryCard structure={structure} className="w-full" />
-              {isModular && (
+              {showsModuleMeetings(structure) && (
                 <ModuleMeetingsSummaryCard structure={structure} className="w-full" />
               )}
             </div>

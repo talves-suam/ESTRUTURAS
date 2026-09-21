@@ -7,6 +7,7 @@ import {
   structureHasPresentialSplit,
   getPresentialSplitFlags,
   withStructurePresentialFlags,
+  showsComponentCodeColumn,
 } from '../types/curriculum';
 import { buildWorkloadSummary, buildModuleMeetingsSummary } from './workloadSummary';
 import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
@@ -86,7 +87,9 @@ async function buildCurriculumIdentificationSheet(
   const isModular = structure.structureType === 'modular';
   const splitFlags = getPresentialSplitFlags(structure);
   const useSplit = splitFlags.enabled;
-  // Colunas CH (após Código + Unidade [+ Créditos no disciplinar]):
+  const showCode = showsComponentCodeColumn(structure);
+  const nameCol = showCode ? 2 : 1;
+  // Colunas CH (após [Código] + Unidade [+ Créditos no disciplinar]):
   // Com split: Teórico | [Laboratório] | [Clínica] | Síncrono-Mediado | Assíncrono
   // Sem split: Presencial | Síncrono-Mediado | Assíncrono
   const prefixCols = isModular ? ([] as string[]) : (['Créditos'] as string[]);
@@ -100,12 +103,12 @@ async function buildCurriculumIdentificationSheet(
   const distanceCols = ['Síncrono-Mediado', 'Assíncrono'];
   const chDetailCols = [...presentialCols, ...distanceCols];
   const allMidCols = [...prefixCols, ...chDetailCols];
-  const totalCol = 2 + allMidCols.length + 1; // code + name + mid + total
+  const totalCol = nameCol + allMidCols.length + 1;
   const lastCol = totalCol;
   const sidePeriodCol = lastCol + 2;
   const sidePubCol = lastCol + 3;
-  const midStart = 3;
-  const midEnd = 2 + allMidCols.length;
+  const midStart = nameCol + 1;
+  const midEnd = nameCol + allMidCols.length;
   const presStart = midStart + prefixCols.length;
   const presEnd = presStart + presentialCols.length - 1;
   const syncMedCol = presEnd + 1;
@@ -115,9 +118,13 @@ async function buildCurriculumIdentificationSheet(
     views: [{ showGridLines: false }],
   });
 
-  ws.getColumn(1).width = 12;
-  ws.getColumn(2).width = 42;
-  for (let c = 3; c < totalCol; c++) ws.getColumn(c).width = 13;
+  if (showCode) {
+    ws.getColumn(1).width = 12;
+    ws.getColumn(2).width = 42;
+  } else {
+    ws.getColumn(1).width = 42;
+  }
+  for (let c = nameCol + 1; c < totalCol; c++) ws.getColumn(c).width = 13;
   ws.getColumn(totalCol).width = 10;
   ws.getColumn(lastCol + 1).width = 3;
   ws.getColumn(sidePeriodCol).width = 10;
@@ -218,8 +225,8 @@ async function buildCurriculumIdentificationSheet(
 
     // Header: with split → 2 rows (Presencial spanning); without → single CH Presencial
     if (useSplit) {
-      ws.mergeCells(row, 1, row + 1, 1);
-      ws.mergeCells(row, 2, row + 1, 2);
+      if (showCode) ws.mergeCells(row, 1, row + 1, 1);
+      ws.mergeCells(row, nameCol, row + 1, nameCol);
       if (!isModular) {
         ws.mergeCells(row, midStart, row + 1, midStart);
       }
@@ -228,8 +235,8 @@ async function buildCurriculumIdentificationSheet(
       ws.mergeCells(row, asyncCol, row + 1, asyncCol);
       if (presEnd > presStart) ws.mergeCells(row, presStart, row, presEnd);
 
-      ws.getCell(row, 1).value = 'Código';
-      ws.getCell(row, 2).value = 'Unidade Curricular';
+      if (showCode) ws.getCell(row, 1).value = 'Código';
+      ws.getCell(row, nameCol).value = 'Unidade Curricular';
       if (!isModular) ws.getCell(row, midStart).value = 'Créditos';
       ws.getCell(row, presStart).value = 'Presencial';
       ws.getCell(row, syncMedCol).value = 'Síncrono-Mediado';
@@ -254,7 +261,7 @@ async function buildCurriculumIdentificationSheet(
         };
         cell.border = thinBorder();
       });
-      styleRange(ws, row, 1, row, 2, {
+      styleRange(ws, row, 1, row, nameCol, {
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
       });
       if (!isModular) {
@@ -271,8 +278,8 @@ async function buildCurriculumIdentificationSheet(
       ws.getRow(row).height = 28;
       row++;
     } else {
-      ws.getCell(row, 1).value = 'Código';
-      ws.getCell(row, 2).value = 'Unidade Curricular';
+      if (showCode) ws.getCell(row, 1).value = 'Código';
+      ws.getCell(row, nameCol).value = 'Unidade Curricular';
       allMidCols.forEach((label, i) => {
         ws.getCell(row, midStart + i).value = label.startsWith('Presencial')
           ? 'CH Presencial'
@@ -304,14 +311,14 @@ async function buildCurriculumIdentificationSheet(
     };
 
     if (block.components.length === 0) {
-      ws.getCell(row, 1).value = '—';
-      ws.getCell(row, 2).value = '(Sem unidades cadastradas)';
-      for (let c = 3; c <= lastCol; c++) ws.getCell(row, c).value = null;
+      if (showCode) ws.getCell(row, 1).value = '—';
+      ws.getCell(row, nameCol).value = '(Sem unidades cadastradas)';
+      for (let c = nameCol + 1; c <= lastCol; c++) ws.getCell(row, c).value = null;
       styleRange(ws, row, 1, row, lastCol, {
         font: { size: 9, italic: true },
         alignment: { horizontal: 'center', vertical: 'middle' },
       });
-      ws.getCell(row, 2).alignment = { horizontal: 'left', vertical: 'middle' };
+      ws.getCell(row, nameCol).alignment = { horizontal: 'left', vertical: 'middle' };
       row++;
     } else {
       for (const disc of block.components) {
@@ -340,8 +347,8 @@ async function buildCurriculumIdentificationSheet(
             : [disc.credits || null, ...presentialVals, ...tail];
         })();
 
-        ws.getCell(row, 1).value = disc.code || '';
-        ws.getCell(row, 2).value = disc.name;
+        if (showCode) ws.getCell(row, 1).value = disc.code || '';
+        ws.getCell(row, nameCol).value = disc.name;
         midValues.forEach((v, i) => {
           ws.getCell(row, midStart + i).value = v;
         });
@@ -352,9 +359,9 @@ async function buildCurriculumIdentificationSheet(
           cell.font = { size: 9, color: { argb: C.navy } };
           cell.border = thinBorder();
           cell.alignment = {
-            horizontal: c === 2 ? 'left' : 'center',
+            horizontal: c === nameCol ? 'left' : 'center',
             vertical: 'middle',
-            wrapText: c === 2,
+            wrapText: c === nameCol,
           };
           if (c >= midStart && c < totalCol) {
             const idx = c - midStart;
@@ -370,7 +377,7 @@ async function buildCurriculumIdentificationSheet(
     }
 
     // SUBTOTAL
-    ws.mergeCells(row, 1, row, 2);
+    if (showCode) ws.mergeCells(row, 1, row, nameCol);
     ws.getCell(row, 1).value = 'SUBTOTAL';
     const subVals = (() => {
       const presentialVals = useSplit
@@ -397,7 +404,7 @@ async function buildCurriculumIdentificationSheet(
     row++;
 
     // Total
-    ws.mergeCells(row, 1, row, 2);
+    if (showCode) ws.mergeCells(row, 1, row, nameCol);
     ws.getCell(row, 1).value = 'Total';
     if (midEnd > midStart) ws.mergeCells(row, midStart, row, midEnd);
     const grand = sums.total || block.fallbackHours || 0;

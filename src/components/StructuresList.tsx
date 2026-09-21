@@ -27,12 +27,14 @@ import { DcnViewerModal } from './DcnViewerModal';
 interface StructuresListProps {
   structures: CurriculumStructure[];
   settings: AppSettings;
+  firebaseOnline?: boolean;
   onSelectStructure: (structure: CurriculumStructure, view: 'table' | 'graph') => void;
   onEditStructure: (structure: CurriculumStructure) => void;
   onDeleteStructure: (id: string) => Promise<void>;
   onDuplicateStructure: (structure: CurriculumStructure) => Promise<void>;
   onCreateNew: () => void;
   onOpenSagaImport: () => void;
+  onOpenSettings?: () => void;
 }
 
 type StructureSortMode = 'name' | 'date';
@@ -40,12 +42,14 @@ type StructureSortMode = 'name' | 'date';
 export const StructuresList: React.FC<StructuresListProps> = ({
   structures,
   settings,
+  firebaseOnline = false,
   onSelectStructure,
   onEditStructure,
   onDeleteStructure,
   onDuplicateStructure,
   onCreateNew,
   onOpenSagaImport,
+  onOpenSettings,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedModality, setSelectedModality] = useState<string>('all');
@@ -97,7 +101,9 @@ export const StructuresList: React.FC<StructuresListProps> = ({
                 UNISUAM • Sistema Oficial
               </span>
               <span className="text-xs text-blue-200">
-                Sincronizado com Firebase Cloud Firestore
+                {firebaseOnline
+                  ? 'Lista ao vivo no servidor — o que uma pessoa salva as outras veem'
+                  : 'Cadastros só neste navegador (não estão no servidor)'}
               </span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
@@ -232,15 +238,27 @@ export const StructuresList: React.FC<StructuresListProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center space-y-3">
           <Layers className="w-10 h-10 text-slate-300 mx-auto" />
           <h3 className="font-bold text-slate-800 text-sm">Nenhuma estrutura curricular encontrada</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            Ajuste os filtros ou crie uma nova estrutura curricular usando os modelos oficiais ou o importador SAGA.
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            {firebaseOnline
+              ? 'Ajuste os filtros ou crie uma nova estrutura curricular usando o importador SAGA.'
+              : 'Ainda não há cadastro neste navegador além do que já estava aqui. O que você criou em outro computador ou outra porta não aparece até conectar o servidor ou restaurar um backup.'}
           </p>
-          <button
-            onClick={onCreateNew}
-            className="mt-2 px-4 py-2 rounded-lg bg-[#FF6B00] text-white text-xs font-bold"
-          >
-            Cadastrar Estrutura Agora
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+            <button
+              onClick={onCreateNew}
+              className="px-4 py-2 rounded-lg bg-[#FF6B00] text-white text-xs font-bold"
+            >
+              Cadastrar Estrutura Agora
+            </button>
+            {!firebaseOnline && onOpenSettings && (
+              <button
+                onClick={onOpenSettings}
+                className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold"
+              >
+                Restaurar backup / conectar servidor
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
