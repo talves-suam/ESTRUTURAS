@@ -14,6 +14,11 @@ import {
   applyExplicitChBreakdown,
   getDisciplineChBreakdown,
   ExplicitChPart,
+  normalizeModuleCompetences,
+  getGraduateProfileAspects,
+  createGraduateProfileAspect,
+  createModuleCompetenceItem,
+  aspectShortLabel,
 } from '../types/curriculum';
 import { getSaberesLabels, defaultSaberCategory } from '../utils/nomenclature';
 import { toRoman, fromRoman, formatModuleName } from '../utils/roman';
@@ -184,11 +189,11 @@ function ChSplitFields({
                 <th colSpan={1 + (flags.hasLaboratory ? 1 : 0) + (flags.hasClinical ? 1 : 0)} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">
                   Presencial
                 </th>
-                <th rowSpan={2} className="px-2 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 align-bottom whitespace-nowrap">
-                  CH Síncrona-Mediada
+                <th rowSpan={2} className="px-2 py-2 text-center w-28 bg-blue-50/70 text-[#002B49] border-l border-slate-200 align-bottom leading-tight">
+                  Síncrona<br />Mediada
                 </th>
-                <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200 align-bottom">
-                  CH Assíncrona
+                <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200 align-bottom">
+                  Assíncrona
                 </th>
               </tr>
               <tr>
@@ -203,9 +208,9 @@ function ChSplitFields({
             </>
           ) : (
             <tr>
-              <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
-              <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
-              <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
+              <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">Presencial</th>
+              <th className="px-2.5 py-2 text-center w-28 bg-blue-50/70 text-[#002B49] border-l border-slate-200 leading-tight">Síncrona<br />Mediada</th>
+              <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">Assíncrona</th>
             </tr>
           )}
         </thead>
@@ -229,14 +234,14 @@ function ChSplitFields({
               </>
             ) : (
               <td className="px-2.5 py-1 text-center bg-blue-50/20 border-l border-slate-100">
-                <ChHoursInput label="CH Presencial" tone="blue" value={bd.presential} onChange={(raw) => patch('theoretical', raw)} />
+                <ChHoursInput label="Presencial" tone="blue" value={bd.presential} onChange={(raw) => patch('theoretical', raw)} />
               </td>
             )}
-            <td className="px-2 py-1 text-center bg-indigo-50/20 border-l border-slate-100">
-              <ChHoursInput label="CH Síncrona-Mediada" tone="indigo" value={syncMed} onChange={(raw) => patch('syncMediated', raw)} />
+            <td className="px-2 py-1 text-center bg-blue-50/20 border-l border-slate-100">
+              <ChHoursInput label="Síncrona Mediada" tone="blue" value={syncMed} onChange={(raw) => patch('syncMediated', raw)} />
             </td>
-            <td className="px-2 py-1 text-center bg-purple-50/20 border-l border-slate-100">
-              <ChHoursInput label="CH Assíncrona" tone="purple" value={bd.async} onChange={(raw) => patch('async', raw)} />
+            <td className="px-2 py-1 text-center bg-blue-50/20 border-l border-slate-100">
+              <ChHoursInput label="Assíncrona" tone="blue" value={bd.async} onChange={(raw) => patch('async', raw)} />
             </td>
           </tr>
         </tbody>
@@ -347,7 +352,22 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
   // Modules (for modular)
   const [modules, setModules] = useState<ModuleData[]>(
-    initialData?.modules || []
+    (initialData?.modules || []).map((m) => ({
+      ...m,
+      competences: normalizeModuleCompetences(m),
+      competence: undefined,
+    }))
+  );
+  const [profileAspects, setProfileAspects] = useState(
+    () => {
+      const fromStructure = getGraduateProfileAspects({
+        graduateProfileAspects: initialData?.graduateProfileAspects,
+        graduateProfile: initialData?.graduateProfile,
+      });
+      return fromStructure.length > 0
+        ? fromStructure
+        : [createGraduateProfileAspect({ title: '', text: '' })];
+    }
   );
 
   const seedFileRef = useRef<HTMLInputElement>(null);
@@ -631,6 +651,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     list.map((m) =>
       syncModuleKnowledgesToDisciplines({
         ...m,
+        competences: normalizeModuleCompetences(m).filter((c) => c.text.trim()),
+        competence: undefined,
         disciplines: (m.disciplines || []).map((d) => ({
           ...d,
           hasLaboratory,
@@ -644,6 +666,14 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         hours: sumModuleComponentHours(m),
       })
     );
+
+  const cleanedAspects = profileAspects
+    .map((a) => ({
+      ...a,
+      title: (a.title || '').trim(),
+      text: (a.text || '').trim(),
+    }))
+    .filter((a) => a.title || a.text);
 
   // Calculations for current form
   const resolvedCourseName =
@@ -664,6 +694,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     // Opções de exibição em relatório são controladas na tela de geração (não no cadastro)
     hideCompetenciesInReport: initialData?.hideCompetenciesInReport ?? false,
     hideKnowledgesInReport: initialData?.hideKnowledgesInReport ?? false,
+    hideModuleCompetencesInReport: initialData?.hideModuleCompetencesInReport ?? false,
     requiredTotalHours: Number(requiredTotalHours) || 0,
     minPresentialHoursPercent: Number(minPresentialHoursPercent) || 0,
     maxEadHoursPercent: Number(maxEadHoursPercent) || 0,
@@ -703,6 +734,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       structureType === 'modular'
         ? withSyncedModules(modules)
         : undefined,
+    graduateProfileAspects: cleanedAspects.length > 0 ? cleanedAspects : undefined,
+    graduateProfile: undefined,
     dcnRef,
     dcns: structureDcns,
     cineBrasilRef,
@@ -831,7 +864,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       code: `MOD-${String(nextNum).padStart(2, '0')}${branch ? branch : ''}`,
       branch: branch || undefined,
       branchName: undefined,
-      competence: '',
+      competences: [createModuleCompetenceItem({ text: '' })],
       parentModuleId,
       title: branch
         ? `Módulo Específico ${toRoman(nextNum)}${branch}`
@@ -1526,6 +1559,80 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           </div>
         </div>
 
+        {/* Perfil do Egresso — aspectos/trechos (mapa de competências) */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-[#002B49]">
+                Perfil do Egresso
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 max-w-3xl">
+                Cadastre o perfil em trechos (aspectos). Cada competência dos módulos poderá se
+                relacionar a um ou mais trechos — usado no mapa de competências e na impressão da
+                estrutura.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setProfileAspects((prev) => [...prev, createGraduateProfileAspect({ title: '', text: '' })])
+              }
+              className="text-[11px] font-bold text-[#FF6B00] hover:text-[#d95300]"
+            >
+              + Adicionar aspecto
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {profileAspects.map((asp, aIdx) => (
+              <div
+                key={asp.id}
+                className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 space-y-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black text-slate-400 w-6">{aIdx + 1}.</span>
+                  <input
+                    type="text"
+                    value={asp.title || ''}
+                    onChange={(e) => {
+                      const next = [...profileAspects];
+                      next[aIdx] = { ...next[aIdx], title: e.target.value };
+                      setProfileAspects(next);
+                    }}
+                    placeholder="Título curto do aspecto (ex.: Atuação ética)"
+                    className="flex-1 px-3 py-1.5 border rounded text-xs bg-white font-semibold text-[#002B49]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setProfileAspects((prev) =>
+                        prev.length <= 1
+                          ? [createGraduateProfileAspect({ title: '', text: '' })]
+                          : prev.filter((_, i) => i !== aIdx)
+                      )
+                    }
+                    className="text-slate-400 hover:text-red-600 p-1"
+                    title="Remover aspecto"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <textarea
+                  value={asp.text || ''}
+                  onChange={(e) => {
+                    const next = [...profileAspects];
+                    next[aIdx] = { ...next[aIdx], text: e.target.value };
+                    setProfileAspects(next);
+                  }}
+                  rows={3}
+                  placeholder="Texto do trecho do perfil do egresso…"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white text-slate-900 leading-relaxed resize-y"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Section 3: Conteúdo Curricular (Modular ou Disciplinar) */}
         {structureType === 'disciplinar' ? (
           /* Editor Disciplinar */
@@ -1991,21 +2098,154 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                         </select>
                       </div>
 
-                      <div className="md:col-span-3">
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Competência do Módulo
-                        </label>
-                        <input
-                          type="text"
-                          value={mod.competence || ''}
-                          onChange={(e) => {
-                            const updated = [...modules];
-                            updated[mIdx].competence = e.target.value;
-                            setModules(updated);
-                          }}
-                          placeholder="Descreva a competência do módulo (exibida como subtítulo)"
-                          className="w-full px-3 py-1.5 border rounded text-xs bg-white"
-                        />
+                      <div className="md:col-span-4 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="block text-[11px] font-bold text-slate-700">
+                            Competências do Módulo
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = [...modules];
+                              const list = normalizeModuleCompetences(updated[mIdx], {
+                                keepEmpty: true,
+                              });
+                              list.push(createModuleCompetenceItem({ text: '' }));
+                              updated[mIdx] = {
+                                ...updated[mIdx],
+                                competences: list,
+                                competence: undefined,
+                              };
+                              setModules(updated);
+                            }}
+                            className="text-[11px] font-bold text-[#FF6B00] hover:text-[#d95300]"
+                          >
+                            + Adicionar Competência
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-slate-400">
+                          Relacione cada competência aos aspectos do perfil do egresso cadastrados
+                          acima. Aparecem no mapa de competências e na impressão da estrutura.
+                        </p>
+                        <div className="space-y-3">
+                          {(normalizeModuleCompetences(mod, { keepEmpty: true }).length > 0
+                            ? normalizeModuleCompetences(mod, { keepEmpty: true })
+                            : [createModuleCompetenceItem({ text: '' })]
+                          ).map((compItem, cIdx) => {
+                            const usableAspects = profileAspects.filter(
+                              (a) => (a.title || '').trim() || (a.text || '').trim()
+                            );
+                            return (
+                              <div
+                                key={compItem.id || `comp-${cIdx}`}
+                                className="rounded-lg border border-slate-200 bg-white p-3 space-y-2"
+                              >
+                                <div className="flex items-start gap-2">
+                                  <textarea
+                                    value={compItem.text}
+                                    onChange={(e) => {
+                                      const updated = [...modules];
+                                      const list = normalizeModuleCompetences(updated[mIdx], {
+                                        keepEmpty: true,
+                                      });
+                                      while (list.length <= cIdx) {
+                                        list.push(createModuleCompetenceItem({ text: '' }));
+                                      }
+                                      list[cIdx] = { ...list[cIdx], text: e.target.value };
+                                      updated[mIdx] = {
+                                        ...updated[mIdx],
+                                        competences: list,
+                                        competence: undefined,
+                                      };
+                                      setModules(updated);
+                                    }}
+                                    rows={2}
+                                    placeholder={`Competência ${cIdx + 1} do módulo`}
+                                    className="flex-1 px-3 py-1.5 border rounded text-xs bg-white resize-y"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = [...modules];
+                                      const list = normalizeModuleCompetences(updated[mIdx], {
+                                        keepEmpty: true,
+                                      }).filter((_, i) => i !== cIdx);
+                                      updated[mIdx] = {
+                                        ...updated[mIdx],
+                                        competences:
+                                          list.length > 0
+                                            ? list
+                                            : [createModuleCompetenceItem({ text: '' })],
+                                        competence: undefined,
+                                      };
+                                      setModules(updated);
+                                    }}
+                                    className="text-slate-400 hover:text-red-600 p-1 mt-1"
+                                    title="Remover competência"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] font-bold text-slate-500 mb-1">
+                                    Aspectos do perfil relacionados
+                                  </p>
+                                  {usableAspects.length === 0 ? (
+                                    <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                      Cadastre pelo menos um aspecto do perfil acima para vincular.
+                                    </p>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                      {usableAspects.map((asp, aspIdx) => {
+                                        const checked = (compItem.aspectIds || []).includes(asp.id);
+                                        return (
+                                          <label
+                                            key={asp.id}
+                                            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-[10px] font-semibold cursor-pointer select-none ${
+                                              checked
+                                                ? 'bg-[#002B49] text-white border-[#002B49]'
+                                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'
+                                            }`}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              className="sr-only"
+                                              checked={checked}
+                                              onChange={() => {
+                                                const updated = [...modules];
+                                                const list = normalizeModuleCompetences(
+                                                  updated[mIdx],
+                                                  { keepEmpty: true }
+                                                );
+                                                while (list.length <= cIdx) {
+                                                  list.push(createModuleCompetenceItem({ text: '' }));
+                                                }
+                                                const ids = new Set(list[cIdx].aspectIds || []);
+                                                if (ids.has(asp.id)) ids.delete(asp.id);
+                                                else ids.add(asp.id);
+                                                list[cIdx] = {
+                                                  ...list[cIdx],
+                                                  aspectIds: Array.from(ids),
+                                                };
+                                                updated[mIdx] = {
+                                                  ...updated[mIdx],
+                                                  competences: list,
+                                                  competence: undefined,
+                                                };
+                                                setModules(updated);
+                                              }}
+                                            />
+                                            {aspectShortLabel(asp, aspIdx)}
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
 
@@ -2142,11 +2382,11 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                   <th colSpan={1 + (hasLaboratory ? 1 : 0) + (hasClinical ? 1 : 0)} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">
                                     Presencial
                                   </th>
-                                  <th rowSpan={2} className="px-2 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 align-bottom whitespace-nowrap">
-                                    CH Síncrona-Mediada
+                                  <th rowSpan={2} className="px-2 py-2 text-center w-28 bg-blue-50/70 text-[#002B49] border-l border-slate-200 align-bottom leading-tight">
+                                    Síncrona<br />Mediada
                                   </th>
-                                  <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200 align-bottom">
-                                    CH Assíncrona
+                                  <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200 align-bottom">
+                                    Assíncrona
                                   </th>
                                   <th rowSpan={2} className="w-16 align-bottom" />
                                 </tr>
@@ -2164,9 +2404,9 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               <tr>
                                   <th className="px-3 py-2 min-w-[240px]">Conhecimento</th>
                                 <th className="px-2 py-2 text-center w-24">Tipo</th>
-                                <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">CH Presencial</th>
-                                <th className="px-2.5 py-2 text-center w-28 bg-indigo-50/70 text-indigo-900 border-l border-slate-200 whitespace-nowrap">CH Síncrona-Mediada</th>
-                                <th className="px-2.5 py-2 text-center w-24 bg-purple-50/70 text-purple-900 border-l border-slate-200">CH Assíncrona</th>
+                                <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">Presencial</th>
+                                <th className="px-2.5 py-2 text-center w-28 bg-blue-50/70 text-[#002B49] border-l border-slate-200 leading-tight">Síncrona<br />Mediada</th>
+                                <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">Assíncrona</th>
                                 <th className="w-16" />
                               </tr>
                             )}
@@ -2301,14 +2541,14 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                     </>
                                   ) : (
                                     <td className="px-2.5 py-1 text-center font-bold bg-blue-50/20 border-l border-slate-100">
-                                      <ChHoursInput label="CH Presencial" tone="blue" value={bd.presential} onChange={(raw) => patchKnow('theoretical', raw)} />
+                                      <ChHoursInput label="Presencial" tone="blue" value={bd.presential} onChange={(raw) => patchKnow('theoretical', raw)} />
                                     </td>
                                   )}
-                                  <td className="px-2 py-1 text-center font-bold bg-indigo-50/20 border-l border-slate-100">
-                                    <ChHoursInput label="CH Síncrona-Mediada" tone="indigo" value={syncMed} onChange={(raw) => patchKnow('syncMediated', raw)} />
+                                  <td className="px-2 py-1 text-center font-bold bg-blue-50/20 border-l border-slate-100">
+                                    <ChHoursInput label="Síncrona Mediada" tone="blue" value={syncMed} onChange={(raw) => patchKnow('syncMediated', raw)} />
                                   </td>
-                                  <td className="px-2 py-1 text-center font-bold bg-purple-50/20 border-l border-slate-100">
-                                    <ChHoursInput label="CH Assíncrona" tone="purple" value={bd.async} onChange={(raw) => patchKnow('async', raw)} />
+                                  <td className="px-2 py-1 text-center font-bold bg-blue-50/20 border-l border-slate-100">
+                                    <ChHoursInput label="Assíncrona" tone="blue" value={bd.async} onChange={(raw) => patchKnow('async', raw)} />
                                   </td>
                                   <td className="px-1 py-1.5">
                                     <div className="flex items-center justify-end gap-0.5">
@@ -2403,10 +2643,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                         {mPres}h
                                       </td>
                                     )}
-                                    <td className="px-2 py-2.5 text-center text-indigo-900 font-black border-l border-slate-200 bg-indigo-50/50">
+                                    <td className="px-2 py-2.5 text-center text-[#002B49] font-black border-l border-slate-200 bg-blue-50/50">
                                       {mSyncMed}h
                                     </td>
-                                    <td className="px-2 py-2.5 text-center text-purple-900 font-black border-l border-slate-200 bg-purple-50/50">
+                                    <td className="px-2 py-2.5 text-center text-[#002B49] font-black border-l border-slate-200 bg-blue-50/50">
                                       {mAsync}h
                                     </td>
                                     <td />

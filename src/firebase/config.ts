@@ -1,9 +1,11 @@
 import { initializeApp, getApps, deleteApp, type FirebaseOptions } from 'firebase/app';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getBuiltInFirebaseConfig, hasBuiltInFirebaseConfig } from './projectConfig';
 
 /**
- * Configuração Firebase: variáveis VITE_* e/ou o que a pessoa colar em Configurações.
- * A API Key web do Firebase é pública por design — o que protege os dados são as regras do Firestore.
+ * Firebase sempre tenta o servidor embutido no projeto.
+ * Ordem: config no código → variáveis VITE_* → (legado) localStorage.
+ * Usuário comum não configura nada.
  */
 export const FIREBASE_RUNTIME_CONFIG_KEY = 'unisuam_firebase_config';
 export const FIREBASE_CHANGED_EVENT = 'unisuam-firebase-changed';
@@ -63,12 +65,17 @@ function configFromStorage(): FirebaseClientConfig | null {
   }
 }
 
+/** Sempre prioriza o servidor embutido no código (mesmo em qualquer PC/navegador). */
 export function getFirebaseClientConfig(): FirebaseClientConfig | null {
-  return configFromStorage() || configFromEnv();
+  return getBuiltInFirebaseConfig() || configFromEnv() || configFromStorage();
 }
 
 export function hasRuntimeFirebaseConfig(): boolean {
   return configFromStorage() !== null;
+}
+
+export function usesBuiltInFirebase(): boolean {
+  return hasBuiltInFirebaseConfig();
 }
 
 export function parseFirebaseConfigPaste(text: string): FirebaseClientConfig {
@@ -126,6 +133,54 @@ export function toEnvLocalContents(config: FirebaseClientConfig): string {
     'VITE_FIREBASE_FIRESTORE_DATABASE_ID=' + (config.firestoreDatabaseId || ''),
     '',
   ].join('\n');
+}
+
+/** Gera o conteúdo de `projectConfig.ts` para gravar no repositório. */
+export function toProjectConfigSource(config: FirebaseClientConfig): string {
+  const esc = (v: string) => v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `/**
+ * Configuração oficial do servidor UNISUAM — embutida no código.
+ * Todo usuário conecta automaticamente ao abrir o sistema.
+ */
+export type EmbeddedFirebaseConfig = {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId: string;
+  firestoreDatabaseId?: string;
+};
+
+export const BUILT_IN_FIREBASE_CONFIG: EmbeddedFirebaseConfig = {
+  apiKey: '${esc(config.apiKey)}',
+  authDomain: '${esc(config.authDomain || `${config.projectId}.firebaseapp.com`)}',
+  projectId: '${esc(config.projectId)}',
+  storageBucket: '${esc(config.storageBucket || '')}',
+  messagingSenderId: '${esc(config.messagingSenderId || '')}',
+  appId: '${esc(config.appId)}',
+  firestoreDatabaseId: '${esc(config.firestoreDatabaseId || '')}',
+};
+
+export function hasBuiltInFirebaseConfig(): boolean {
+  const c = BUILT_IN_FIREBASE_CONFIG;
+  return Boolean(c.apiKey?.trim() && c.projectId?.trim() && c.appId?.trim());
+}
+
+export function getBuiltInFirebaseConfig(): EmbeddedFirebaseConfig | null {
+  if (!hasBuiltInFirebaseConfig()) return null;
+  const c = BUILT_IN_FIREBASE_CONFIG;
+  return {
+    apiKey: c.apiKey.trim(),
+    authDomain: (c.authDomain || \`\${c.projectId}.firebaseapp.com\`).trim(),
+    projectId: c.projectId.trim(),
+    storageBucket: c.storageBucket?.trim() || undefined,
+    messagingSenderId: c.messagingSenderId?.trim() || undefined,
+    appId: c.appId.trim(),
+    firestoreDatabaseId: c.firestoreDatabaseId?.trim() || undefined,
+  };
+}
+`;
 }
 
 function toFirebaseOptions(config: FirebaseClientConfig): FirebaseOptions {
@@ -193,7 +248,7 @@ export function notifyFirebaseChanged(): void {
 export async function clearRuntimeFirebaseConfig(): Promise<void> {
   localStorage.removeItem(FIREBASE_RUNTIME_CONFIG_KEY);
   await resetFirebaseApp();
-  const next = bootFirebase(configFromEnv());
+  const next = bootFirebase(getBuiltInFirebaseConfig() || configFromEnv());
   db = next.db;
   isFirebaseConfigured = next.configured;
   emitFirebaseChanged();
@@ -201,6 +256,6 @@ export async function clearRuntimeFirebaseConfig(): Promise<void> {
 
 if (!isFirebaseConfigured && import.meta.env.DEV) {
   console.info(
-    '[Firebase] Não configurado — cadastros ficam só neste navegador. Use Configurações → Servidor compartilhado.'
+    '[Firebase] Servidor não configurado em src/firebase/projectConfig.ts — cadastros ficam só neste navegador.'
   );
 }

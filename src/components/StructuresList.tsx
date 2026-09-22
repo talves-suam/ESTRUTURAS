@@ -241,7 +241,7 @@ export const StructuresList: React.FC<StructuresListProps> = ({
           <p className="text-xs text-slate-500 max-w-md mx-auto">
             {firebaseOnline
               ? 'Ajuste os filtros ou crie uma nova estrutura curricular usando o importador SAGA.'
-              : 'Ainda não há cadastro neste navegador além do que já estava aqui. O que você criou em outro computador ou outra porta não aparece até conectar o servidor ou restaurar um backup.'}
+              : 'Nenhuma estrutura neste navegador. Com o servidor embutido no projeto, a lista da nuvem aparece automaticamente.'}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
             <button
@@ -255,7 +255,7 @@ export const StructuresList: React.FC<StructuresListProps> = ({
                 onClick={onOpenSettings}
                 className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold"
               >
-                Restaurar backup / conectar servidor
+                Ver status do servidor / backup
               </button>
             )}
           </div>

@@ -428,7 +428,13 @@ export interface ModuleData {
   code: string;
   branch?: string; // Ex: "" (tronco comum), "A", "B", "C" para ramificações como 9A, 9B, 10A, 10B
   branchName?: string; // Ex: "Trilha Psicologia Clínica e Saúde", "Trilha Gestão e Trabalho"
-  competence?: string; // Competência do módulo (exibida como subtítulo, só o valor)
+  /**
+   * Competências pedagógicas do módulo (mapa de competências + impressão da estrutura).
+   * Cada item pode vincular um ou mais aspectos do perfil do egresso.
+   */
+  competences?: ModuleCompetenceItem[];
+  /** @deprecated use competences[] — mantido para leitura de dados legados (string[]) */
+  competence?: string;
   parentModuleId?: string; // ID do módulo que antecede na árvore
   title: string;
   hours: number;
@@ -440,6 +446,148 @@ export interface ModuleData {
   summary?: string;
   flags?: ComponentDeliveryFlags;
 }
+
+/** Trecho/aspecto do Perfil do Egresso (cadastrado separadamente). */
+export interface GraduateProfileAspect {
+  id: string;
+  /** Rótulo curto (ex.: “Atuação ética”). */
+  title?: string;
+  /** Texto do trecho do perfil. */
+  text: string;
+}
+
+/** Competência do módulo vinculada a aspectos do perfil do egresso. */
+export interface ModuleCompetenceItem {
+  id: string;
+  text: string;
+  /** IDs de GraduateProfileAspect. */
+  aspectIds: string[];
+}
+
+function newCompetenceId(): string {
+  return `mcomp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function newAspectId(): string {
+  return `asp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function createGraduateProfileAspect(
+  partial?: Partial<GraduateProfileAspect>
+): GraduateProfileAspect {
+  return {
+    id: partial?.id || newAspectId(),
+    title: (partial?.title || '').trim(),
+    text: (partial?.text || '').trim(),
+  };
+}
+
+export function createModuleCompetenceItem(
+  partial?: Partial<ModuleCompetenceItem>
+): ModuleCompetenceItem {
+  return {
+    id: partial?.id || newCompetenceId(),
+    text: (partial?.text || '').trim(),
+    aspectIds: [...(partial?.aspectIds || [])],
+  };
+}
+
+/**
+ * Normaliza competências do módulo (aceita legado string[] / competence string).
+ * @param keepEmpty — no formulário, mantém rascunhos com texto vazio (botão Adicionar).
+ */
+export function normalizeModuleCompetences(
+  mod: Pick<ModuleData, 'competences' | 'competence'>,
+  options?: { keepEmpty?: boolean }
+): ModuleCompetenceItem[] {
+  const keepEmpty = !!options?.keepEmpty;
+  const raw = mod.competences as unknown;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .map((item) => {
+        if (typeof item === 'string') {
+          const text = item.trim();
+          return text ? createModuleCompetenceItem({ text }) : null;
+        }
+        if (item && typeof item === 'object') {
+          const text = String((item as ModuleCompetenceItem).text || '').trim();
+          const id = (item as ModuleCompetenceItem).id;
+          const aspectIds = Array.isArray((item as ModuleCompetenceItem).aspectIds)
+            ? (item as ModuleCompetenceItem).aspectIds.filter(Boolean)
+            : [];
+          if (!text) {
+            // Rascunho do cadastro: só preserva se já tiver id
+            if (!keepEmpty || !id) return null;
+            return createModuleCompetenceItem({ id, text: '', aspectIds });
+          }
+          return createModuleCompetenceItem({ id, text, aspectIds });
+        }
+        return null;
+      })
+      .filter((x): x is ModuleCompetenceItem => !!x);
+  }
+  const legacy = (mod.competence || '').trim();
+  return legacy ? [createModuleCompetenceItem({ text: legacy })] : [];
+}
+
+/** Textos das competências (compatibilidade com código que só precisa do texto). */
+export function getModuleCompetences(
+  mod: Pick<ModuleData, 'competences' | 'competence'>
+): string[] {
+  return normalizeModuleCompetences(mod).map((c) => c.text);
+}
+
+/** Aspectos do perfil: lista nova ou migração do texto único legado. */
+export function getGraduateProfileAspects(
+  structure: Pick<CurriculumStructure, 'graduateProfileAspects' | 'graduateProfile'>
+): GraduateProfileAspect[] {
+  const list = (structure.graduateProfileAspects || [])
+    .map((a) => ({
+      id: a.id || newAspectId(),
+      title: (a.title || '').trim(),
+      text: (a.text || '').trim(),
+    }))
+    .filter((a) => a.title || a.text);
+  if (list.length > 0) return list;
+  const legacy = (structure.graduateProfile || '').trim();
+  return legacy ? [createGraduateProfileAspect({ title: 'Perfil do Egresso', text: legacy })] : [];
+}
+
+/** Texto corrido do perfil (junção dos aspectos) — impressão da estrutura. */
+export function getGraduateProfilePlainText(
+  structure: Pick<CurriculumStructure, 'graduateProfileAspects' | 'graduateProfile'>
+): string {
+  const aspects = getGraduateProfileAspects(structure);
+  if (aspects.length === 0) return '';
+  return aspects
+    .map((a) => {
+      const title = (a.title || '').trim();
+      const text = (a.text || '').trim();
+      if (title && text) return `${title}\n${text}`;
+      return title || text;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/** Rótulo curto do aspecto para selos no mapa. */
+export function aspectShortLabel(aspect: GraduateProfileAspect, index: number): string {
+  const title = (aspect.title || '').trim();
+  if (title) return title.length > 28 ? `${title.slice(0, 26)}…` : title;
+  const text = (aspect.text || '').trim();
+  if (text) return text.length > 28 ? `${text.slice(0, 26)}…` : text;
+  return `Aspecto ${index + 1}`;
+}
+
+/** Paleta de cores para selos de aspectos (cíclica). */
+export const ASPECT_BADGE_COLORS = [
+  { bg: 'bg-sky-100', text: 'text-sky-900', border: 'border-sky-300', hex: '#0369a1' },
+  { bg: 'bg-amber-100', text: 'text-amber-900', border: 'border-amber-300', hex: '#b45309' },
+  { bg: 'bg-emerald-100', text: 'text-emerald-900', border: 'border-emerald-300', hex: '#047857' },
+  { bg: 'bg-violet-100', text: 'text-violet-900', border: 'border-violet-300', hex: '#6d28d9' },
+  { bg: 'bg-rose-100', text: 'text-rose-900', border: 'border-rose-300', hex: '#be123c' },
+  { bg: 'bg-teal-100', text: 'text-teal-900', border: 'border-teal-300', hex: '#0f766e' },
+] as const;
 
 export interface ComplementaryCategoryRule {
   groupCode: string;
@@ -511,8 +659,10 @@ export interface CurriculumStructure {
   hideStatus?: boolean; // Ocultar status (Ativa / Em Desativação) no relatório
   validityStart: string; // Data ou ano/semestre de vigência
   hideValidity: boolean; // Permitir ocultar vigência no relatório/impressão
-  hideCompetenciesInReport?: boolean; // Ocultar competências/saberes nos relatórios
+  hideCompetenciesInReport?: boolean; // Ocultar saberes (CHA/Zabala) nos relatórios
   hideKnowledgesInReport?: boolean; // Ocultar conhecimentos nos relatórios
+  /** Ocultar competências do módulo (PPC / perfil do egresso) nos relatórios. */
+  hideModuleCompetencesInReport?: boolean;
   hideWorkloadSummaryInReport?: boolean; // Ocultar quadro de resumo de carga horária
   /** Ocultar quantidade de encontros nos módulos, no mapa e no quadro de encontros. */
   hideMeetings?: boolean;
@@ -566,6 +716,12 @@ export interface CurriculumStructure {
   dcns?: DcnDocument[]; // Documentos DCNs vinculados com visualização em PDF
   cineBrasilRef?: string;
   notes?: string;
+  /**
+   * @deprecated use graduateProfileAspects — texto único legado do perfil do egresso.
+   */
+  graduateProfile?: string;
+  /** Trechos/aspectos do Perfil do Egresso (cada competência do módulo vincula a estes). */
+  graduateProfileAspects?: GraduateProfileAspect[];
 
   createdAt: string;
   updatedAt: string;
@@ -586,7 +742,7 @@ export interface AppSettings {
   defaultExtensionPercentMin: number;
   institutionName: string;
   campusDefault: string;
-  /** Título da 2ª página (observações, regras e explicações da ementa). */
+  /** Título da 3ª página (observações, regras e explicações da estrutura). */
   reportNotesTitle?: string;
   reportNotesDisciplinar?: ReportNoteBlock[];
   reportNotesModular?: ReportNoteBlock[];

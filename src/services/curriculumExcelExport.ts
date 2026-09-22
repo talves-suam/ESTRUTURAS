@@ -4,6 +4,7 @@ import {
   AppSettings,
   Discipline,
   getDisciplineChBreakdown,
+  getModuleCompetences,
   structureHasPresentialSplit,
   getPresentialSplitFlags,
   withStructurePresentialFlags,
@@ -147,7 +148,7 @@ async function buildCurriculumIdentificationSheet(
   ws.mergeCells(row, 1, row, lastCol);
   const courseCell = ws.getCell(row, 1);
   courseCell.value = `Curso: ${structure.courseName}`;
-  courseCell.font = { bold: true, color: { argb: C.white }, size: 12 };
+  courseCell.font = { bold: true, color: { argb: C.white }, size: 15 };
   courseCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } };
   courseCell.alignment = { horizontal: 'left', vertical: 'middle', indent: logoBuf ? 10 : 0 };
   styleRange(ws, row, 1, row, lastCol, {});
@@ -157,7 +158,7 @@ async function buildCurriculumIdentificationSheet(
   ws.mergeCells(row, 1, row, lastCol);
   const titleCell = ws.getCell(row, 1);
   titleCell.value = 'IDENTIFICAÇÃO DA ESTRUTURA CURRICULAR';
-  titleCell.font = { bold: true, size: 14, color: { argb: C.navy } };
+  titleCell.font = { bold: true, size: 17, color: { argb: C.navy } };
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
   styleRange(ws, row, 1, row, lastCol, {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.white } },
@@ -167,9 +168,10 @@ async function buildCurriculumIdentificationSheet(
 
   ws.mergeCells(row, 1, row, lastCol);
   const ato = structure.authorizationAct || structure.recognitionPortaria || '—';
+  const dcn = structure.dcnRef || '—';
   ws.getCell(row, 1).value =
-    `Código: ${structure.code}  |  Curso e Modalidade: ${structure.courseName} (${structure.modality})  |  Ato Autorizativo: ${ato}`;
-  ws.getCell(row, 1).font = { size: 9, italic: true, color: { argb: C.navy } };
+    `Código: ${structure.code}  |  Curso e Modalidade: ${structure.courseName} (${structure.modality})  |  Ato Autorizativo: ${ato}  |  DCN do Curso: ${dcn}`;
+  ws.getCell(row, 1).font = { size: 11, italic: true, color: { argb: C.navy } };
   ws.getCell(row, 1).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   styleRange(ws, row, 1, row, lastCol, {
     fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.gray } },
@@ -186,7 +188,6 @@ async function buildCurriculumIdentificationSheet(
   const blocks: Block[] = isModular
     ? (structure.modules || []).map((mod) => ({
         label: formatModuleName(mod.number, mod.title),
-        subtitle: mod.competence || undefined,
         components: getModuleComponents(mod, structure),
         fallbackHours: mod.hours,
       }))
@@ -200,10 +201,14 @@ async function buildCurriculumIdentificationSheet(
 
   const sideStartRow = row;
   const sideItems = isModular
-    ? (structure.modules || []).map((m) => ({
-        period: toRoman(m.number),
-        pub: `${(m.competence || m.title).slice(0, 42)}${m.hours ? ` — ${m.hours}H` : ''}`,
-      }))
+    ? (structure.modules || []).map((m) => {
+        const comps = getModuleCompetences(m);
+        const pubBase = comps[0] || m.title;
+        return {
+          period: toRoman(m.number),
+          pub: `${pubBase.slice(0, 42)}${m.hours ? ` — ${m.hours}H` : ''}`,
+        };
+      })
     : (structure.periods || []).map((p) => ({
         period: `${p.number}º`,
         pub: `${p.totalHours}H`,
@@ -212,15 +217,13 @@ async function buildCurriculumIdentificationSheet(
   for (const block of blocks) {
     ws.mergeCells(row, 1, row, lastCol);
     const modHeader = ws.getCell(row, 1);
-    modHeader.value = block.subtitle
-      ? `${block.label}\n${block.subtitle}`
-      : block.label;
-    modHeader.font = { bold: true, size: 10, color: { argb: C.white } };
-    modHeader.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    modHeader.value = block.label;
+    modHeader.font = { bold: true, size: 13, color: { argb: C.white } };
+    modHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     styleRange(ws, row, 1, row, lastCol, {
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
     });
-    ws.getRow(row).height = block.subtitle ? 28 : 18;
+    ws.getRow(row).height = 18;
     row++;
 
     // Header: with split → 2 rows (Presencial spanning); without → single CH Presencial
@@ -244,7 +247,7 @@ async function buildCurriculumIdentificationSheet(
       ws.getCell(row, totalCol).value = 'Total';
       styleRange(ws, row, 1, row, lastCol, {
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
-        font: { bold: true, size: 9, color: { argb: C.white } },
+        font: { bold: true, size: 11, color: { argb: C.white } },
         alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
       });
       row++;
@@ -252,7 +255,7 @@ async function buildCurriculumIdentificationSheet(
       presentialCols.forEach((label, i) => {
         const cell = ws.getCell(row, presStart + i);
         cell.value = label;
-        cell.font = { bold: true, size: 8, color: { argb: C.navy } };
+        cell.font = { bold: true, size: 10, color: { argb: C.navy } };
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
         cell.fill = {
           type: 'pattern',
@@ -292,7 +295,7 @@ async function buildCurriculumIdentificationSheet(
       ws.getCell(row, totalCol).value = 'Total';
       styleRange(ws, row, 1, row, lastCol, {
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
-        font: { bold: true, size: 9, color: { argb: C.white } },
+        font: { bold: true, size: 11, color: { argb: C.white } },
         alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
       });
       ws.getRow(row).height = 22;
@@ -315,7 +318,7 @@ async function buildCurriculumIdentificationSheet(
       ws.getCell(row, nameCol).value = '(Sem unidades cadastradas)';
       for (let c = nameCol + 1; c <= lastCol; c++) ws.getCell(row, c).value = null;
       styleRange(ws, row, 1, row, lastCol, {
-        font: { size: 9, italic: true },
+        font: { size: 11, italic: true },
         alignment: { horizontal: 'center', vertical: 'middle' },
       });
       ws.getCell(row, nameCol).alignment = { horizontal: 'left', vertical: 'middle' };
@@ -356,7 +359,7 @@ async function buildCurriculumIdentificationSheet(
 
         for (let c = 1; c <= lastCol; c++) {
           const cell = ws.getCell(row, c);
-          cell.font = { size: 9, color: { argb: C.navy } };
+          cell.font = { size: 11, color: { argb: C.navy } };
           cell.border = thinBorder();
           cell.alignment = {
             horizontal: c === nameCol ? 'left' : 'center',
@@ -398,7 +401,7 @@ async function buildCurriculumIdentificationSheet(
     ws.getCell(row, totalCol).value = sums.total || null;
     styleRange(ws, row, 1, row, lastCol, {
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.gray } },
-      font: { bold: true, size: 9, color: { argb: C.navy } },
+      font: { bold: true, size: 11, color: { argb: C.navy } },
       alignment: { horizontal: 'center', vertical: 'middle' },
     });
     row++;
@@ -423,12 +426,12 @@ async function buildCurriculumIdentificationSheet(
 
     styleRange(ws, row, 1, row, midEnd, {
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navySoft } },
-      font: { bold: true, size: 9, color: { argb: C.navy } },
+      font: { bold: true, size: 11, color: { argb: C.navy } },
       alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
     });
     const yellow = ws.getCell(row, totalCol);
     yellow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.orangeCell } };
-    yellow.font = { bold: true, size: 11, color: { argb: C.white } };
+    yellow.font = { bold: true, size: 14, color: { argb: C.white } };
     yellow.alignment = { horizontal: 'center', vertical: 'middle' };
     yellow.border = thinBorder();
     ws.getRow(row).height = 22;
@@ -442,7 +445,7 @@ async function buildCurriculumIdentificationSheet(
     ws.getCell(sRow, sidePubCol).value = 'PUB';
     styleRange(ws, sRow, sidePeriodCol, sRow, sidePubCol, {
       fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.navy } },
-      font: { bold: true, size: 9, color: { argb: C.white } },
+      font: { bold: true, size: 11, color: { argb: C.white } },
       alignment: { horizontal: 'center', vertical: 'middle' },
     });
     sRow++;
@@ -451,13 +454,13 @@ async function buildCurriculumIdentificationSheet(
       ws.getCell(sRow, sidePubCol).value = item.pub;
       const color = C.periodColors[idx % C.periodColors.length];
       styleRange(ws, sRow, sidePeriodCol, sRow, sidePeriodCol, {
-        font: { bold: true, size: 9, color: { argb: C.navy } },
+        font: { bold: true, size: 11, color: { argb: C.navy } },
         alignment: { horizontal: 'center', vertical: 'middle' },
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: C.gray } },
       });
       styleRange(ws, sRow, sidePubCol, sRow, sidePubCol, {
         fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: color } },
-        font: { bold: true, size: 8, color: { argb: C.white } },
+        font: { bold: true, size: 10, color: { argb: C.white } },
         alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
       });
       ws.getRow(sRow).height = 28;
@@ -496,12 +499,12 @@ export async function exportCurriculumToXlsx(
     [
       'Ato Autorizativo:',
       structure.authorizationAct || structure.recognitionPortaria || '-',
-      'Tipo de Estrutura:',
-      structure.structureType.toUpperCase(),
+      'DCN do Curso:',
+      structure.dcnRef || '—',
     ],
     [
-      'Diretriz DCN Ativa:',
-      structure.dcnRef || 'DCN Geral',
+      'Tipo de Estrutura:',
+      structure.structureType.toUpperCase(),
       'Classificação CINE Brasil:',
       structure.cineBrasilRef || 'Geral',
     ],

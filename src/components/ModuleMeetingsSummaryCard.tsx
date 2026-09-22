@@ -1,6 +1,10 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { CurriculumStructure } from '../types/curriculum';
-import { buildModuleMeetingsSummary } from '../services/workloadSummary';
+import {
+  buildModuleMeetingsSummary,
+  formatWorkloadPercent,
+  summaryTableDensity,
+} from '../services/workloadSummary';
 
 interface ModuleMeetingsSummaryCardProps {
   structure: CurriculumStructure;
@@ -12,7 +16,12 @@ export const ModuleMeetingsSummaryCard: React.FC<ModuleMeetingsSummaryCardProps>
   structure,
   className = '',
 }) => {
-  const summary = buildModuleMeetingsSummary(structure);
+  const summary = useMemo(() => buildModuleMeetingsSummary(structure), [structure]);
+  const density = useMemo(
+    () => summaryTableDensity(summary?.rows.length ?? 0),
+    [summary?.rows.length]
+  );
+
   if (!summary || summary.rows.length === 0) return null;
 
   const { rows, totalMeetings } = summary;
@@ -20,28 +29,36 @@ export const ModuleMeetingsSummaryCard: React.FC<ModuleMeetingsSummaryCardProps>
   return (
     <section
       data-module-meetings-summary
-      className={`rounded-xl border border-[#002B49]/12 bg-white shadow-sm overflow-hidden ${className}`}
+      className={`rounded-xl border border-[#002B49]/12 bg-white shadow-sm overflow-hidden min-w-0 h-full flex flex-col ${className}`}
     >
-      <div className="bg-[#002B49] px-3 py-2">
-        <h3 className="text-[11px] font-black tracking-wide text-white text-center uppercase">
+      <div className="bg-[#002B49] px-3 py-2 shrink-0">
+        <h3
+          className={`${density.titleText} font-black tracking-wide text-white text-center uppercase`}
+        >
           Encontros por Módulo
         </h3>
-        <p className="text-[9px] text-blue-200/90 text-center mt-0.5 leading-tight">
+        <p
+          className={`${density.subtitleText} text-blue-200/90 text-center mt-0.5 leading-tight`}
+        >
           Quantidade de encontros · {structure.courseName}
         </p>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-[11px] border-collapse">
+      <div className="flex-1 flex flex-col min-h-0">
+        <table
+          className={`w-full table-fixed ${density.tableText} border-collapse`}
+        >
           <thead>
             <tr className="bg-[#002B49]/5 border-b border-[#002B49]/10">
-              <th className="px-2.5 py-1.5 text-left text-[9px] font-bold uppercase tracking-wider text-[#002B49] whitespace-nowrap">
+              <th
+                className={`${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] ${density.labelCol}`}
+              >
                 Módulos
               </th>
               {rows.map((row) => (
                 <th
                   key={row.id}
-                  className="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] leading-tight"
+                  className={`${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] leading-tight`}
                   title={row.label}
                 >
                   {row.shortLabel}
@@ -53,34 +70,46 @@ export const ModuleMeetingsSummaryCard: React.FC<ModuleMeetingsSummaryCardProps>
             <tr className="border-b border-slate-100">
               <th
                 scope="row"
-                className="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap"
+                className={`${density.cellPad} text-left font-semibold text-slate-500`}
               >
                 Encontros
               </th>
               {rows.map((row) => (
                 <td
                   key={row.id}
-                  className="px-2 py-1.5 text-center tabular-nums font-bold text-slate-800 whitespace-nowrap"
+                  className={`${density.cellPad} text-center tabular-nums font-bold text-slate-800`}
                 >
                   {row.meetings}
                 </td>
               ))}
             </tr>
-          </tbody>
-          <tfoot>
-            <tr className="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
-              <th scope="row" className="px-2.5 py-1.5 text-left uppercase tracking-wider">
-                Total
-              </th>
-              <td
-                colSpan={rows.length}
-                className="px-2 py-1.5 text-center tabular-nums whitespace-nowrap"
+            <tr>
+              <th
+                scope="row"
+                className={`${density.cellPad} text-left font-semibold text-slate-500`}
               >
-                {totalMeetings} {totalMeetings === 1 ? 'encontro' : 'encontros'}
-              </td>
+                Percentual
+              </th>
+              {rows.map((row) => (
+                <td
+                  key={row.id}
+                  className={`${density.cellPad} text-center tabular-nums text-slate-600`}
+                >
+                  {formatWorkloadPercent(row.percent)}
+                </td>
+              ))}
             </tr>
-          </tfoot>
+          </tbody>
         </table>
+
+        <div className="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49]">
+          <span className="uppercase tracking-wider text-[10px]">Total</span>
+          <span
+            className={`absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}`}
+          >
+            {totalMeetings} {totalMeetings === 1 ? 'encontro' : 'encontros'}
+          </span>
+        </div>
       </div>
     </section>
   );

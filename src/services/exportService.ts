@@ -8,6 +8,9 @@ import {
   Course,
   Discipline,
   getDisciplineChBreakdown,
+  getGraduateProfileAspects,
+  normalizeModuleCompetences,
+  aspectShortLabel,
   structureHasPresentialSplit,
   showsComponentCodeColumn,
 } from '../types/curriculum';
@@ -16,12 +19,19 @@ import {
   buildModuleMeetingsSummary,
   formatWorkloadHours,
   formatWorkloadPercent,
+  summaryTableDensity,
   WorkloadSummaryRow,
 } from './workloadSummary';
 import { getSaberesLabels, labelForCategory, matchesSaberesColumn } from '../utils/nomenclature';
 import { formatModuleName } from '../utils/roman';
 import { getModularComponents } from '../utils/modularComponents';
 import { getReportNotes, renderReportNotesPageHtml } from './reportNotes';
+import {
+  getPpcSummaryContent,
+  hasPpcSummary,
+  PPC_SUMMARY_PAGE_TITLE,
+  renderPpcSummaryPageHtml,
+} from './ppcSummary';
 import {
   COURSE_BATCH_HEADERS,
   courseToBatchRow,
@@ -155,22 +165,25 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
   const componentRows = rows.filter((row) => row.id !== 'total');
   const totalRow = rows.find((row) => row.id === 'total');
   const meetings = buildModuleMeetingsSummary(structure);
+  const density = summaryTableDensity(
+    Math.max(componentRows.length, meetings?.rows.length ?? 0)
+  );
 
   const chTable = `
-    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden">
-      <div class="bg-[#002B49] px-3 py-2 text-center">
-        <h3 class="text-[11px] font-black tracking-wide text-white uppercase">Carga Horária</h3>
-        <p class="text-[9px] text-blue-200/90 mt-0.5">Hora-relógio · ${structure.courseName}</p>
+    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden min-w-0 h-full flex flex-col">
+      <div class="bg-[#002B49] px-3 py-2 text-center shrink-0">
+        <h3 class="${density.titleText} font-black tracking-wide text-white uppercase">Carga Horária</h3>
+        <p class="${density.subtitleText} text-blue-200/90 mt-0.5">Hora-relógio · ${structure.courseName}</p>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-[11px] border-collapse">
+      <div class="flex-1 flex flex-col min-h-0">
+        <table class="w-full table-fixed ${density.tableText} border-collapse">
           <thead>
             <tr class="bg-[#002B49]/5 border-b border-[#002B49]/10">
-              <th class="px-2.5 py-1.5 text-left text-[9px] font-bold uppercase tracking-wider text-[#002B49] whitespace-nowrap">Componentes</th>
+              <th class="${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] ${density.labelCol}">Componentes</th>
               ${componentRows
                 .map(
                   (row) =>
-                    `<th class="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] leading-tight">${
+                    `<th class="${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] leading-tight">${
                       row.shortLabel || row.label
                     }</th>`
                 )
@@ -179,94 +192,99 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
           </thead>
           <tbody>
             <tr class="border-b border-slate-100">
-              <th class="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">Hora-relógio</th>
+              <th class="${density.cellPad} text-left font-semibold text-slate-500">Hora-relógio</th>
               ${componentRows
                 .map(
                   (row) =>
-                    `<td class="px-2 py-1.5 text-center tabular-nums font-bold text-slate-800 whitespace-nowrap">${formatWorkloadHours(
+                    `<td class="${density.cellPad} text-center tabular-nums font-bold text-slate-800">${formatWorkloadHours(
                       row.hours
                     )}</td>`
                 )
                 .join('')}
             </tr>
             <tr>
-              <th class="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">Percentual</th>
+              <th class="${density.cellPad} text-left font-semibold text-slate-500">Percentual</th>
               ${componentRows
                 .map(
                   (row) =>
-                    `<td class="px-2 py-1.5 text-center tabular-nums text-slate-600 whitespace-nowrap">${formatWorkloadPercent(
+                    `<td class="${density.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
                       row.percent
                     )}</td>`
                 )
                 .join('')}
             </tr>
           </tbody>
-          ${
-            totalRow
-              ? `<tfoot>
-            <tr class="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
-              <td colspan="${componentRows.length + 1}" class="relative px-2.5 py-1.5">
-                <span class="uppercase tracking-wider">Total</span>
-                <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none">
-                  ${formatWorkloadHours(totalRow.hours)} horas
-                </span>
-              </td>
-            </tr>
-          </tfoot>`
-              : ''
-          }
         </table>
+        ${
+          totalRow
+            ? `<div class="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49]">
+              <span class="uppercase tracking-wider text-[10px]">Total</span>
+              <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}">
+                ${formatWorkloadHours(totalRow.hours)} horas
+              </span>
+            </div>`
+            : ''
+        }
       </div>
     </section>`;
 
   const meetingsTable =
     meetings && meetings.rows.length > 0
       ? `
-    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden">
-      <div class="bg-[#002B49] px-3 py-2 text-center">
-        <h3 class="text-[11px] font-black tracking-wide text-white uppercase">Encontros por Módulo</h3>
-        <p class="text-[9px] text-blue-200/90 mt-0.5">Quantidade de encontros · ${structure.courseName}</p>
+    <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden min-w-0 h-full flex flex-col">
+      <div class="bg-[#002B49] px-3 py-2 text-center shrink-0">
+        <h3 class="${density.titleText} font-black tracking-wide text-white uppercase">Encontros por Módulo</h3>
+        <p class="${density.subtitleText} text-blue-200/90 mt-0.5">Quantidade de encontros · ${structure.courseName}</p>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-[11px] border-collapse">
+      <div class="flex-1 flex flex-col min-h-0">
+        <table class="w-full table-fixed ${density.tableText} border-collapse">
           <thead>
             <tr class="bg-[#002B49]/5 border-b border-[#002B49]/10">
-              <th class="px-2.5 py-1.5 text-left text-[9px] font-bold uppercase tracking-wider text-[#002B49] whitespace-nowrap">Módulos</th>
+              <th class="${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] ${density.labelCol}">Módulos</th>
               ${meetings.rows
                 .map(
                   (row) =>
-                    `<th class="px-2 py-1.5 text-center text-[9px] font-bold uppercase tracking-wider text-[#002B49] leading-tight" title="${row.label}">${row.shortLabel}</th>`
+                    `<th class="${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] leading-tight" title="${row.label}">${row.shortLabel}</th>`
                 )
                 .join('')}
             </tr>
           </thead>
           <tbody>
             <tr class="border-b border-slate-100">
-              <th class="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">Encontros</th>
+              <th class="${density.cellPad} text-left font-semibold text-slate-500">Encontros</th>
               ${meetings.rows
                 .map(
                   (row) =>
-                    `<td class="px-2 py-1.5 text-center tabular-nums font-bold text-slate-800 whitespace-nowrap">${row.meetings}</td>`
+                    `<td class="${density.cellPad} text-center tabular-nums font-bold text-slate-800">${row.meetings}</td>`
+                )
+                .join('')}
+            </tr>
+            <tr>
+              <th class="${density.cellPad} text-left font-semibold text-slate-500">Percentual</th>
+              ${meetings.rows
+                .map(
+                  (row) =>
+                    `<td class="${density.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
+                      row.percent
+                    )}</td>`
                 )
                 .join('')}
             </tr>
           </tbody>
-          <tfoot>
-            <tr class="bg-[#FF6B00]/8 border-t border-[#002B49]/10 font-bold text-[#002B49]">
-              <th class="px-2.5 py-1.5 text-left uppercase tracking-wider">Total</th>
-              <td colspan="${meetings.rows.length}" class="px-2 py-1.5 text-center tabular-nums whitespace-nowrap">
-                ${meetings.totalMeetings} ${meetings.totalMeetings === 1 ? 'encontro' : 'encontros'}
-              </td>
-            </tr>
-          </tfoot>
         </table>
+        <div class="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49]">
+          <span class="uppercase tracking-wider text-[10px]">Total</span>
+          <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}">
+            ${meetings.totalMeetings} ${meetings.totalMeetings === 1 ? 'encontro' : 'encontros'}
+          </span>
+        </div>
       </div>
     </section>`
       : '';
 
   if (!meetingsTable) return chTable;
 
-  return `<div class="grid grid-cols-1 xl:grid-cols-2 gap-4">${chTable}${meetingsTable}</div>`;
+  return `<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,0.9fr)] gap-4 items-stretch">${chTable}${meetingsTable}</div>`;
 }
 
 export async function captureElementAsPngDataUrl(
@@ -280,10 +298,31 @@ export async function captureElementAsPngDataUrl(
   const actionButtons = element.querySelectorAll<HTMLElement>('.no-export');
   actionButtons.forEach((btn) => (btn.style.display = 'none'));
 
+  // Em mapas modulares há dois painéis (pedagógico / competências); PNG/PDF exportam só o ativo.
+  const inactiveMapPanels = Array.from(
+    element.querySelectorAll<HTMLElement>('[data-map-view]')
+  ).filter((panel) => {
+    const style = window.getComputedStyle(panel);
+    return style.display === 'none' || style.visibility === 'hidden';
+  });
+  const inactiveParents: Array<{ parent: Node; next: ChildNode | null; panel: HTMLElement }> = [];
+  inactiveMapPanels.forEach((panel) => {
+    inactiveParents.push({
+      parent: panel.parentNode as Node,
+      next: panel.nextSibling,
+      panel,
+    });
+    panel.remove();
+  });
+
   const prevWidth = element.style.width;
   const prevMinWidth = element.style.minWidth;
   const prevMaxWidth = element.style.maxWidth;
   const prevOverflow = element.style.overflow;
+
+  // Libera overflow ANTES de medir — senão scrollWidth fica preso à viewport
+  element.style.overflow = 'visible';
+  element.style.maxWidth = 'none';
 
   const scrollContainers = element.querySelectorAll<HTMLElement>(
     '.overflow-x-auto, .overflow-auto, .overflow-y-auto, .overflow-scroll'
@@ -300,6 +339,9 @@ export async function captureElementAsPngDataUrl(
     c.style.height = 'auto';
   });
 
+  // Força reflow após liberar overflow
+  void element.offsetWidth;
+
   let maxRequiredWidth = Math.max(1100, element.scrollWidth + 48);
   const tables = element.querySelectorAll<HTMLElement>('table');
   tables.forEach((t) => {
@@ -307,10 +349,22 @@ export async function captureElementAsPngDataUrl(
       maxRequiredWidth = t.scrollWidth + 48;
     }
   });
-  const mapStage = element.querySelector<HTMLElement>('.inline-block, .inline-grid');
-  if (mapStage && mapStage.scrollWidth + 48 > maxRequiredWidth) {
-    maxRequiredWidth = mapStage.scrollWidth + 48;
-  }
+  const mapStages = element.querySelectorAll<HTMLElement>(
+    '.inline-block, .inline-grid, [data-map-canvas], [data-map-view]'
+  );
+  mapStages.forEach((stage) => {
+    const w = Math.max(stage.scrollWidth, stage.offsetWidth);
+    if (w + 64 > maxRequiredWidth) {
+      maxRequiredWidth = w + 64;
+    }
+  });
+  // Mede filhos diretos largos (árvores do mapa de competências)
+  element.querySelectorAll<HTMLElement>('[data-map-canvas] > *, [data-map-view] .inline-flex').forEach((node) => {
+    const w = Math.max(node.scrollWidth, node.offsetWidth);
+    if (w + 64 > maxRequiredWidth) {
+      maxRequiredWidth = w + 64;
+    }
+  });
 
   // Matrizes modulares ficam muito altas: evita canvas branco por limite do browser
   const SAFE_PIXELS = 28_000_000;
@@ -372,6 +426,13 @@ export async function captureElementAsPngDataUrl(
       c.style.overflow = prev.overflow;
       c.style.maxHeight = prev.maxHeight;
       c.style.height = prev.height;
+    });
+    inactiveParents.forEach(({ parent, next, panel }) => {
+      try {
+        parent.insertBefore(panel, next);
+      } catch {
+        parent.appendChild(panel);
+      }
     });
     actionButtons.forEach((btn) => (btn.style.display = ''));
   }
@@ -472,10 +533,20 @@ async function rasterizeElementToPng(
   }
 }
 
-/** Opções de exportação por captura de tela (2ª página de observações). */
+/** Opções de exportação por captura de tela (páginas extras: resumo PPC + observações). */
 export interface ElementExportOptions {
   structure?: CurriculumStructure;
   settings?: AppSettings;
+  /**
+   * Inclui a 1ª página “Resumo do PPC” (perfil + competências).
+   * Padrão: true. Nos mapas, passar false — o PPC só vai na impressão da estrutura.
+   */
+  includePpcSummary?: boolean;
+  /**
+   * Inclui a página de observações.
+   * Padrão: true. Nos mapas, passar false — observações só na impressão da estrutura.
+   */
+  includeReportNotes?: boolean;
 }
 
 function triggerDownload(dataUrl: string, filename: string): void {
@@ -491,30 +562,22 @@ function triggerDownload(dataUrl: string, filename: string): void {
   }, 200);
 }
 
-/**
- * Renderiza a página de observações e captura como imagem.
- * Host fica no viewport (sem left:-10000) para o rasterizer não gerar branco.
- * mode=append: sem 2º cabeçalho institucional — usado no PNG combinado.
- */
-async function captureReportNotesPage(
-  options: ElementExportOptions,
-  widthPx: number,
-  mode: 'standalone' | 'append' = 'append'
-): Promise<{ dataUrl: string; widthPx: number; heightPx: number } | null> {
-  const { structure, settings } = options;
-  if (!structure) return null;
+type CapturedPage = { dataUrl: string; widthPx: number; heightPx: number };
 
-  const safeWidth = Math.max(800, Math.round(widthPx) || 1100);
-  const logoDataUrl = mode === 'standalone' ? await getLogoDataUrl().catch(() => '') : '';
-  const html = renderReportNotesPageHtml(structure, settings, {
-    widthPx: safeWidth,
-    logoDataUrl,
-    mode,
-  });
+/**
+ * Renderiza uma página HTML auxiliar (resumo PPC / observações) e captura como imagem.
+ * Host fica no viewport (sem left:-10000) para o rasterizer não gerar branco.
+ */
+async function captureHtmlPage(
+  html: string,
+  widthPx: number,
+  label: string
+): Promise<CapturedPage | null> {
   if (!html) return null;
 
+  const safeWidth = Math.max(800, Math.round(widthPx) || 1100);
   const host = document.createElement('div');
-  host.id = `report-notes-capture-${Date.now()}`;
+  host.id = `report-page-capture-${Date.now()}`;
   host.style.cssText = [
     'position:fixed',
     'left:0',
@@ -558,29 +621,67 @@ async function captureReportNotesPage(
 
     return { dataUrl, widthPx: outWidth, heightPx: outHeight };
   } catch (err) {
-    console.warn('Não foi possível gerar a página de observações:', err);
+    console.warn(`Não foi possível gerar a página de ${label}:`, err);
     return null;
   } finally {
     if (document.body.contains(host)) document.body.removeChild(host);
   }
 }
 
-/** Empilha duas capturas em um único PNG (matriz + observações), mesma largura, sem faixas brancas laterais. */
-async function stitchPngVertically(
-  top: { dataUrl: string; widthPx: number; heightPx: number },
-  bottom: { dataUrl: string; widthPx: number; heightPx: number },
-  gapPx = 24
-): Promise<string> {
-  const [imgA, imgB] = await Promise.all([
-    loadImageFromDataUrl(top.dataUrl),
-    loadImageFromDataUrl(bottom.dataUrl),
-  ]);
+async function capturePpcSummaryPage(
+  options: ElementExportOptions,
+  widthPx: number,
+  mode: 'standalone' | 'append' = 'append'
+): Promise<CapturedPage | null> {
+  const { structure, settings } = options;
+  if (!structure || !hasPpcSummary(structure)) return null;
 
-  const width = Math.max(imgA.naturalWidth || top.widthPx, 1);
-  const scaleB = width / Math.max(imgB.naturalWidth || bottom.widthPx, 1);
-  const heightB = Math.max(1, Math.round((imgB.naturalHeight || bottom.heightPx) * scaleB));
-  const heightA = imgA.naturalHeight || top.heightPx;
-  const height = heightA + gapPx + heightB;
+  const safeWidth = Math.max(800, Math.round(widthPx) || 1100);
+  const logoDataUrl = mode === 'standalone' ? await getLogoDataUrl().catch(() => '') : '';
+  const html = renderPpcSummaryPageHtml(structure, settings, {
+    widthPx: safeWidth,
+    logoDataUrl,
+    mode,
+  });
+  return captureHtmlPage(html, safeWidth, 'resumo do PPC');
+}
+
+/**
+ * Página de observações.
+ * mode=append: sem 2º cabeçalho institucional — usado no PNG combinado.
+ */
+async function captureReportNotesPage(
+  options: ElementExportOptions,
+  widthPx: number,
+  mode: 'standalone' | 'append' = 'append'
+): Promise<CapturedPage | null> {
+  const { structure, settings } = options;
+  if (!structure) return null;
+
+  const safeWidth = Math.max(800, Math.round(widthPx) || 1100);
+  const logoDataUrl = mode === 'standalone' ? await getLogoDataUrl().catch(() => '') : '';
+  const html = renderReportNotesPageHtml(structure, settings, {
+    widthPx: safeWidth,
+    logoDataUrl,
+    mode,
+  });
+  return captureHtmlPage(html, safeWidth, 'observações');
+}
+
+/** Empilha capturas em um único PNG (resumo + matriz + observações), mesma largura. */
+async function stitchPngVertically(pages: CapturedPage[], gapPx = 24): Promise<string> {
+  if (pages.length === 0) throw new Error('Nenhuma página para combinar');
+  if (pages.length === 1) return pages[0].dataUrl;
+
+  const images = await Promise.all(pages.map((p) => loadImageFromDataUrl(p.dataUrl)));
+  const width = Math.max(...images.map((img, i) => img.naturalWidth || pages[i].widthPx), 1);
+
+  const scaledHeights = images.map((img, i) => {
+    const scale = width / Math.max(img.naturalWidth || pages[i].widthPx, 1);
+    return Math.max(1, Math.round((img.naturalHeight || pages[i].heightPx) * scale));
+  });
+  const height =
+    scaledHeights.reduce((acc, h) => acc + h, 0) + gapPx * (scaledHeights.length - 1);
 
   const SAFE_PIXELS = 32_000_000;
   const scale = width * height > SAFE_PIXELS ? Math.sqrt(SAFE_PIXELS / (width * height)) : 1;
@@ -596,19 +697,99 @@ async function stitchPngVertically(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  ctx.drawImage(imgA, 0, 0, canvas.width, Math.round(heightA * scale));
-  ctx.drawImage(
-    imgB,
-    0,
-    Math.round((heightA + gapPx) * scale),
-    canvas.width,
-    Math.round(heightB * scale)
-  );
+  let y = 0;
+  images.forEach((img, i) => {
+    const h = Math.round(scaledHeights[i] * scale);
+    ctx.drawImage(img, 0, y, canvas.width, h);
+    y += h + Math.round(gapPx * scale);
+  });
 
   return canvas.toDataURL('image/png');
 }
 
-/** Desenha a 2ª página de observações em PDF vetorial (fallback se a captura falhar). */
+/** Desenha a 1ª página — Resumo do Projeto Pedagógico do Curso (fallback vetorial). */
+function appendPpcSummaryVectorPages(
+  doc: jsPDF,
+  structure: CurriculumStructure,
+  settings?: AppSettings
+): boolean {
+  const content = getPpcSummaryContent(structure);
+  if (!content.graduateProfile && content.aspects.length === 0) return false;
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = Math.min(18, pageWidth * 0.04);
+  const contentWidth = pageWidth - margin * 2;
+
+  // Insere como primeira página: o jsPDF começa com uma página em branco já criada pelo caller.
+  // Esta função assume que o caller ainda não desenhou a matriz — usamos a página atual se vazia,
+  // ou addPage+movePage. Mais simples: caller chama isto ANTES de desenhar a matriz na pág. 1,
+  // então aqui só preenchemos a página atual e o caller faz addPage() para a matriz.
+  let ny = margin;
+
+  doc.setFillColor(0, 43, 73);
+  doc.rect(margin, ny, contentWidth, 16, 'F');
+  doc.setFillColor(255, 107, 0);
+  doc.rect(margin, ny + 16, contentWidth, 2.2, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(255, 255, 255);
+  doc.text(
+    settings?.institutionName || 'UNISUAM - Centro Universitário Augusto Motta',
+    margin + 4,
+    ny + 7
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11.5);
+  doc.text(PPC_SUMMARY_PAGE_TITLE.toUpperCase(), margin + 4, ny + 12.5);
+  ny += 24;
+
+  doc.setFontSize(11);
+  doc.setTextColor(30, 30, 30);
+  doc.text(
+    `Curso: ${structure.courseName} (${structure.modality}) · Código: ${structure.code} · CH: ${structure.calculatedTotalHours}h`,
+    margin + 2,
+    ny
+  );
+  ny += 10;
+
+  if (content.graduateProfile) {
+    doc.setFillColor(240, 244, 248);
+    doc.rect(margin, ny, contentWidth, 7, 'F');
+    doc.setFillColor(255, 107, 0);
+    doc.rect(margin, ny, 2, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11.5);
+    doc.setTextColor(0, 43, 73);
+    doc.text('PERFIL DO EGRESSO', margin + 5, ny + 4.8);
+    ny += 10;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10.5);
+    doc.setTextColor(50, 50, 50);
+    content.graduateProfile.split(/\r?\n/).forEach((paragraph) => {
+      const clean = paragraph.trim();
+      if (!clean) {
+        ny += 2;
+        return;
+      }
+      const lines = doc.splitTextToSize(clean, contentWidth - 6) as string[];
+      lines.forEach((line) => {
+        if (ny > pageHeight - 20) {
+          doc.addPage();
+          ny = margin;
+        }
+        doc.text(line, margin + 3, ny);
+        ny += 4.2;
+      });
+    });
+    ny += 6;
+  }
+
+  return true;
+}
+
+/** Desenha a página de observações em PDF vetorial (fallback se a captura falhar). */
 function appendReportNotesVectorPages(
   doc: jsPDF,
   structure: CurriculumStructure,
@@ -630,7 +811,7 @@ function appendReportNotesVectorPages(
   doc.setFillColor(255, 107, 0);
   doc.rect(margin, ny + 16, contentWidth, 2.2, 'F');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(14);
   doc.setTextColor(255, 255, 255);
   doc.text(
     settings?.institutionName || 'UNISUAM - Centro Universitário Augusto Motta',
@@ -638,11 +819,11 @@ function appendReportNotesVectorPages(
     ny + 7
   );
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
+  doc.setFontSize(11.5);
   doc.text(notes.title.toUpperCase(), margin + 4, ny + 12.5);
   ny += 24;
 
-  doc.setFontSize(8.5);
+  doc.setFontSize(11);
   doc.setTextColor(30, 30, 30);
   doc.text(
     `Curso: ${structure.courseName} (${structure.modality}) · Código: ${structure.code} · CH: ${structure.calculatedTotalHours}h`,
@@ -662,14 +843,14 @@ function appendReportNotesVectorPages(
       doc.setFillColor(255, 107, 0);
       doc.rect(margin, ny, 2, 7, 'F');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
+      doc.setFontSize(11.5);
       doc.setTextColor(0, 43, 73);
       doc.text(block.title.toUpperCase(), margin + 5, ny + 4.8);
       ny += 10;
     }
     if (block.text) {
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(10.5);
       doc.setTextColor(50, 50, 50);
       block.text.split(/\r?\n/).forEach((paragraph) => {
         const clean = paragraph.trim();
@@ -707,9 +888,25 @@ export async function exportToPNG(
   options: ElementExportOptions = {}
 ): Promise<string> {
   const main = await captureElementAsPngDataUrl(elementId);
-  const notes = await captureReportNotesPage(options, main.cssWidth, 'append');
+  const includePpc = options.includePpcSummary !== false;
+  const includeNotes = options.includeReportNotes !== false;
+  const summary = includePpc
+    ? await capturePpcSummaryPage(options, main.cssWidth, 'append')
+    : null;
+  const notes = includeNotes
+    ? await captureReportNotesPage(options, main.cssWidth, 'append')
+    : null;
 
-  const dataUrl = notes ? await stitchPngVertically(main, notes) : main.dataUrl;
+  const pages: CapturedPage[] = [];
+  if (summary) pages.push(summary);
+  pages.push({
+    dataUrl: main.dataUrl,
+    widthPx: main.widthPx,
+    heightPx: main.heightPx,
+  });
+  if (notes) pages.push(notes);
+
+  const dataUrl = await stitchPngVertically(pages);
   triggerDownload(dataUrl, `${filename}.png`);
   return dataUrl;
 }
@@ -726,25 +923,48 @@ export async function exportElementToPDF(
   const scale = 0.85;
   const pageW = Math.max(200, widthPx * scale);
   const pageH = Math.max(200, heightPx * scale);
-  const orientation = pageW >= pageH ? 'landscape' : 'portrait';
+  const matrixOrientation = pageW >= pageH ? 'landscape' : 'portrait';
 
-  const pdf = new jsPDF({
-    orientation,
-    unit: 'pt',
-    format: [pageW, pageH],
-    compress: true,
-  });
+  const includePpc = options.includePpcSummary !== false;
+  const includeNotes = options.includeReportNotes !== false;
+  // 1ª página: Resumo do PPC — somente quando solicitado (estrutura; não mapa)
+  const summary = includePpc
+    ? await capturePpcSummaryPage(options, cssWidth, 'standalone')
+    : null;
 
-  pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH, undefined, 'MEDIUM');
+  let pdf: jsPDF;
+  if (summary) {
+    const summaryH = Math.max(200, (summary.heightPx / summary.widthPx) * pageW);
+    const summaryOrientation = pageW >= summaryH ? 'landscape' : 'portrait';
+    pdf = new jsPDF({
+      orientation: summaryOrientation,
+      unit: 'pt',
+      format: [pageW, summaryH],
+      compress: true,
+    });
+    pdf.addImage(summary.dataUrl, 'PNG', 0, 0, pageW, summaryH, undefined, 'MEDIUM');
+    pdf.addPage([pageW, pageH], matrixOrientation);
+    pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH, undefined, 'MEDIUM');
+  } else {
+    pdf = new jsPDF({
+      orientation: matrixOrientation,
+      unit: 'pt',
+      format: [pageW, pageH],
+      compress: true,
+    });
+    pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH, undefined, 'MEDIUM');
+  }
 
-  // 2ª página: observações (com cabeçalho próprio no PDF multipágina)
-  const notes = await captureReportNotesPage(options, cssWidth, 'standalone');
-  if (notes) {
-    const notesH = Math.max(200, (notes.heightPx / notes.widthPx) * pageW);
-    pdf.addPage([pageW, notesH], pageW >= notesH ? 'landscape' : 'portrait');
-    pdf.addImage(notes.dataUrl, 'PNG', 0, 0, pageW, notesH, undefined, 'MEDIUM');
-  } else if (options.structure) {
-    appendReportNotesVectorPages(pdf, options.structure, options.settings);
+  // Última página: observações (só na estrutura)
+  if (includeNotes) {
+    const notes = await captureReportNotesPage(options, cssWidth, 'standalone');
+    if (notes) {
+      const notesH = Math.max(200, (notes.heightPx / notes.widthPx) * pageW);
+      pdf.addPage([pageW, notesH], pageW >= notesH ? 'landscape' : 'portrait');
+      pdf.addImage(notes.dataUrl, 'PNG', 0, 0, pageW, notesH, undefined, 'MEDIUM');
+    } else if (options.structure) {
+      appendReportNotesVectorPages(pdf, options.structure, options.settings);
+    }
   }
 
   pdf.save(`${filename}.pdf`);
@@ -767,6 +987,12 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   const chaTitle =
     settings?.pedagogicalNomenclature === 'zabala' ? saberes.full : saberes.sectionTitle;
 
+  // 1ª página: Resumo do Projeto Pedagógico do Curso
+  if (hasPpcSummary(structure)) {
+    appendPpcSummaryVectorPages(doc, structure, settings);
+    doc.addPage();
+  }
+
   let y = 12;
   const pageWidth = 297;
   const margin = 12;
@@ -779,10 +1005,10 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   doc.rect(margin, y + 14, contentWidth, 2, 'F');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(14);
   doc.setTextColor(255, 255, 255);
   doc.text('UNISUAM - Centro Universitário Augusto Motta', margin + 4, y + 6);
-  doc.setFontSize(9);
+  doc.setFontSize(11.5);
   doc.setFont('helvetica', 'normal');
   doc.text('ESTRUTURA CURRICULAR OFICIAL - MATRIZ PEDAGÓGICA E REGULATÓRIA', margin + 4, y + 11);
 
@@ -790,7 +1016,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
 
   // Box Informações Básicas
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(11);
   doc.setTextColor(30, 30, 30);
   doc.setDrawColor(200, 200, 200);
   doc.rect(margin, y, contentWidth, 22);
@@ -801,7 +1027,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     margin + 3,
     y + 10
   );
-  doc.text(`Tipo de Estrutura: ${structure.structureType.toUpperCase()}`, margin + 3, y + 15);
+  doc.text(`DCN do Curso: ${structure.dcnRef || '—'}`, margin + 3, y + 15);
   
   doc.text(`Estrutura: ${structure.code} (${structure.status})`, margin + 110, y + 5);
   if (!structure.hideValidity && structure.validityStart) {
@@ -809,7 +1035,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   } else {
     doc.text(`Semestre Ativo: ${structure.activeYearSemester}`, margin + 110, y + 10);
   }
-  doc.text(`DCN Ativa: ${structure.dcnRef || 'Resolução MEC'}`, margin + 110, y + 15);
+  doc.text(`Tipo de Estrutura: ${structure.structureType.toUpperCase()}`, margin + 110, y + 15);
 
   doc.text(`CINE Brasil: ${structure.cineBrasilRef || 'Geral'}`, margin + 200, y + 5);
   if (structure.structureType === 'disciplinar') {
@@ -823,12 +1049,12 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   doc.setFillColor(245, 247, 250);
   doc.rect(margin, y, contentWidth, 18, 'F');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
+  doc.setFontSize(10.5);
   doc.setTextColor(0, 43, 73);
   doc.text('RESUMO DE CARGA HORÁRIA E CONFORMIDADE REGULATÓRIA (MEC / DCN)', margin + 3, y + 4.5);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(9.5);
   doc.setTextColor(50, 50, 50);
 
   const col1 = margin + 3;
@@ -874,7 +1100,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFillColor(0, 43, 73);
       doc.rect(margin, y, contentWidth, 5.5, 'F');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
+      doc.setFontSize(10.5);
       doc.setTextColor(255, 255, 255);
       doc.text(`${period.number}º Período - Componentes Curriculares (${period.disciplines.length} disciplinas)`, margin + 3, y + 3.8);
       y += 5.5;
@@ -883,7 +1109,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFillColor(235, 240, 245);
       doc.rect(margin, y, contentWidth, 5, 'F');
       doc.setTextColor(0, 43, 73);
-      doc.setFontSize(6.2);
+      doc.setFontSize(8.2);
       if (showCodeCol) {
         doc.text('Código', margin + 2, y + 3.5);
         doc.text('Nome da Disciplina', margin + 20, y + 3.5);
@@ -969,7 +1195,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.rect(margin, y, contentWidth, 5, 'F');
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(255, 107, 0); // Laranja UNISUAM
-      doc.setFontSize(6.5);
+      doc.setFontSize(8.5);
       doc.text(
         usePresentialSplit
           ? `Subtotal ${period.number}º Período: ${period.totalCredits} créd. | Teór. ${pTheo}h | Lab. ${pLab}h | Clín. ${pClin}h | Sínc.-Med. ${pSyncMed}h | Assínc. ${pAsync}h | Total: ${pTot || period.totalHours}h`
@@ -990,24 +1216,15 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFillColor(0, 43, 73);
       doc.rect(margin, y, contentWidth, 6, 'F');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
+      doc.setFontSize(10.5);
       doc.setTextColor(255, 255, 255);
       const branchIndicator = mod.branch ? ` [Trilha ${mod.branch}]` : '';
-      doc.text(
-        `${formatModuleName(mod.number, mod.title)}${branchIndicator} (${
-          structure.hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`
-        })`,
-        margin + 3,
-        y + 4.2
-      );
+      const modTitle = `${formatModuleName(mod.number, mod.title)}${branchIndicator} (${
+        structure.hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`
+      })`;
+      doc.text(modTitle, margin + contentWidth / 2, y + 4.2, { align: 'center' });
       y += 6;
-      if (mod.competence) {
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(7);
-        doc.setTextColor(0, 43, 73);
-        doc.text(mod.competence.substring(0, 140), margin + 3, y + 3);
-        y += 5;
-      }
+      // Competências do módulo vão para a 1ª página (Resumo do PPC)
 
       // Conhecimentos do Módulo (em estrutura modular)
       const moduleComponents = getModularComponents(mod);
@@ -1015,7 +1232,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setFillColor(242, 244, 247);
         doc.rect(margin, y, contentWidth, 4.5, 'F');
         doc.setTextColor(0, 43, 73);
-        doc.setFontSize(6.8);
+        doc.setFontSize(8.8);
         doc.text('Conhecimento', margin + 2, y + 3.2);
         doc.text('Tipo', margin + 110, y + 3.2);
         if (usePresentialSplit) {
@@ -1079,7 +1296,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.rect(margin, y, contentWidth, 5, 'F');
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(255, 107, 0);
-        doc.setFontSize(6.5);
+        doc.setFontSize(8.5);
         doc.text(
           usePresentialSplit
             ? `Subtotal: Teór. ${mTheo}h | Lab. ${mLab}h | Clín. ${mClin}h | Sínc.-Med. ${mSyncMed}h | Assínc. ${mAsync}h`
@@ -1100,13 +1317,13 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setFillColor(254, 243, 235);
         doc.rect(margin, y, contentWidth, 4, 'F');
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(6.8);
+        doc.setFontSize(8.8);
         doc.setTextColor(217, 83, 0);
         doc.text(`SABERES - ${formatModuleName(mod.number, mod.title).toUpperCase()}:`, margin + 2, y + 2.8);
         y += 4.5;
 
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.8);
+        doc.setFontSize(8.8);
         doc.setTextColor(50, 50, 50);
 
         mod.competencies.forEach((comp) => {
@@ -1147,7 +1364,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     doc.setFillColor(0, 43, 73);
     doc.rect(tableX, y, tableW, 8, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
+    doc.setFontSize(11.5);
     doc.setTextColor(255, 255, 255);
     doc.text('CARGA HORÁRIA', tableX + tableW / 2, y + 5.2, { align: 'center' });
     y += 8;
@@ -1156,7 +1373,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     doc.rect(tableX, y, tableW, rowH, 'F');
     doc.setDrawColor(0, 43, 73);
     doc.rect(tableX, y, tableW, rowH);
-    doc.setFontSize(6.5);
+    doc.setFontSize(8.5);
     doc.setTextColor(0, 43, 73);
     doc.text('Componentes', tableX + 2, y + 4.4);
     componentRows.forEach((row, index) => {
@@ -1175,12 +1392,12 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setDrawColor(220, 220, 220);
       doc.rect(tableX, y, tableW, rowH);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.5);
+      doc.setFontSize(8.5);
       doc.setTextColor(100, 116, 139);
       doc.text(title, tableX + 2, y + 4.4);
       doc.setFont('helvetica', bold ? 'bold' : 'normal');
       doc.setTextColor(50, 50, 50);
-      doc.setFontSize(7);
+      doc.setFontSize(9);
       componentRows.forEach((row, index) => {
         doc.text(valueOf(row), centerOf(index), y + 4.4, { align: 'center' });
       });
@@ -1196,7 +1413,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setDrawColor(0, 43, 73);
       doc.rect(tableX, y, tableW, rowH);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
+      doc.setFontSize(9.5);
       doc.setTextColor(0, 43, 73);
       doc.text('TOTAL', tableX + 2, y + 4.6);
       doc.text(
@@ -1222,7 +1439,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFillColor(0, 43, 73);
       doc.rect(tableX, y, tableW, 8, 'F');
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
+      doc.setFontSize(11.5);
       doc.setTextColor(255, 255, 255);
       doc.text('ENCONTROS POR MÓDULO', tableX + tableW / 2, y + 5.2, { align: 'center' });
       y += 8;
@@ -1231,7 +1448,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.rect(tableX, y, tableW, rowH, 'F');
       doc.setDrawColor(0, 43, 73);
       doc.rect(tableX, y, tableW, rowH);
-      doc.setFontSize(6.5);
+      doc.setFontSize(8.5);
       doc.setTextColor(0, 43, 73);
       doc.text('Módulos', tableX + 2, y + 4.4);
       mRows.forEach((row, index) => {
@@ -1245,13 +1462,28 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setDrawColor(220, 220, 220);
       doc.rect(tableX, y, tableW, rowH);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.5);
+      doc.setFontSize(8.5);
       doc.setTextColor(100, 116, 139);
       doc.text('Encontros', tableX + 2, y + 4.4);
       doc.setTextColor(50, 50, 50);
-      doc.setFontSize(7);
+      doc.setFontSize(9);
       mRows.forEach((row, index) => {
         doc.text(String(row.meetings), mCenterOf(index), y + 4.4, { align: 'center' });
+      });
+      y += rowH;
+
+      doc.setDrawColor(220, 220, 220);
+      doc.rect(tableX, y, tableW, rowH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Percentual', tableX + 2, y + 4.4);
+      doc.setTextColor(50, 50, 50);
+      doc.setFontSize(9);
+      mRows.forEach((row, index) => {
+        doc.text(formatWorkloadPercent(row.percent), mCenterOf(index), y + 4.4, {
+          align: 'center',
+        });
       });
       y += rowH;
 
@@ -1260,7 +1492,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setDrawColor(0, 43, 73);
       doc.rect(tableX, y, tableW, rowH);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
+      doc.setFontSize(9.5);
       doc.setTextColor(0, 43, 73);
       doc.text('TOTAL', tableX + 2, y + 4.6);
       doc.text(
@@ -1283,12 +1515,12 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   y += 5;
   doc.setDrawColor(200, 200, 200);
   doc.line(margin, y, margin + contentWidth, y);
-  doc.setFontSize(7);
+  doc.setFontSize(9);
   doc.setTextColor(100, 100, 100);
   doc.text('Documento gerado eletronicamente pelo Sistema de Gestão de Estruturas Curriculares - UNISUAM.', margin, y + 4);
   doc.text(`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}`, margin + 180, y + 4);
 
-  // 2ª página: observações, regras e explicações da ementa
+  // Última página: observações, regras e explicações da estrutura
   const notes = getReportNotes(structure.structureType, settings);
   if (notes.blocks.length > 0) {
     doc.addPage();
@@ -1299,7 +1531,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     doc.setFillColor(255, 107, 0);
     doc.rect(margin, ny + 14, contentWidth, 2, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
+    doc.setFontSize(14);
     doc.setTextColor(255, 255, 255);
     doc.text(
       settings?.institutionName || 'UNISUAM - Centro Universitário Augusto Motta',
@@ -1307,29 +1539,33 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       ny + 6
     );
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(11.5);
     doc.text(notes.title.toUpperCase(), margin + 4, ny + 11);
     ny += 20;
 
-    doc.setFontSize(8.5);
+    doc.setFontSize(11);
     doc.setTextColor(30, 30, 30);
     doc.setDrawColor(200, 200, 200);
-    doc.rect(margin, ny, contentWidth, 12);
+    doc.rect(margin, ny, contentWidth, 16);
     doc.text(
       `Curso e Modalidade: ${structure.courseName} (${structure.modality})`,
       margin + 3,
       ny + 5
     );
     doc.text(
-      `Estrutura: ${structure.code}${structure.hideStatus ? '' : ` (${structure.status})`}`,
+      `Ato Autorizativo: ${structure.authorizationAct || structure.recognitionPortaria || '—'}`,
       margin + 110,
       ny + 5
     );
     doc.text(`CH Total: ${structure.calculatedTotalHours}h`, margin + 200, ny + 5);
-    doc.text(`Tipo de Estrutura: ${structure.structureType.toUpperCase()}`, margin + 3, ny + 9.5);
-    doc.text(`DCN Ativa: ${structure.dcnRef || 'Resolução MEC'}`, margin + 110, ny + 9.5);
+    doc.text(
+      `Estrutura: ${structure.code}${structure.hideStatus ? '' : ` (${structure.status})`}`,
+      margin + 3,
+      ny + 9.5
+    );
+    doc.text(`DCN do Curso: ${structure.dcnRef || '—'}`, margin + 110, ny + 9.5);
     doc.text(`Semestre Ativo: ${structure.activeYearSemester}`, margin + 200, ny + 9.5);
-    ny += 18;
+    ny += 22;
 
     notes.blocks.forEach((block) => {
       if (block.title) {
@@ -1342,7 +1578,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
         doc.setFillColor(255, 107, 0);
         doc.rect(margin, ny, 1.5, 6, 'F');
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(8.5);
+        doc.setFontSize(11);
         doc.setTextColor(0, 43, 73);
         doc.text(block.title.toUpperCase(), margin + 5, ny + 4);
         ny += 8;
@@ -1350,7 +1586,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
 
       if (block.text) {
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
+        doc.setFontSize(10.5);
         doc.setTextColor(50, 50, 50);
         block.text.split(/\r?\n/).forEach((paragraph) => {
           const clean = paragraph.trim();
@@ -1415,15 +1651,15 @@ export async function generateInteractiveHtml(
         ${
           logoDataUrl
             ? `<img src="${logoDataUrl}" alt="UNISUAM" class="h-12 w-auto object-contain bg-white/95 rounded-md p-1" />`
-            : `<div class="leading-none select-none"><span class="text-2xl font-black tracking-tight"><span class="text-[#FF6B00]">UNI</span><span class="text-white">SUAM</span></span></div>`
+            : `<div class="leading-none select-none"><span class="text-[27px] font-black tracking-tight"><span class="text-[#FF6B00]">UNI</span><span class="text-white">SUAM</span></span></div>`
         }
         <div>
-          <h1 class="text-lg sm:text-xl font-bold tracking-tight">Estrutura Curricular Oficial</h1>
-          <p class="text-xs text-blue-200">${structure.courseName} • Código: <span class="font-bold text-[#FF6B00]">${structure.code}</span> • ${structure.modality}</p>
+          <h1 class="text-lg sm:text-[23px] font-bold tracking-tight">Estrutura Curricular Oficial</h1>
+          <p class="text-[15px] text-blue-200">${structure.courseName} • Código: <span class="font-bold text-[#FF6B00]">${structure.code}</span> • ${structure.modality}</p>
         </div>
       </div>
       <div class="flex items-center gap-2 no-print">
-        <button onclick="window.print()" class="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-medium text-white transition flex items-center gap-1.5">
+        <button onclick="window.print()" class="px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-[15px] font-medium text-white transition flex items-center gap-1.5">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
           Imprimir
         </button>
@@ -1432,33 +1668,46 @@ export async function generateInteractiveHtml(
   </header>
 
   <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+    ${(() => {
+      const summaryHtml = renderPpcSummaryPageHtml(structure, settings, { logoDataUrl });
+      return summaryHtml
+        ? `<div class="ppc-summary-page rounded-xl overflow-hidden border border-slate-200 bg-white">${summaryHtml}</div>`
+        : '';
+    })()}
+
     <!-- Header Card -->
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div class="space-y-1">
-          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Curso e Modalidade</span>
-          <h2 class="text-xl font-bold text-slate-900">${structure.courseName}</h2>
-          <p class="text-sm text-slate-600">Modalidade: <span class="font-semibold text-[#002B49]">${structure.modality}</span></p>
-          <p class="text-xs text-slate-500">Ato Autorizativo: ${structure.authorizationAct || structure.recognitionPortaria || '—'}</p>
+          <span class="text-[15px] font-semibold uppercase tracking-wider text-slate-400">Curso e Modalidade</span>
+          <h2 class="text-[23px] font-bold text-slate-900">${structure.courseName}</h2>
+          <p class="text-[17px] text-slate-600">Modalidade: <span class="font-semibold text-[#002B49]">${structure.modality}</span></p>
+          <p class="text-[17px] text-slate-600">Grau: <span class="font-semibold text-[#002B49]">${
+            structure.degrees === 'Tecnólogo' ? 'Tecnológico' : structure.degrees || '—'
+          }</span></p>
+          <p class="text-[17px] text-slate-600">Estrutura: <span class="font-semibold text-[#002B49]">${
+            structure.structureType === 'modular' ? 'Modular' : 'Disciplinar'
+          }</span></p>
+          <p class="text-[15px] text-slate-500">Ato Autorizativo: ${structure.authorizationAct || structure.recognitionPortaria || '—'}</p>
+          <p class="text-[15px] text-slate-500">DCN do Curso: ${structure.dcnRef || '—'}</p>
         </div>
         <div class="space-y-1">
-          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Vigência & Diretriz</span>
+          <span class="text-[15px] font-semibold uppercase tracking-wider text-slate-400">Vigência & Diretriz</span>
           <div class="flex items-center gap-2">
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">${structure.status}</span>
-            <span class="text-sm font-semibold text-slate-700">Semestre Ativo: ${structure.activeYearSemester}</span>
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[15px] font-medium bg-emerald-100 text-emerald-800">${structure.status}</span>
+            <span class="text-[17px] font-semibold text-slate-700">Semestre Ativo: ${structure.activeYearSemester}</span>
           </div>
-          <p class="text-xs text-slate-600">DCN: ${structure.dcnRef || 'Geral'}</p>
-          <p class="text-xs text-slate-500">CINE Brasil: ${structure.cineBrasilRef || 'Não classificado'}</p>
+          <p class="text-[15px] text-slate-500">CINE Brasil: ${structure.cineBrasilRef || 'Não classificado'}</p>
         </div>
         <div class="bg-slate-50 rounded-lg p-4 border border-slate-100 space-y-2">
-          <div class="flex justify-between items-center text-xs">
+          <div class="flex justify-between items-center text-[15px]">
             <span class="text-slate-500">Carga Horária Total:</span>
-            <span class="font-bold text-slate-900 text-sm">${structure.calculatedTotalHours} horas</span>
+            <span class="font-bold text-slate-900 text-[17px]">${structure.calculatedTotalHours} horas</span>
           </div>
           <div class="w-full bg-slate-200 rounded-full h-2">
             <div class="bg-[#FF6B00] h-2 rounded-full" style="width: ${Math.min(100, Math.round((structure.calculatedTotalHours / (structure.requiredTotalHours || 1)) * 100))}%"></div>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-1 pt-1 text-[11px] text-slate-600">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-1 pt-1 text-[14px] text-slate-600">
             ${
               usePresentialSplit
                 ? `<div>Teórico: <span class="font-bold text-slate-800">${hoursOf('teorico')}h</span></div>
@@ -1466,8 +1715,8 @@ export async function generateInteractiveHtml(
             <div>Clínica: <span class="font-bold text-slate-800">${hoursOf('clinica')}h</span></div>`
                 : `<div>Presencial: <span class="font-bold text-slate-800">${structure.calculatedPresentialHours}h</span></div>`
             }
-            <div>Síncrono-Mediado: <span class="font-bold text-slate-800">${hoursOf('sincrono-mediado')}h</span></div>
-            <div>Assíncrono: <span class="font-bold text-slate-800">${hoursOf('assincrono')}h</span></div>
+            <div>Síncrona Mediada: <span class="font-bold text-slate-800">${hoursOf('sincrono-mediado')}h</span></div>
+            <div>Assíncrona: <span class="font-bold text-slate-800">${hoursOf('assincrono')}h</span></div>
             ${
               usePresentialSplit
                 ? `<div>Presencial total: <span class="font-bold text-slate-800">${structure.calculatedPresentialHours}h</span></div>`
@@ -1481,10 +1730,10 @@ export async function generateInteractiveHtml(
     <!-- Search / Filter -->
     <div class="flex flex-wrap items-center justify-between gap-4 no-print">
       <div class="relative flex-1 min-w-[280px]">
-        <input id="searchInput" type="text" placeholder="Buscar disciplina, código ou competência..." class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#002B49] text-sm bg-white shadow-sm" onkeyup="filterContent()">
+        <input id="searchInput" type="text" placeholder="Buscar disciplina, código ou competência..." class="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#002B49] text-[17px] bg-white shadow-sm" onkeyup="filterContent()">
       </div>
       <div class="flex items-center gap-2">
-        <button id="toggleAllBtn" onclick="toggleAllAccordions()" class="px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 shadow-sm transition">
+        <button id="toggleAllBtn" onclick="toggleAllAccordions()" class="px-3 py-2 text-[15px] font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 shadow-sm transition">
           Expandir/Recolher Detalhes
         </button>
       </div>
@@ -1499,15 +1748,15 @@ export async function generateInteractiveHtml(
                 (period) => `
         <div class="period-card bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden" data-period-card>
           <button type="button" data-period-toggle aria-expanded="true" class="w-full bg-[#002B49] px-6 py-3.5 flex justify-between items-center text-white text-left hover:bg-[#003a63] transition">
-            <h3 class="font-bold text-base flex items-center gap-2">
-              <span class="w-6 h-6 rounded-full bg-[#FF6B00] text-xs flex items-center justify-center text-white">${period.number}</span>
+            <h3 class="font-bold text-[19px] flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-[#FF6B00] text-[15px] flex items-center justify-center text-white">${period.number}</span>
               ${period.number}º Período Letivo
             </h3>
-            <span class="text-xs font-semibold px-2.5 py-1 rounded bg-white/10 text-white">${period.totalCredits} · ${period.totalHours} horas</span>
+            <span class="text-[15px] font-semibold px-2.5 py-1 rounded bg-white/10 text-white">${period.totalCredits} · ${period.totalHours} horas</span>
           </button>
           <div data-period-body class="overflow-x-auto">
-            <table class="w-full text-left text-sm ${usePresentialSplit ? 'min-w-[980px]' : 'min-w-[860px]'}">
-              <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+            <table class="w-full text-left text-[17px] ${usePresentialSplit ? 'min-w-[980px]' : 'min-w-[860px]'}">
+              <thead class="bg-slate-50 border-b border-slate-200 text-[15px] font-semibold text-slate-600">
                 ${
                   usePresentialSplit
                     ? `<tr>
@@ -1517,8 +1766,8 @@ export async function generateInteractiveHtml(
                   <th rowspan="2" class="px-2.5 py-2 align-bottom">Avaliação</th>
                   <th rowspan="2" class="px-2 py-2 text-center align-bottom">Créditos</th>
                   <th colspan="3" class="px-2 py-1 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
-                  <th rowspan="2" class="px-2 py-2 text-center bg-indigo-50/50 text-indigo-900 align-bottom">Síncrono-Mediado</th>
-                  <th rowspan="2" class="px-2 py-2 text-center bg-purple-50/50 text-purple-900 align-bottom">Assíncrono</th>
+                  <th rowspan="2" class="px-2 py-2 text-center bg-blue-50/50 text-[#002B49] align-bottom" style="line-height:1.15">Síncrona<br/>Mediada</th>
+                  <th rowspan="2" class="px-2 py-2 text-center bg-blue-50/50 text-[#002B49] align-bottom">Assíncrona</th>
                   <th rowspan="2" class="px-2.5 py-2 text-center align-bottom">Total</th>
                 </tr>
                 <tr>
@@ -1532,9 +1781,9 @@ export async function generateInteractiveHtml(
                   <th class="px-2.5 py-3">Tipo</th>
                   <th class="px-2.5 py-3">Avaliação</th>
                   <th class="px-2 py-3 text-center">Créditos</th>
-                  <th class="px-2.5 py-3 text-center bg-blue-50/50 text-[#002B49]">CH Presencial</th>
-                  <th class="px-2.5 py-3 text-center bg-indigo-50/50 text-indigo-900">CH Síncrona-Mediada</th>
-                  <th class="px-2.5 py-3 text-center bg-purple-50/50 text-purple-900">CH Assíncrona</th>
+                  <th class="px-2.5 py-3 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
+                  <th class="px-2.5 py-3 text-center bg-blue-50/50 text-[#002B49]" style="line-height:1.15">Síncrona<br/>Mediada</th>
+                  <th class="px-2.5 py-3 text-center bg-blue-50/50 text-[#002B49]">Assíncrona</th>
                   <th class="px-2.5 py-3 text-center">Total</th>
                 </tr>`
                 }
@@ -1547,36 +1796,36 @@ export async function generateInteractiveHtml(
                     return usePresentialSplit
                       ? `
                   <tr class="item-row hover:bg-blue-50/50 transition">
-                    ${showCodeCol ? `<td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>` : ''}
+                    ${showCodeCol ? `<td class="px-3 py-3 font-mono text-[15px] font-semibold text-[#002B49]">${disc.code}</td>` : ''}
                     <td class="px-3 py-3 font-medium text-slate-900">${disc.name}</td>
-                    <td class="px-2.5 py-3 text-xs text-slate-600">${disc.type}</td>
-                    <td class="px-2.5 py-3 text-xs text-slate-500">${disc.evaluationForm || 'Nota'}</td>
-                    <td class="px-2 py-3 text-xs text-center font-semibold">${disc.credits}</td>
-                    <td class="px-1.5 py-3 text-xs text-center font-bold text-blue-950">${chBd.theoretical}h</td>
-                    <td class="px-1.5 py-3 text-xs text-center font-bold text-teal-800">${chBd.laboratory}h</td>
-                    <td class="px-1.5 py-3 text-xs text-center font-bold text-rose-800">${chBd.clinical}h</td>
-                    <td class="px-2 py-3 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
-                    <td class="px-2 py-3 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-black text-[#FF6B00]">${chBd.total}h</td>
+                    <td class="px-2.5 py-3 text-[15px] text-slate-600">${disc.type}</td>
+                    <td class="px-2.5 py-3 text-[15px] text-slate-500">${disc.evaluationForm || 'Nota'}</td>
+                    <td class="px-2 py-3 text-[15px] text-center font-semibold">${disc.credits}</td>
+                    <td class="px-1.5 py-3 text-[15px] text-center font-bold text-blue-950">${chBd.theoretical}h</td>
+                    <td class="px-1.5 py-3 text-[15px] text-center font-bold text-teal-800">${chBd.laboratory}h</td>
+                    <td class="px-1.5 py-3 text-[15px] text-center font-bold text-rose-800">${chBd.clinical}h</td>
+                    <td class="px-2 py-3 text-[15px] text-center font-bold text-[#002B49]">${syncMed}h</td>
+                    <td class="px-2 py-3 text-[15px] text-center font-bold text-[#002B49]">${chBd.async}h</td>
+                    <td class="px-2.5 py-3 text-[15px] text-center font-black text-[#FF6B00]">${chBd.total}h</td>
                   </tr>
                 `
                       : `
                   <tr class="item-row hover:bg-blue-50/50 transition">
-                    ${showCodeCol ? `<td class="px-3 py-3 font-mono text-xs font-semibold text-[#002B49]">${disc.code}</td>` : ''}
+                    ${showCodeCol ? `<td class="px-3 py-3 font-mono text-[15px] font-semibold text-[#002B49]">${disc.code}</td>` : ''}
                     <td class="px-3 py-3 font-medium text-slate-900">${disc.name}</td>
-                    <td class="px-2.5 py-3 text-xs text-slate-600">${disc.type}</td>
-                    <td class="px-2.5 py-3 text-xs text-slate-500">${disc.evaluationForm || 'Nota'}</td>
-                    <td class="px-2 py-3 text-xs text-center font-semibold">${disc.credits}</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-blue-950">${chBd.presential}h</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
-                    <td class="px-2.5 py-3 text-xs text-center font-black text-[#FF6B00]">${chBd.total}h</td>
+                    <td class="px-2.5 py-3 text-[15px] text-slate-600">${disc.type}</td>
+                    <td class="px-2.5 py-3 text-[15px] text-slate-500">${disc.evaluationForm || 'Nota'}</td>
+                    <td class="px-2 py-3 text-[15px] text-center font-semibold">${disc.credits}</td>
+                    <td class="px-2.5 py-3 text-[15px] text-center font-bold text-blue-950">${chBd.presential}h</td>
+                    <td class="px-2.5 py-3 text-[15px] text-center font-bold text-[#002B49]">${syncMed}h</td>
+                    <td class="px-2.5 py-3 text-[15px] text-center font-bold text-[#002B49]">${chBd.async}h</td>
+                    <td class="px-2.5 py-3 text-[15px] text-center font-black text-[#FF6B00]">${chBd.total}h</td>
                   </tr>
                 `;
                   })
                   .join('')}
               </tbody>
-              <tfoot class="bg-slate-50 border-t border-slate-200 text-xs font-bold">
+              <tfoot class="bg-slate-50 border-t border-slate-200 text-[15px] font-bold">
                 ${(() => {
                   const pPres = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
                   const pTheo = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
@@ -1596,8 +1845,8 @@ export async function generateInteractiveHtml(
                   <td class="px-1.5 py-2.5 text-center text-blue-900">${pTheo}h</td>
                   <td class="px-1.5 py-2.5 text-center text-teal-800">${pLab}h</td>
                   <td class="px-1.5 py-2.5 text-center text-rose-800">${pClin}h</td>
-                  <td class="px-2 py-2.5 text-center text-indigo-900">${pSyncMed}h</td>
-                  <td class="px-2 py-2.5 text-center text-purple-900">${pAsync}h</td>
+                  <td class="px-2 py-2.5 text-center text-[#002B49]">${pSyncMed}h</td>
+                  <td class="px-2 py-2.5 text-center text-[#002B49]">${pAsync}h</td>
                   <td class="px-2.5 py-2.5 text-center text-[#FF6B00]">${pTot || period.totalHours}h</td>
                 </tr>`
                     : `
@@ -1605,8 +1854,8 @@ export async function generateInteractiveHtml(
                   <td colspan="${showCodeCol ? 4 : 3}" class="px-3 py-2.5 text-right text-slate-600">Subtotal do ${period.number}º Período</td>
                   <td class="px-2 py-2.5 text-center text-slate-900">${period.totalCredits}</td>
                   <td class="px-2.5 py-2.5 text-center text-blue-900">${pPres}h</td>
-                  <td class="px-2.5 py-2.5 text-center text-indigo-900">${pSyncMed}h</td>
-                  <td class="px-2.5 py-2.5 text-center text-purple-900">${pAsync}h</td>
+                  <td class="px-2.5 py-2.5 text-center text-[#002B49]">${pSyncMed}h</td>
+                  <td class="px-2.5 py-2.5 text-center text-[#002B49]">${pAsync}h</td>
                   <td class="px-2.5 py-2.5 text-center text-[#FF6B00]">${pTot || period.totalHours}h</td>
                 </tr>`;
                 })()}
@@ -1622,30 +1871,68 @@ export async function generateInteractiveHtml(
               .map(
                 (mod) => `
         <div class="module-card bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div class="bg-[#002B49] px-6 py-4 flex flex-wrap justify-between items-center text-white gap-2">
-            <div>
-              <div class="flex items-center gap-2">
-                ${mod.branch ? `<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-xs font-semibold">Trilha ${mod.branch}</span>` : ''}
-              </div>
-              <h3 class="font-bold text-base mt-1 text-white">${formatModuleName(mod.number, mod.title)}</h3>
-              ${mod.competence ? `<p class="text-xs text-blue-200 mt-0.5">${mod.competence}</p>` : ''}
+          <div class="bg-[#002B49] px-6 py-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-white">
+            <div class="flex items-center gap-2 justify-self-start">
+              ${mod.branch ? `<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-[15px] font-semibold">Trilha ${mod.branch}</span>` : ''}
             </div>
-            <div class="flex items-center gap-3">
-              <span class="text-sm font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${mod.hours}h</span>
+            <h3 class="font-bold text-[19px] text-white text-center">${formatModuleName(mod.number, mod.title)}</h3>
+            <div class="flex items-center gap-3 justify-self-end">
+              <span class="text-[17px] font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${mod.hours}h</span>
               ${
                 !structure.hideMeetings
-                  ? `<span class="text-sm font-extrabold text-[#002B49] bg-white px-3 py-1 rounded shadow-sm">${mod.meetings ?? 0} encontros</span>`
+                  ? `<span class="text-[17px] font-extrabold text-[#002B49] bg-white px-3 py-1 rounded shadow-sm">${mod.meetings ?? 0} encontros</span>`
                   : ''
               }
               ${
                 !structure.hideCompetenciesInReport && (mod.competencies || []).length > 0
-                  ? `<button onclick="toggleDetails('mod-details-${mod.id}')" class="text-xs px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-white transition no-print">
+                  ? `<button onclick="toggleDetails('mod-details-${mod.id}')" class="text-[15px] px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-white transition no-print">
                 Ver Saberes / CHA
               </button>`
                   : ''
               }
             </div>
           </div>
+
+          ${(() => {
+            if (structure.hideModuleCompetencesInReport) return '';
+            const aspects = getGraduateProfileAspects(structure);
+            const aspectIndex = new Map(aspects.map((a, i) => [a.id, i]));
+            const comps = normalizeModuleCompetences(mod);
+            if (comps.length === 0) return '';
+
+            const cards = comps
+              .map((c) => {
+                const linked = (c.aspectIds || [])
+                  .map((id) => {
+                    const i = aspectIndex.get(id);
+                    return i === undefined ? null : { asp: aspects[i], i };
+                  })
+                  .filter((x): x is { asp: (typeof aspects)[number]; i: number } => !!x);
+                const body =
+                  linked.length === 0
+                    ? `<p class="text-[13px] text-slate-400 italic leading-snug">Sem perfil vinculado</p>`
+                    : linked
+                        .map(
+                          ({ asp, i }) =>
+                            `<p class="text-[13px] text-slate-700 leading-snug font-medium" style="overflow-wrap:anywhere">${
+                              asp.title?.trim() || aspectShortLabel(asp, i)
+                            }</p>`
+                        )
+                        .join('');
+                return `<div class="bg-white p-3 rounded-lg border border-[#002B49]/12 shadow-sm flex flex-col gap-2 min-w-0">
+                  <p class="text-[14px] font-bold text-[#002B49] leading-snug" style="overflow-wrap:anywhere">${c.text}</p>
+                  <div class="border-t border-slate-100 pt-2 space-y-1.5">${body}</div>
+                </div>`;
+              })
+              .join('');
+
+            return `<div class="px-6 pt-5 pb-4 border-b border-slate-100 bg-gradient-to-br from-orange-50/30 to-blue-50/20">
+              <div class="flex items-center gap-2 border-b border-orange-200/60 pb-2 mb-3">
+                <h4 class="text-[15px] font-bold uppercase tracking-wider text-slate-800">Competências</h4>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">${cards}</div>
+            </div>`;
+          })()}
 
           <!-- Conhecimentos do Módulo -->
           <div class="p-6">
@@ -1662,18 +1949,18 @@ export async function generateInteractiveHtml(
                       return acc + bd.syncMediated + (bd.sync || 0);
                     }, 0);
                     const mAsync = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
-                    return `<h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Conhecimentos</h4>
+                    return `<h4 class="text-[15px] font-bold uppercase tracking-wider text-slate-400 mb-3">Conhecimentos</h4>
             <div class="overflow-x-auto mb-4">
-              <table class="w-full text-left text-sm ${usePresentialSplit ? 'min-w-[820px]' : 'min-w-[700px]'} border border-slate-200 rounded-lg overflow-hidden">
-                <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+              <table class="w-full text-left text-[17px] ${usePresentialSplit ? 'min-w-[820px]' : 'min-w-[700px]'} border border-slate-200 rounded-lg overflow-hidden">
+                <thead class="bg-slate-50 border-b border-slate-200 text-[15px] font-semibold text-slate-600">
                   ${
                     usePresentialSplit
                       ? `<tr>
                     <th rowspan="2" class="px-3 py-2 align-bottom">Conhecimento</th>
                     <th rowspan="2" class="px-2 py-2 text-center align-bottom">Tipo</th>
                     <th colspan="3" class="px-2 py-1 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
-                    <th rowspan="2" class="px-2 py-2 text-center bg-indigo-50/50 text-indigo-900 align-bottom">Síncrono-Mediado</th>
-                    <th rowspan="2" class="px-2 py-2 text-center bg-purple-50/50 text-purple-900 align-bottom">Assíncrono</th>
+                    <th rowspan="2" class="px-2 py-2 text-center bg-blue-50/50 text-[#002B49] align-bottom" style="line-height:1.15">Síncrona<br/>Mediada</th>
+                    <th rowspan="2" class="px-2 py-2 text-center bg-blue-50/50 text-[#002B49] align-bottom">Assíncrona</th>
                   </tr>
                   <tr>
                     <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Teórico</th>
@@ -1683,9 +1970,9 @@ export async function generateInteractiveHtml(
                       : `<tr>
                     <th class="px-3 py-2.5">Conhecimento</th>
                     <th class="px-2 py-2.5 text-center">Tipo</th>
-                    <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]">CH Presencial</th>
-                    <th class="px-2.5 py-2.5 text-center bg-indigo-50/50 text-indigo-900">CH Síncrona-Mediada</th>
-                    <th class="px-2.5 py-2.5 text-center bg-purple-50/50 text-purple-900">CH Assíncrona</th>
+                    <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
+                    <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]" style="line-height:1.15">Síncrona<br/>Mediada</th>
+                    <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]">Assíncrona</th>
                   </tr>`
                   }
                 </thead>
@@ -1697,24 +1984,24 @@ export async function generateInteractiveHtml(
                       return usePresentialSplit
                         ? `<tr class="item-row">
                     <td class="px-3 py-2.5 font-medium text-slate-900">${d.name}</td>
-                    <td class="px-2 py-2.5 text-xs text-center text-slate-600">${d.type}</td>
-                    <td class="px-1.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.theoretical}h</td>
-                    <td class="px-1.5 py-2.5 text-xs text-center font-bold text-teal-800">${chBd.laboratory}h</td>
-                    <td class="px-1.5 py-2.5 text-xs text-center font-bold text-rose-800">${chBd.clinical}h</td>
-                    <td class="px-2 py-2.5 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
-                    <td class="px-2 py-2.5 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
+                    <td class="px-2 py-2.5 text-[15px] text-center text-slate-600">${d.type}</td>
+                    <td class="px-1.5 py-2.5 text-[15px] text-center font-bold text-blue-950">${chBd.theoretical}h</td>
+                    <td class="px-1.5 py-2.5 text-[15px] text-center font-bold text-teal-800">${chBd.laboratory}h</td>
+                    <td class="px-1.5 py-2.5 text-[15px] text-center font-bold text-rose-800">${chBd.clinical}h</td>
+                    <td class="px-2 py-2.5 text-[15px] text-center font-bold text-[#002B49]">${syncMed}h</td>
+                    <td class="px-2 py-2.5 text-[15px] text-center font-bold text-[#002B49]">${chBd.async}h</td>
                   </tr>`
                         : `<tr class="item-row">
                     <td class="px-3 py-2.5 font-medium text-slate-900">${d.name}</td>
-                    <td class="px-2 py-2.5 text-xs text-center text-slate-600">${d.type}</td>
-                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-blue-950">${chBd.presential}h</td>
-                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-indigo-900">${syncMed}h</td>
-                    <td class="px-2.5 py-2.5 text-xs text-center font-bold text-purple-900">${chBd.async}h</td>
+                    <td class="px-2 py-2.5 text-[15px] text-center text-slate-600">${d.type}</td>
+                    <td class="px-2.5 py-2.5 text-[15px] text-center font-bold text-blue-950">${chBd.presential}h</td>
+                    <td class="px-2.5 py-2.5 text-[15px] text-center font-bold text-[#002B49]">${syncMed}h</td>
+                    <td class="px-2.5 py-2.5 text-[15px] text-center font-bold text-[#002B49]">${chBd.async}h</td>
                   </tr>`;
                     })
                     .join('')}
                 </tbody>
-                <tfoot class="bg-slate-50 border-t border-slate-200 text-xs font-bold">
+                <tfoot class="bg-slate-50 border-t border-slate-200 text-[15px] font-bold">
                   ${
                     usePresentialSplit
                       ? `<tr>
@@ -1722,14 +2009,14 @@ export async function generateInteractiveHtml(
                     <td class="px-1.5 py-2.5 text-center text-blue-900">${mTheo}h</td>
                     <td class="px-1.5 py-2.5 text-center text-teal-800">${mLab}h</td>
                     <td class="px-1.5 py-2.5 text-center text-rose-800">${mClin}h</td>
-                    <td class="px-2 py-2.5 text-center text-indigo-900">${mSyncMed}h</td>
-                    <td class="px-2 py-2.5 text-center text-purple-900">${mAsync}h</td>
+                    <td class="px-2 py-2.5 text-center text-[#002B49]">${mSyncMed}h</td>
+                    <td class="px-2 py-2.5 text-center text-[#002B49]">${mAsync}h</td>
                   </tr>`
                       : `<tr>
                     <td colspan="2" class="px-3 py-2.5 text-right text-slate-600">Subtotal dos Conhecimentos</td>
                     <td class="px-2.5 py-2.5 text-center text-blue-900">${mPres}h</td>
-                    <td class="px-2.5 py-2.5 text-center text-indigo-900">${mSyncMed}h</td>
-                    <td class="px-2.5 py-2.5 text-center text-purple-900">${mAsync}h</td>
+                    <td class="px-2.5 py-2.5 text-center text-[#002B49]">${mSyncMed}h</td>
+                    <td class="px-2.5 py-2.5 text-center text-[#002B49]">${mAsync}h</td>
                   </tr>`
                   }
                 </tfoot>
@@ -1744,11 +2031,11 @@ export async function generateInteractiveHtml(
                 ? `<!-- Saberes -->
             <div id="mod-details-${mod.id}" class="cha-panel mt-4 p-4 rounded-lg bg-orange-50/60 border border-orange-200 space-y-3">
               <div class="flex items-center justify-between border-b border-orange-200/60 pb-2">
-                <span class="text-xs font-bold uppercase tracking-wider text-orange-900 flex items-center gap-1.5">
+                <span class="text-[15px] font-bold uppercase tracking-wider text-orange-900 flex items-center gap-1.5">
                   <svg class="w-4 h-4 text-[#FF6B00]" fill="currentColor" viewBox="0 0 20 20"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"></path></svg>
                   Saberes
                 </span>
-                <span class="text-[11px] text-orange-700 font-medium">Navegação Integrada</span>
+                <span class="text-[14px] text-orange-700 font-medium">Navegação Integrada</span>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 ${(mod.competencies || [])
@@ -1756,7 +2043,7 @@ export async function generateInteractiveHtml(
                     (c) => `
                   <div class="bg-white p-3 rounded-lg border border-orange-100 shadow-xs">
                     <div class="mb-1">
-                      <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                      <span class="text-[12px] font-bold uppercase px-1.5 py-0.5 rounded ${
                         matchesSaberesColumn(c.category, 'c')
                           ? 'bg-blue-100 text-blue-800'
                           : matchesSaberesColumn(c.category, 'h')
@@ -1764,7 +2051,7 @@ export async function generateInteractiveHtml(
                           : 'bg-purple-100 text-purple-800'
                       }">${labelForCategory(c.category, settings?.pedagogicalNomenclature)}</span>
                     </div>
-                    <p class="text-xs text-slate-700 leading-relaxed">${c.name}</p>
+                    <p class="text-[15px] text-slate-700 leading-relaxed">${c.name}</p>
                   </div>
                 `
                   )
@@ -1792,7 +2079,7 @@ export async function generateInteractiveHtml(
     })()}
   </main>
 
-  <footer class="bg-white border-t border-slate-200 mt-12 py-6 text-center text-xs text-slate-500">
+  <footer class="bg-white border-t border-slate-200 mt-12 py-6 text-center text-[15px] text-slate-500">
     <p>UNISUAM - Centro Universitário Augusto Motta • Sistema de Gestão de Estruturas Curriculares</p>
   </footer>
 
@@ -1863,7 +2150,8 @@ export async function exportToInteractiveHTML(
 
 /**
  * Gera um HTML autônomo com o Mapa Curricular renderizado na tela
- * (inclui pan por arrastar e Tailwind via CDN).
+ * (inclui pan por arrastar, Tailwind via CDN e, em estruturas modulares,
+ * o seletor Mapa Pedagógico / Mapa de Competências).
  */
 export async function exportMapToHTML(
   elementId: string,
@@ -1896,14 +2184,45 @@ export async function exportMapToHTML(
     el.classList.remove('cursor-grab', 'cursor-grabbing');
   });
 
+  const mapPanels = Array.from(
+    clone.querySelectorAll<HTMLElement>('[data-map-view]')
+  );
+  const hasMapSwitcher = mapPanels.length > 1;
+  const initialMap =
+    element.getAttribute('data-active-map') ||
+    mapPanels[0]?.getAttribute('data-map-view') ||
+    'pedagogical';
+
+  mapPanels.forEach((panel) => {
+    const key = panel.getAttribute('data-map-view') || '';
+    panel.style.display = key === initialMap ? 'block' : 'none';
+  });
+
   // Embute imagens (logo etc.) como data URL — HTML baixado não tem acesso aos assets do Vite
   await inlineImagesAsDataUrls(clone, element);
 
   const safeName = (structure.courseName || 'Curso').replace(/\s+/g, '_');
   const title = `Mapa Curricular — ${structure.code} · ${structure.courseName}`;
-  const notesPageHtml = renderReportNotesPageHtml(structure, settings, {
-    logoDataUrl: await getLogoDataUrl().catch(() => ''),
-  });
+  // Mapas NÃO incluem Resumo do PPC nem observações — isso fica só na impressão da estrutura.
+
+  const switcherHtml = hasMapSwitcher
+    ? `<div class="map-switcher" role="tablist" aria-label="Tipo de mapa">
+      ${mapPanels
+        .map((panel) => {
+          const key = panel.getAttribute('data-map-view') || '';
+          const label =
+            panel.getAttribute('data-map-title') ||
+            (key === 'competences' ? 'Mapa de Competências' : 'Mapa Pedagógico');
+          const active = key === initialMap;
+          const activeClass =
+            key === 'competences' ? 'is-active-orange' : 'is-active-blue';
+          return `<button type="button" class="map-switch-btn${
+            active ? ` ${activeClass}` : ''
+          }" data-map-switch="${key}" role="tab" aria-selected="${active ? 'true' : 'false'}">${label}</button>`;
+        })
+        .join('')}
+    </div>`
+    : '';
 
   const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -1942,11 +2261,12 @@ export async function exportMapToHTML(
       align-items: center;
       gap: 10px;
       flex-wrap: wrap;
+      min-width: 0;
     }
     header .code {
       background: var(--unisuam-blue);
       color: #fff;
-      font-size: 11px;
+      font-size: 14px;
       font-weight: 800;
       letter-spacing: 0.06em;
       padding: 4px 10px;
@@ -1954,13 +2274,50 @@ export async function exportMapToHTML(
     }
     header h1 {
       margin: 0;
-      font-size: 16px;
+      font-size: 19px;
       font-weight: 800;
       color: var(--unisuam-blue);
     }
     header .hint {
-      font-size: 11px;
+      font-size: 14px;
       color: #94a3b8;
+    }
+    header .header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .map-switcher {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      background: #f8fafc;
+    }
+    .map-switch-btn {
+      border: 0;
+      background: transparent;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 7px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .map-switch-btn:hover { background: #fff; }
+    .map-switch-btn.is-active-blue {
+      background: var(--unisuam-blue);
+      color: #fff;
+      box-shadow: 0 1px 2px rgba(0,43,73,0.2);
+    }
+    .map-switch-btn.is-active-orange {
+      background: var(--unisuam-orange);
+      color: #fff;
+      box-shadow: 0 1px 2px rgba(255,107,0,0.25);
     }
     #map-viewport {
       overflow: auto;
@@ -1979,6 +2336,15 @@ export async function exportMapToHTML(
       padding-bottom: 24px;
       transform-origin: top left;
     }
+    [data-map-canvas] {
+      width: max-content !important;
+      min-width: 100%;
+      max-width: none !important;
+    }
+    [data-map-view] {
+      max-width: none !important;
+      overflow: visible !important;
+    }
     .report-notes-page {
       border-top: 1px solid #e2e8f0;
       background: #f8fafc;
@@ -1991,6 +2357,7 @@ export async function exportMapToHTML(
     @media print {
       #map-viewport { height: auto; max-height: none; overflow: visible; }
       .report-notes-page { page-break-before: always; break-before: page; background: #fff; border: 0; }
+      .map-switcher { display: none !important; }
     }
     @media (max-width: 768px) {
       header {
@@ -1998,24 +2365,27 @@ export async function exportMapToHTML(
         gap: 6px;
       }
       header h1 {
-        font-size: 13px;
+        font-size: 16px;
         line-height: 1.25;
         max-width: 100%;
       }
       header .code {
-        font-size: 10px;
+        font-size: 12px;
         padding: 3px 8px;
       }
       header .hint {
         width: 100%;
-        font-size: 10px;
+        font-size: 12px;
+      }
+      .map-switch-btn {
+        font-size: 11px;
+        padding: 6px 10px;
       }
       #map-viewport {
-        height: calc(100dvh - 96px);
+        height: calc(100dvh - 110px);
         padding: 8px;
       }
       #map-stage {
-        /* Em telas menores, permite scroll livre sem forçar zoom destrutivo */
         max-width: none;
       }
     }
@@ -2025,25 +2395,68 @@ export async function exportMapToHTML(
   <header>
     <div class="brand">
       <span class="code">${structure.code}</span>
-      <h1>Mapa Curricular — ${structure.courseName}</h1>
+      <h1 id="map-page-title">Mapa Curricular — ${structure.courseName}</h1>
     </div>
-    <span class="hint">Arraste para navegar · UNISUAM</span>
+    <div class="header-actions">
+      ${switcherHtml}
+      <span class="hint">${
+        hasMapSwitcher
+          ? 'Escolha o mapa · Arraste para navegar · UNISUAM'
+          : 'Arraste para navegar · UNISUAM'
+      }</span>
+    </div>
   </header>
   <div id="map-viewport">
     <div id="map-stage">
       ${clone.outerHTML}
     </div>
   </div>
-  ${
-    notesPageHtml
-      ? `<div class="report-notes-page">
-    <div class="report-notes-inner">${notesPageHtml}</div>
-  </div>`
-      : ''
-  }
   <script>
     (function () {
       var vp = document.getElementById('map-viewport');
+      var titleEl = document.getElementById('map-page-title');
+      var courseName = ${JSON.stringify(structure.courseName || '')};
+      var panels = Array.prototype.slice.call(document.querySelectorAll('[data-map-view]'));
+      var switchBtns = Array.prototype.slice.call(document.querySelectorAll('[data-map-switch]'));
+
+      function setMapMode(mode) {
+        panels.forEach(function (panel) {
+          var key = panel.getAttribute('data-map-view') || '';
+          panel.style.display = key === mode ? 'block' : 'none';
+        });
+        switchBtns.forEach(function (btn) {
+          var key = btn.getAttribute('data-map-switch') || '';
+          var active = key === mode;
+          btn.setAttribute('aria-selected', active ? 'true' : 'false');
+          btn.classList.remove('is-active-blue', 'is-active-orange');
+          if (active) {
+            btn.classList.add(key === 'competences' ? 'is-active-orange' : 'is-active-blue');
+          }
+        });
+        if (titleEl) {
+          var label = mode === 'competences' ? 'Mapa de Competências' : 'Mapa Pedagógico';
+          if (panels.length <= 1) label = 'Mapa Curricular';
+          titleEl.textContent = label + ' — ' + courseName;
+        }
+        if (vp) {
+          vp.scrollLeft = 0;
+          vp.scrollTop = 0;
+        }
+      }
+
+      switchBtns.forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          setMapMode(btn.getAttribute('data-map-switch') || 'pedagogical');
+        });
+      });
+
+      if (panels.length > 1) {
+        var initial = ${JSON.stringify(initialMap)};
+        setMapMode(initial);
+      }
+
       if (!vp) return;
       var dragging = false;
       var ox = 0, oy = 0, sl = 0, st = 0;
@@ -2051,7 +2464,6 @@ export async function exportMapToHTML(
         if (e.button !== 0) return;
         var t = e.target;
         if (t && t.closest && t.closest('button, a, input, label, select, textarea, [data-period-toggle]')) return;
-        // Em touch, deixa o scroll nativo; pan por arrastar só no mouse
         if (e.pointerType === 'touch') return;
         dragging = true;
         vp.classList.add('dragging');

@@ -68,7 +68,7 @@ function renderNoteText(text: string): string {
   const flushList = () => {
     if (listItems.length === 0) return;
     html.push(
-      `<ul style="margin:4px 0 8px 18px;padding:0;color:#334155;font-size:11.5px;line-height:1.55;">${listItems
+      `<ul style="margin:4px 0 8px 18px;padding:0;color:#334155;font-size:14.5px;line-height:1.55;">${listItems
         .map((item) => `<li style="margin:2px 0;">${escapeHtml(item)}</li>`)
         .join('')}</ul>`
     );
@@ -88,7 +88,7 @@ function renderNoteText(text: string): string {
     }
     flushList();
     html.push(
-      `<p style="margin:0 0 8px 0;color:#334155;font-size:11.5px;line-height:1.6;text-align:justify;">${escapeHtml(
+      `<p style="margin:0 0 8px 0;color:#334155;font-size:14.5px;line-height:1.6;text-align:justify;">${escapeHtml(
         line
       )}</p>`
     );
@@ -122,10 +122,10 @@ export function renderReportNotesPageHtml(
   const notesBody = `
     <div style="box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
       <div style="background:#002B49;padding:10px 20px;">
-        <h2 style="margin:0;font-size:13px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${escapeHtml(
+        <h2 style="margin:0;font-size:16px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff;">${escapeHtml(
           notes.title
         )}</h2>
-        <p style="margin:2px 0 0 0;font-size:10px;color:#bfdbfe;">${escapeHtml(structure.courseName)} · Estrutura ${escapeHtml(
+        <p style="margin:2px 0 0 0;font-size:12px;color:#bfdbfe;">${escapeHtml(structure.courseName)} · Estrutura ${escapeHtml(
           structure.structureType === 'modular' ? 'Modular' : 'Disciplinar'
         )}</p>
       </div>
@@ -135,7 +135,7 @@ export function renderReportNotesPageHtml(
             (block) => `<div style="margin-bottom:16px;">
           ${
             block.title
-              ? `<h3 style="margin:0 0 6px 0;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#002B49;border-left:3px solid #FF6B00;padding-left:8px;">${escapeHtml(
+              ? `<h3 style="margin:0 0 6px 0;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#002B49;border-left:3px solid #FF6B00;padding-left:8px;">${escapeHtml(
                   block.title
                 )}</h3>`
               : ''
@@ -155,7 +155,7 @@ export function renderReportNotesPageHtml(
 
   const logo = logoDataUrl
     ? `<img src="${logoDataUrl}" alt="UNISUAM" style="height:56px;width:auto;object-fit:contain;flex-shrink:0;" />`
-    : `<div style="font-size:24px;font-weight:900;letter-spacing:-0.5px;"><span style="color:#FF6B00;">UNI</span><span style="color:#002B49;">SUAM</span></div>`;
+    : `<div style="font-size:27px;font-weight:900;letter-spacing:-0.5px;"><span style="color:#FF6B00;">UNI</span><span style="color:#002B49;">SUAM</span></div>`;
 
   return `<section data-report-notes-page style="box-sizing:border-box;${widthStyle}background:#ffffff;padding:24px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;">
   <div style="box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;">
@@ -163,12 +163,12 @@ export function renderReportNotesPageHtml(
       <div style="display:flex;align-items:center;gap:12px;min-width:0;">
         ${logo}
         <div style="min-width:0;">
-          <h3 style="margin:0;font-size:15px;font-weight:700;color:#002B49;">${escapeHtml(institution)}</h3>
-          <p style="margin:2px 0 0 0;font-size:11px;font-weight:500;color:#64748b;">ESTRUTURA CURRICULAR OFICIAL</p>
+          <h3 style="margin:0;font-size:18px;font-weight:700;color:#002B49;">${escapeHtml(institution)}</h3>
+          <p style="margin:2px 0 0 0;font-size:14px;font-weight:500;color:#64748b;">ESTRUTURA CURRICULAR OFICIAL</p>
         </div>
       </div>
-      <div style="text-align:right;font-size:11px;color:#475569;">
-        <div style="font-weight:600;color:#1e293b;">Carga Horária Total: <span style="color:#FF6B00;font-weight:900;font-size:13px;">${structure.calculatedTotalHours}h</span></div>
+      <div style="text-align:right;font-size:14px;color:#475569;">
+        <div style="font-weight:600;color:#1e293b;">Carga Horária Total: <span style="color:#FF6B00;font-weight:900;font-size:16px;">${structure.calculatedTotalHours}h</span></div>
         ${
           structure.structureType === 'disciplinar'
             ? `<div>Total de Créditos: <span style="font-weight:700;color:#1e293b;">${structure.totalCredits}</span></div>`
@@ -177,18 +177,22 @@ export function renderReportNotesPageHtml(
       </div>
     </div>
 
-    <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:11px;">
-      <div style="flex:1 1 200px;">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:14px;">
+      <div style="flex:1 1 180px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Curso e Modalidade:</span>
         <span style="font-weight:600;color:#1e293b;">${escapeHtml(structure.courseName)} (${escapeHtml(structure.modality)})</span>
       </div>
-      <div style="flex:1 1 200px;">
+      <div style="flex:1 1 180px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Ato Autorizativo:</span>
         <span style="font-weight:600;color:#1e293b;">${escapeHtml(
           structure.authorizationAct || structure.recognitionPortaria || '—'
         )}</span>
       </div>
-      <div style="flex:1 1 200px;">
+      <div style="flex:1 1 180px;">
+        <span style="display:block;color:#94a3b8;font-weight:500;">DCN do Curso:</span>
+        <span style="font-weight:600;color:#1e293b;">${escapeHtml(structure.dcnRef || '—')}</span>
+      </div>
+      <div style="flex:1 1 180px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Código da Estrutura:</span>
         <span style="font-weight:700;color:#002B49;">${escapeHtml(structure.code)}${
           !structure.hideStatus ? ` (${escapeHtml(structure.status)})` : ''

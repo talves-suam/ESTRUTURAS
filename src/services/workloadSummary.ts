@@ -256,6 +256,7 @@ export interface ModuleMeetingsRow {
   label: string;
   shortLabel: string;
   meetings: number;
+  percent: number;
 }
 
 /** Quadro horizontal de encontros por módulo. Null se disciplinar, sem módulos ou oculto. */
@@ -277,17 +278,86 @@ export function buildModuleMeetingsSummary(structure: CurriculumStructure): {
     return (a.branch || '').localeCompare(b.branch || '', 'pt-BR');
   });
 
-  const rows: ModuleMeetingsRow[] = modules.map((mod) => {
-    const roman = toRoman(mod.number) || String(mod.number);
-    const branch = mod.branch ? ` ${mod.branch}` : '';
-    return {
-      id: mod.id,
-      label: formatModuleName(mod.number, mod.title, mod.branch),
-      shortLabel: `${roman}${branch}`.trim(),
-      meetings: Math.max(0, Number(mod.meetings) || 0),
-    };
-  });
+  const raw = modules.map((mod) => ({
+    id: mod.id,
+    label: formatModuleName(mod.number, mod.title, mod.branch),
+    shortLabel: `${toRoman(mod.number) || String(mod.number)}${mod.branch ? ` ${mod.branch}` : ''}`.trim(),
+    meetings: Math.max(0, Number(mod.meetings) || 0),
+  }));
 
-  const totalMeetings = rows.reduce((acc, r) => acc + r.meetings, 0);
+  const totalMeetings = raw.reduce((acc, r) => acc + r.meetings, 0);
+  const rows: ModuleMeetingsRow[] = raw.map((r) => ({
+    ...r,
+    percent: totalMeetings > 0 ? (r.meetings / totalMeetings) * 100 : 0,
+  }));
+
   return { rows, totalMeetings };
+}
+
+/**
+ * Escala tipográfica dos quadros de CH / encontros conforme o nº de colunas
+ * (mais módulos → fonte menor para caber lado a lado).
+ */
+export function summaryTableDensity(columnCount: number): {
+  tableText: string;
+  headerText: string;
+  labelCol: string;
+  cellPad: string;
+  footerText: string;
+  titleText: string;
+  subtitleText: string;
+} {
+  if (columnCount >= 14) {
+    return {
+      tableText: 'text-[9px]',
+      headerText: 'text-[7px]',
+      labelCol: 'w-[3.25rem]',
+      cellPad: 'px-0 py-1',
+      footerText: 'text-[10px]',
+      titleText: 'text-[11px]',
+      subtitleText: 'text-[9px]',
+    };
+  }
+  if (columnCount >= 11) {
+    return {
+      tableText: 'text-[10px]',
+      headerText: 'text-[8px]',
+      labelCol: 'w-[3.75rem]',
+      cellPad: 'px-0.5 py-1',
+      footerText: 'text-[11px]',
+      titleText: 'text-[12px]',
+      subtitleText: 'text-[10px]',
+    };
+  }
+  if (columnCount >= 8) {
+    return {
+      tableText: 'text-[11px]',
+      headerText: 'text-[8px]',
+      labelCol: 'w-[4.25rem]',
+      cellPad: 'px-0.5 py-1.5',
+      footerText: 'text-[12px]',
+      titleText: 'text-[13px]',
+      subtitleText: 'text-[11px]',
+    };
+  }
+  if (columnCount >= 6) {
+    return {
+      tableText: 'text-[12px]',
+      headerText: 'text-[9px]',
+      labelCol: 'w-[4.5rem]',
+      cellPad: 'px-0.5 py-1.5',
+      footerText: 'text-[12px]',
+      titleText: 'text-[13px]',
+      subtitleText: 'text-[11px]',
+    };
+  }
+  return {
+    tableText: 'text-[13px]',
+    headerText: 'text-[10px]',
+    labelCol: 'w-[7.5rem]',
+    cellPad: 'px-1 py-1.5',
+    footerText: 'text-[13px]',
+    titleText: 'text-[14px]',
+    subtitleText: 'text-[12px]',
+  };
 }

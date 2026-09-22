@@ -36,9 +36,12 @@ import { exportToPNG, exportElementToPDF, exportMapToHTML } from '../services/ex
 import { WorkloadSummaryCard } from './WorkloadSummaryCard';
 import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
 import { StructureOfficialHeader } from './StructureOfficialHeader';
+import { CompetencesCurriculumMap } from './CompetencesCurriculumMap';
 import { showsModuleMeetings } from '../services/workloadSummary';
 import { labelForCategory } from '../utils/nomenclature';
 import { formatModuleName } from '../utils/roman';
+
+type GraphMapMode = 'pedagogical' | 'competences';
 
 interface CurriculumGraphViewProps {
   structure: CurriculumStructure;
@@ -248,9 +251,6 @@ function ModuleNode({
       <p className="text-[12px] font-bold text-white leading-snug">
         {formatModuleName(mod.number, mod.title, mod.branch)}
       </p>
-      {mod.competence ? (
-        <p className="text-[9px] text-blue-100/90 mt-1 font-medium leading-snug">{mod.competence}</p>
-      ) : null}
       <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
         {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
       </p>
@@ -305,7 +305,7 @@ function ModuleChain({
         gridTemplateRows: `${showConhecimentos ? 'auto' : '0fr'} auto ${showSaberes ? 'auto' : '0fr'}`,
       }}
     >
-      {/* Linha 1 — conhecimentos (encostados embaixo, junto ao módulo) */}
+      {/* Linha 1 — conhecimentos */}
       {showConhecimentos &&
         modules.map((mod, idx) => {
           const items = getModuleConhecimentos(mod);
@@ -379,7 +379,7 @@ function ModuleChain({
         );
       })}
 
-      {/* Linha 3 — saberes (encostados em cima, junto ao módulo) */}
+      {/* Linha 3 — saberes */}
       {showSaberes &&
         modules.map((mod, idx) => {
           const saberes = mod.competencies || [];
@@ -840,8 +840,8 @@ function ModularCurriculumMap({
                       modules={upperBranch.modules}
                       showConhecimentos={showConhecimentos}
                       showSaberes={showSaberes}
-                  nomenclature={nomenclature}
-                  hideMeetings={hideMeetings}
+                      nomenclature={nomenclature}
+                      hideMeetings={hideMeetings}
                       firstModuleRef={upperStartRef}
                     />
                     <BranchLaneLabel
@@ -866,8 +866,8 @@ function ModularCurriculumMap({
                       modules={lowerBranch.modules}
                       showConhecimentos={showConhecimentos}
                       showSaberes={showSaberes}
-                  nomenclature={nomenclature}
-                  hideMeetings={hideMeetings}
+                      nomenclature={nomenclature}
+                      hideMeetings={hideMeetings}
                       firstModuleRef={lowerStartRef}
                     />
                   </>
@@ -879,8 +879,8 @@ function ModularCurriculumMap({
                       modules={br.modules}
                       showConhecimentos={showConhecimentos}
                       showSaberes={showSaberes}
-                  nomenclature={nomenclature}
-                  hideMeetings={hideMeetings}
+                      nomenclature={nomenclature}
+                      hideMeetings={hideMeetings}
                     />
                   </div>
                 ))}
@@ -905,6 +905,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
 
   const [isExporting, setIsExporting] = useState(false);
   const [exportToast, setExportToast] = useState<string | null>(null);
+  const [mapMode, setMapMode] = useState<GraphMapMode>('pedagogical');
   const [showConhecimentosOnMap, setShowConhecimentosOnMap] = useState(true);
   const [showSaberesOnMap, setShowSaberesOnMap] = useState(true);
   const [showWorkloadSummaryOnMap, setShowWorkloadSummaryOnMap] = useState(
@@ -916,14 +917,22 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
     setShowConhecimentosOnMap(true);
     setShowSaberesOnMap(true);
     setShowWorkloadSummaryOnMap(!(structure.hideWorkloadSummaryInReport ?? false));
+    setMapMode('pedagogical');
   }, [structure.id, structure.hideWorkloadSummaryInReport]);
+
+  const mapExportBase =
+    mapMode === 'competences'
+      ? `${structure.code}_Mapa_Competencias`
+      : `${structure.code}_Mapa_Curricular`;
 
   const handleExportPNG = async () => {
     setIsExporting(true);
     try {
-      await exportToPNG('graph-export-container', `${structure.code}_Mapa_Curricular`, {
+      await exportToPNG('graph-export-container', mapExportBase, {
         structure,
         settings,
+        includePpcSummary: false,
+        includeReportNotes: false,
       });
       setExportToast('PNG do mapa gerado com sucesso.');
       setTimeout(() => setExportToast(null), 3000);
@@ -939,9 +948,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
   const handleExportMapPDF = async () => {
     setIsExporting(true);
     try {
-      await exportElementToPDF('graph-export-container', `${structure.code}_Mapa_Curricular`, {
+      await exportElementToPDF('graph-export-container', mapExportBase, {
         structure,
         settings,
+        includePpcSummary: false,
+        includeReportNotes: false,
       });
       setExportToast('PDF do mapa gerado com sucesso.');
       setTimeout(() => setExportToast(null), 3000);
@@ -957,7 +968,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
   const handleExportMapHTML = async () => {
     try {
       await exportMapToHTML('graph-export-container', structure, undefined, settings);
-      setExportToast('HTML do mapa gerado e download iniciado.');
+      setExportToast(
+        isModular
+          ? 'HTML gerado com seletor dos dois mapas.'
+          : 'HTML do mapa gerado e download iniciado.'
+      );
       setTimeout(() => setExportToast(null), 3000);
     } catch (e) {
       console.error(e);
@@ -972,7 +987,9 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2.5 flex-wrap">
-              <h2 className="text-xl font-black text-[#002B49] tracking-tight">Mapa Curricular</h2>
+              <h2 className="text-xl font-black text-[#002B49] tracking-tight">
+                {mapMode === 'competences' ? 'Mapa de Competências' : 'Mapa Curricular'}
+              </h2>
               <span className="text-xs font-semibold text-slate-500">
                 Código: <strong className="text-[#002B49] font-mono">{structure.code}</strong>
               </span>
@@ -982,9 +999,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
             </div>
             <p className="text-xs text-slate-500 mt-1">
               {structure.courseName}
-              {isModular
-                ? ' · Conhecimentos acima · Módulo · Saberes abaixo'
-                : ' · Períodos em duas linhas · Disciplinas optativas centralizadas'}
+              {mapMode === 'competences'
+                ? ' · Aspectos do perfil · Competências por módulo · Selos de vínculo'
+                : isModular
+                  ? ' · Conhecimentos acima · Módulo · Saberes abaixo'
+                  : ' · Períodos em duas linhas · Disciplinas optativas centralizadas'}
             </p>
           </div>
 
@@ -999,7 +1018,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
             <button
               onClick={handleExportMapPDF}
               disabled={isExporting}
-              title="Baixar PDF do Mapa Curricular"
+              title={
+                mapMode === 'competences'
+                  ? 'Baixar PDF do Mapa de Competências (mapa atual)'
+                  : 'Baixar PDF do Mapa Pedagógico (mapa atual)'
+              }
               className="px-3.5 py-2 rounded-xl bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50"
             >
               <FileText className="w-3.5 h-3.5 text-[#FF6B00]" />
@@ -1008,7 +1031,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
             <button
               onClick={handleExportPNG}
               disabled={isExporting}
-              title="Baixar PNG do Mapa Curricular"
+              title={
+                mapMode === 'competences'
+                  ? 'Baixar PNG do Mapa de Competências (mapa atual)'
+                  : 'Baixar PNG do Mapa Pedagógico (mapa atual)'
+              }
               className="px-3.5 py-2 rounded-xl bg-white hover:bg-orange-50 text-[#FF6B00] text-xs font-bold transition flex items-center gap-1.5 border border-[#FF6B00]/30 disabled:opacity-50"
             >
               <Download className="w-3.5 h-3.5" />
@@ -1016,7 +1043,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
             </button>
             <button
               onClick={handleExportMapHTML}
-              title="Baixar HTML do Mapa Curricular"
+              title={
+                isModular
+                  ? 'Baixar HTML com seletor dos dois mapas'
+                  : 'Baixar HTML do Mapa Curricular'
+              }
               className="px-3.5 py-2 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-bold transition flex items-center gap-1.5"
             >
               <Share2 className="w-3.5 h-3.5" />
@@ -1032,11 +1063,37 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
         )}
 
         <div className="no-export flex flex-wrap items-center gap-4 pt-3 border-t border-slate-100">
+          {isModular && (
+            <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+              <button
+                type="button"
+                onClick={() => setMapMode('pedagogical')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  mapMode === 'pedagogical'
+                    ? 'bg-[#002B49] text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-white'
+                }`}
+              >
+                Mapa Pedagógico
+              </button>
+              <button
+                type="button"
+                onClick={() => setMapMode('competences')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  mapMode === 'competences'
+                    ? 'bg-[#FF6B00] text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-white'
+                }`}
+              >
+                Mapa de Competências
+              </button>
+            </div>
+          )}
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
             <Layers3 className="w-3.5 h-3.5 text-[#002B49]" />
-            Exibição no mapa (PDF / PNG / HTML)
+            Exibição no mapa (PDF / PNG · HTML traz os dois)
           </span>
-          {isModular && (
+          {isModular && mapMode === 'pedagogical' && (
             <>
               <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
                 <input
@@ -1094,6 +1151,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
       <div
         id="graph-export-container"
         className="relative rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden"
+        data-active-map={isModular ? mapMode : 'disciplinary'}
         style={{
           background: 'linear-gradient(165deg, #f7f9fc 0%, #eef3f9 45%, #fff7f0 100%)',
         }}
@@ -1116,13 +1174,30 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
                 Nenhum módulo cadastrado nesta estrutura.
               </div>
             ) : (
-              <ModularCurriculumMap
-                modules={modules}
-                showConhecimentos={showConhecimentosOnMap}
-                showSaberes={showSaberesOnMap}
-                nomenclature={settings.pedagogicalNomenclature}
-                hideMeetings={!!structure.hideMeetings}
-              />
+              <>
+                <div
+                  data-map-view="pedagogical"
+                  data-map-title="Mapa Pedagógico"
+                  style={{ display: mapMode === 'pedagogical' ? 'block' : 'none' }}
+                >
+                  <ModularCurriculumMap
+                    modules={modules}
+                    showConhecimentos={showConhecimentosOnMap}
+                    showSaberes={showSaberesOnMap}
+                    nomenclature={settings.pedagogicalNomenclature}
+                    hideMeetings={!!structure.hideMeetings}
+                  />
+                </div>
+                <div
+                  data-map-view="competences"
+                  data-map-title="Mapa de Competências"
+                  style={{ display: mapMode === 'competences' ? 'block' : 'none' }}
+                >
+                  <PanViewport className="max-h-[min(75vh,820px)] rounded-2xl border border-[#002B49]/8 bg-white/40 p-4">
+                    <CompetencesCurriculumMap structure={structure} />
+                  </PanViewport>
+                </div>
+              </>
             )
           ) : periods.length === 0 ? (
             <div className="text-center text-slate-400 text-sm py-20">
@@ -1134,9 +1209,9 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
 
           {showWorkloadSummaryOnMap && (
             <div
-              className={`mt-4 grid gap-4 ${
+              className={`mt-4 grid gap-4 items-stretch ${
                 showsModuleMeetings(structure)
-                  ? 'grid-cols-1 xl:grid-cols-2'
+                  ? 'grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,0.9fr)]'
                   : 'grid-cols-1'
               }`}
             >

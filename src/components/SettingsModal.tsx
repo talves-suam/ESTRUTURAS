@@ -45,7 +45,6 @@ interface SettingsModalProps {
   firebaseOnline?: boolean;
   connectingServer?: boolean;
   onConnectFirebase?: (paste: string) => Promise<void>;
-  onDisconnectFirebase?: () => void;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
   onBatchUpdateCourses: (courses: Course[]) => Promise<void>;
   onRestoreLocalBackup?: (raw: string) => void;
@@ -60,7 +59,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   firebaseOnline = false,
   connectingServer = false,
   onConnectFirebase,
-  onDisconnectFirebase,
   onSaveSettings,
   onBatchUpdateCourses,
   onRestoreLocalBackup,
@@ -279,7 +277,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               firebaseOnline={firebaseOnline}
               busy={connectingServer}
               onConnect={onConnectFirebase}
-              onDisconnect={onDisconnectFirebase}
             />
           </div>
         )}
@@ -292,7 +289,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <p className="text-xs text-slate-500">
             {firebaseOnline
               ? 'O servidor está ligado. Ainda assim, baixe um backup JSON para segurança.'
-              : 'Ainda não há servidor: os cadastros não saem deste navegador. Cada endereço (porta 3000 vs 5173) guarda uma cópia diferente. Se você cadastrou em outro computador, só um backup JSON recupera.'}
+              : 'Backup de segurança dos dados deste navegador. Com o servidor embutido no projeto, os cadastros já ficam na nuvem automaticamente.'}
           </p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -472,7 +469,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Section 3: Página de Observações (2ª página dos relatórios) */}
+        {/* Section 3: Página de Observações (3ª página dos relatórios) */}
         <div className="py-6 border-b border-slate-200 space-y-4">
           <div>
             <h3 className="text-sm font-bold text-[#002B49] uppercase tracking-wider flex items-center gap-2">
@@ -480,9 +477,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               3. Página de Observações, Regras e Explicações da Estrutura
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-4xl">
-              Este conteúdo é gerado como 2ª página nas exportações em PDF, PNG e HTML, com o mesmo
-              cabeçalho institucional da primeira. Cadastre quantos títulos e textos precisar; o
-              conteúdo é separado por tipo de estrutura. Linhas iniciadas por “-” viram lista.
+              Este conteúdo é gerado como 3ª página nas exportações em PDF, PNG e HTML (após o
+              Resumo do PPC e a matriz curricular), com o mesmo cabeçalho institucional. Cadastre
+              quantos títulos e textos precisar; o conteúdo é separado por tipo de estrutura. Linhas
+              iniciadas por “-” viram lista.
             </p>
           </div>
 
@@ -530,7 +528,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <p className="text-xs text-slate-500 bg-slate-50 border border-dashed border-slate-300 rounded-lg p-4">
                 Nenhuma observação cadastrada para estruturas{' '}
                 {activeNotesType === 'disciplinar' ? 'disciplinares' : 'modulares'}. Sem conteúdo, os
-                relatórios continuam com apenas uma página.
+                relatórios seguem sem essa página final.
               </p>
             )}
 

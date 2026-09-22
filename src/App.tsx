@@ -15,11 +15,10 @@ import { CurriculumStructure, Course, AppSettings } from './types/curriculum';
 import {
   FIREBASE_CHANGED_EVENT,
   applyRuntimeFirebaseConfig,
-  clearRuntimeFirebaseConfig,
   isFirebaseConfigured,
   notifyFirebaseChanged,
   parseFirebaseConfigPaste,
-  toEnvLocalContents,
+  usesBuiltInFirebase,
 } from './firebase/config';
 import { 
   getSettingsFromFirestore, 
@@ -266,14 +265,9 @@ export default function App() {
       await pushLocalCacheToServer();
       notifyFirebaseChanged();
       setFirebaseOnline(true);
-      const blob = new Blob([toEnvLocalContents(config)], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'env.local';
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast('Servidor conectado. Os cadastros agora são compartilhados. Guarde o arquivo env.local baixado.');
+      showToast(
+        'Servidor ativo neste navegador. Para TODOS os usuários conectarem sozinhos, grave este firebaseConfig em src/firebase/projectConfig.ts.'
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Não foi possível conectar.';
       showToast(message, 'error');
@@ -281,13 +275,6 @@ export default function App() {
     } finally {
       setConnectingServer(false);
     }
-  };
-
-  const handleDisconnectFirebase = () => {
-    void clearRuntimeFirebaseConfig().then(() => {
-      setFirebaseOnline(isFirebaseConfigured);
-      showToast('Este navegador voltou a usar só os dados locais.');
-    });
   };
 
   const handleSagaImportComplete = (parsed: CurriculumStructure) => {
@@ -315,19 +302,19 @@ export default function App() {
         firebaseOnline={firebaseOnline}
       />
 
-      {!firebaseOnline && (
+      {!firebaseOnline && !usesBuiltInFirebase() && (
         <div className="bg-amber-50 border-b border-amber-200">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-amber-950 font-medium flex items-center gap-2">
               <CloudOff className="w-4 h-4 text-amber-700 shrink-0" />
-              Isto ainda não está na nuvem. O que você cadastra fica só neste navegador — colegas e você em outro computador não veem.
+              Servidor ainda não embutido neste projeto — cadastros ficam só neste navegador até o time técnico gravar o firebaseConfig.
             </p>
             <button
               type="button"
               onClick={() => setActiveTab('settings')}
               className="px-3 py-1.5 rounded-lg bg-[#002B49] text-white text-[11px] font-black"
             >
-              Conectar servidor
+              Ver status
             </button>
           </div>
         </div>
@@ -465,7 +452,6 @@ export default function App() {
                 firebaseOnline={firebaseOnline}
                 connectingServer={connectingServer}
                 onConnectFirebase={handleConnectFirebase}
-                onDisconnectFirebase={handleDisconnectFirebase}
                 onSaveSettings={handleSaveSettings}
                 onBatchUpdateCourses={handleBatchUpdateCourses}
                 onRestoreLocalBackup={handleRestoreLocalBackup}
