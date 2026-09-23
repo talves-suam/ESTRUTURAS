@@ -199,10 +199,20 @@ export default function App() {
   };
 
   const handleDuplicateStructure = async (structure: CurriculumStructure) => {
+    const stamp = Date.now();
+    const baseCode = structure.code.replace(/-COPIA\d*$/i, '').replace(/-CLONE\d*$/i, '');
+    const usedCodes = new Set(structures.map((s) => s.code.toLowerCase()));
+    let code = `${baseCode}-COPIA`;
+    let n = 2;
+    while (usedCodes.has(code.toLowerCase())) {
+      code = `${baseCode}-COPIA${n}`;
+      n += 1;
+    }
+
     const duplicated: CurriculumStructure = {
-      ...structure,
-      id: `struct-${Date.now()}`,
-      code: `${structure.code}-CLONE`,
+      ...JSON.parse(JSON.stringify(structure)),
+      id: `struct-${stamp}`,
+      code,
       status: 'Em Elaboração',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -217,14 +227,17 @@ export default function App() {
     showToast(`Curso [${newCourse.name}] adicionado com sucesso!`);
   };
 
-  const handleBatchUpdateCourses = async (updatedCourses: Course[]) => {
-    await saveAllCoursesToFirestore(updatedCourses);
+  const handleBatchUpdateCourses = async (
+    updatedCourses: Course[],
+    options?: { allowEmptyWipe?: boolean }
+  ) => {
+    await saveAllCoursesToFirestore(updatedCourses, options);
     setCourses(updatedCourses);
   };
 
   const handleSaveSettings = async (newSettings: AppSettings) => {
-    await saveSettingsToFirestore(newSettings);
-    setSettings(newSettings);
+    const saved = await saveSettingsToFirestore(newSettings);
+    setSettings(saved);
     showToast('Configurações atualizadas com sucesso!');
   };
 

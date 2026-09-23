@@ -20,6 +20,8 @@ import {
   formatWorkloadHours,
   formatWorkloadPercent,
   summaryTableDensity,
+  workloadSummaryDensity,
+  summaryPairGridClass,
   WorkloadSummaryRow,
 } from './workloadSummary';
 import { getSaberesLabels, labelForCategory, matchesSaberesColumn } from '../utils/nomenclature';
@@ -165,25 +167,25 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
   const componentRows = rows.filter((row) => row.id !== 'total');
   const totalRow = rows.find((row) => row.id === 'total');
   const meetings = buildModuleMeetingsSummary(structure);
-  const density = summaryTableDensity(
-    Math.max(componentRows.length, meetings?.rows.length ?? 0)
-  );
+  const meetingCols = meetings?.rows.length ?? 0;
+  const chDensity = workloadSummaryDensity(componentRows.length, meetingCols);
+  const meetingsDensity = summaryTableDensity(meetingCols);
 
   const chTable = `
     <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden min-w-0 h-full flex flex-col">
       <div class="bg-[#002B49] px-3 py-2 text-center shrink-0">
-        <h3 class="${density.titleText} font-black tracking-wide text-white uppercase">Carga Horária</h3>
-        <p class="${density.subtitleText} text-blue-200/90 mt-0.5">Hora-relógio · ${structure.courseName}</p>
+        <h3 class="${chDensity.titleText} font-black tracking-wide text-white uppercase">Carga Horária</h3>
+        <p class="${chDensity.subtitleText} text-blue-200/90 mt-0.5">Hora-relógio · ${structure.courseName}</p>
       </div>
-      <div class="flex-1 flex flex-col min-h-0">
-        <table class="w-full table-fixed ${density.tableText} border-collapse">
+      <div class="flex-1 flex flex-col min-h-0 overflow-x-auto">
+        <table class="w-full min-w-[36rem] table-fixed ${chDensity.tableText} border-collapse">
           <thead>
             <tr class="bg-[#002B49]/5 border-b border-[#002B49]/10">
-              <th class="${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] ${density.labelCol}">Componentes</th>
+              <th class="${chDensity.cellPad} text-left ${chDensity.headerText} font-bold uppercase tracking-wide text-[#002B49] ${chDensity.labelCol}">Componentes</th>
               ${componentRows
                 .map(
                   (row) =>
-                    `<th class="${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] leading-tight">${
+                    `<th title="${row.label}" class="${chDensity.cellPad} text-center ${chDensity.headerText} font-bold uppercase tracking-wide text-[#002B49] leading-tight">${
                       row.shortLabel || row.label
                     }</th>`
                 )
@@ -192,22 +194,22 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
           </thead>
           <tbody>
             <tr class="border-b border-slate-100">
-              <th class="${density.cellPad} text-left font-semibold text-slate-500">Hora-relógio</th>
+              <th class="${chDensity.cellPad} text-left font-semibold text-slate-500">Hora-relógio</th>
               ${componentRows
                 .map(
                   (row) =>
-                    `<td class="${density.cellPad} text-center tabular-nums font-bold text-slate-800">${formatWorkloadHours(
+                    `<td class="${chDensity.cellPad} text-center tabular-nums font-bold text-slate-800">${formatWorkloadHours(
                       row.hours
                     )}</td>`
                 )
                 .join('')}
             </tr>
             <tr>
-              <th class="${density.cellPad} text-left font-semibold text-slate-500">Percentual</th>
+              <th class="${chDensity.cellPad} text-left font-semibold text-slate-500">Percentual</th>
               ${componentRows
                 .map(
                   (row) =>
-                    `<td class="${density.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
+                    `<td class="${chDensity.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
                       row.percent
                     )}</td>`
                 )
@@ -215,17 +217,17 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
             </tr>
           </tbody>
         </table>
+      </div>
         ${
           totalRow
-            ? `<div class="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49]">
+            ? `<div class="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49] shrink-0">
               <span class="uppercase tracking-wider text-[10px]">Total</span>
-              <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}">
+              <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${chDensity.footerText}">
                 ${formatWorkloadHours(totalRow.hours)} horas
               </span>
             </div>`
             : ''
         }
-      </div>
     </section>`;
 
   const meetingsTable =
@@ -233,38 +235,38 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
       ? `
     <section class="bg-white rounded-xl shadow-sm border border-[#002B49]/12 overflow-hidden min-w-0 h-full flex flex-col">
       <div class="bg-[#002B49] px-3 py-2 text-center shrink-0">
-        <h3 class="${density.titleText} font-black tracking-wide text-white uppercase">Encontros por Módulo</h3>
-        <p class="${density.subtitleText} text-blue-200/90 mt-0.5">Quantidade de encontros · ${structure.courseName}</p>
+        <h3 class="${meetingsDensity.titleText} font-black tracking-wide text-white uppercase">Encontros por Módulo</h3>
+        <p class="${meetingsDensity.subtitleText} text-blue-200/90 mt-0.5">Quantidade de encontros · ${structure.courseName}</p>
       </div>
-      <div class="flex-1 flex flex-col min-h-0">
-        <table class="w-full table-fixed ${density.tableText} border-collapse">
+      <div class="flex-1 flex flex-col min-h-0 overflow-x-auto">
+        <table class="w-full min-w-[28rem] table-fixed ${meetingsDensity.tableText} border-collapse">
           <thead>
             <tr class="bg-[#002B49]/5 border-b border-[#002B49]/10">
-              <th class="${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] ${density.labelCol}">Módulos</th>
+              <th class="${meetingsDensity.cellPad} text-left ${meetingsDensity.headerText} font-bold uppercase tracking-wide text-[#002B49] ${meetingsDensity.labelCol}">Módulos</th>
               ${meetings.rows
                 .map(
                   (row) =>
-                    `<th class="${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] leading-tight" title="${row.label}">${row.shortLabel}</th>`
+                    `<th class="${meetingsDensity.cellPad} text-center ${meetingsDensity.headerText} font-bold uppercase tracking-wide text-[#002B49] leading-tight" title="${row.label}">${row.shortLabel}</th>`
                 )
                 .join('')}
             </tr>
           </thead>
           <tbody>
             <tr class="border-b border-slate-100">
-              <th class="${density.cellPad} text-left font-semibold text-slate-500">Encontros</th>
+              <th class="${meetingsDensity.cellPad} text-left font-semibold text-slate-500">Encontros</th>
               ${meetings.rows
                 .map(
                   (row) =>
-                    `<td class="${density.cellPad} text-center tabular-nums font-bold text-slate-800">${row.meetings}</td>`
+                    `<td class="${meetingsDensity.cellPad} text-center tabular-nums font-bold text-slate-800">${row.meetings}</td>`
                 )
                 .join('')}
             </tr>
             <tr>
-              <th class="${density.cellPad} text-left font-semibold text-slate-500">Percentual</th>
+              <th class="${meetingsDensity.cellPad} text-left font-semibold text-slate-500">Percentual</th>
               ${meetings.rows
                 .map(
                   (row) =>
-                    `<td class="${density.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
+                    `<td class="${meetingsDensity.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
                       row.percent
                     )}</td>`
                 )
@@ -272,19 +274,19 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
             </tr>
           </tbody>
         </table>
-        <div class="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49]">
+      </div>
+        <div class="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49] shrink-0">
           <span class="uppercase tracking-wider text-[10px]">Total</span>
-          <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}">
+          <span class="absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${meetingsDensity.footerText}">
             ${meetings.totalMeetings} ${meetings.totalMeetings === 1 ? 'encontro' : 'encontros'}
           </span>
         </div>
-      </div>
     </section>`
       : '';
 
   if (!meetingsTable) return chTable;
 
-  return `<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,0.9fr)] gap-4 items-stretch">${chTable}${meetingsTable}</div>`;
+  return `<div class="grid gap-4 items-stretch ${summaryPairGridClass(meetingCols)}">${chTable}${meetingsTable}</div>`;
 }
 
 export async function captureElementAsPngDataUrl(
@@ -1914,9 +1916,9 @@ export async function generateInteractiveHtml(
                     : linked
                         .map(
                           ({ asp, i }) =>
-                            `<p class="text-[13px] text-slate-700 leading-snug font-medium" style="overflow-wrap:anywhere">${
+                            `<p class="flex items-start gap-2 text-[13px] text-slate-700 leading-snug font-medium" style="overflow-wrap:anywhere"><span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#FF6B00] shrink-0" aria-hidden="true"></span><span>${
                               asp.title?.trim() || aspectShortLabel(asp, i)
-                            }</p>`
+                            }</span></p>`
                         )
                         .join('');
                 return `<div class="bg-white p-3 rounded-lg border border-[#002B49]/12 shadow-sm flex flex-col gap-2 min-w-0">
@@ -1926,11 +1928,24 @@ export async function generateInteractiveHtml(
               })
               .join('');
 
+            const colCount = Math.min(Math.max(comps.length, 1), 4);
+            const gridClass =
+              colCount === 1
+                ? 'grid grid-cols-1 gap-3'
+                : colCount === 2
+                  ? 'grid grid-cols-1 sm:grid-cols-2 gap-3'
+                  : colCount === 3
+                    ? 'grid grid-cols-1 sm:grid-cols-3 gap-3'
+                    : 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3';
+
             return `<div class="px-6 pt-5 pb-4 border-b border-slate-100 bg-gradient-to-br from-orange-50/30 to-blue-50/20">
-              <div class="flex items-center gap-2 border-b border-orange-200/60 pb-2 mb-3">
-                <h4 class="text-[15px] font-bold uppercase tracking-wider text-slate-800">Competências</h4>
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-orange-200/60 pb-2 mb-3">
+                <span class="inline-flex items-center gap-1.5">
+                  <svg class="w-4 h-4 text-[#FF6B00] shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16 20V4H8v16m8 0h2a2 2 0 002-2V6a2 2 0 00-2-2h-2m0 16H8m0 0H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/></svg>
+                  <span class="text-[15px] font-bold tracking-wide text-slate-800">Competências e Perfil do Egresso</span>
+                </span>
               </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">${cards}</div>
+              <div class="${gridClass}">${cards}</div>
             </div>`;
           })()}
 
@@ -1949,14 +1964,17 @@ export async function generateInteractiveHtml(
                       return acc + bd.syncMediated + (bd.sync || 0);
                     }, 0);
                     const mAsync = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
-                    return `<h4 class="text-[15px] font-bold uppercase tracking-wider text-slate-400 mb-3">Conhecimentos</h4>
+                    return `<h4 class="text-[15px] font-bold text-slate-500 mb-3 flex items-center gap-2">
+              <svg class="w-4 h-4 text-[#002B49] shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path stroke-linecap="round" stroke-linejoin="round" d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+              Conhecimentos do Módulo
+            </h4>
             <div class="overflow-x-auto mb-4">
               <table class="w-full text-left text-[17px] ${usePresentialSplit ? 'min-w-[820px]' : 'min-w-[700px]'} border border-slate-200 rounded-lg overflow-hidden">
                 <thead class="bg-slate-50 border-b border-slate-200 text-[15px] font-semibold text-slate-600">
                   ${
                     usePresentialSplit
                       ? `<tr>
-                    <th rowspan="2" class="px-3 py-2 align-bottom">Conhecimento</th>
+                    <th rowspan="2" class="px-3 py-2 align-bottom">Conhecimentos</th>
                     <th rowspan="2" class="px-2 py-2 text-center align-bottom">Tipo</th>
                     <th colspan="3" class="px-2 py-1 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
                     <th rowspan="2" class="px-2 py-2 text-center bg-blue-50/50 text-[#002B49] align-bottom" style="line-height:1.15">Síncrona<br/>Mediada</th>
@@ -1968,7 +1986,7 @@ export async function generateInteractiveHtml(
                     <th class="px-1.5 py-1 text-center bg-blue-50/40 text-[#002B49]">Clínica</th>
                   </tr>`
                       : `<tr>
-                    <th class="px-3 py-2.5">Conhecimento</th>
+                    <th class="px-3 py-2.5">Conhecimentos</th>
                     <th class="px-2 py-2.5 text-center">Tipo</th>
                     <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]">Presencial</th>
                     <th class="px-2.5 py-2.5 text-center bg-blue-50/50 text-[#002B49]" style="line-height:1.15">Síncrona<br/>Mediada</th>
@@ -2031,8 +2049,8 @@ export async function generateInteractiveHtml(
                 ? `<!-- Saberes -->
             <div id="mod-details-${mod.id}" class="cha-panel mt-4 p-4 rounded-lg bg-orange-50/60 border border-orange-200 space-y-3">
               <div class="flex items-center justify-between border-b border-orange-200/60 pb-2">
-                <span class="text-[15px] font-bold uppercase tracking-wider text-orange-900 flex items-center gap-1.5">
-                  <svg class="w-4 h-4 text-[#FF6B00]" fill="currentColor" viewBox="0 0 20 20"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"></path></svg>
+                <span class="text-[15px] font-bold tracking-wide text-orange-900 flex items-center gap-1.5">
+                  <svg class="w-4 h-4 text-[#FF6B00]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.937 15.5A2 2 0 008.5 14.063l-6.135-1.582a.5.5 0 01.037-.956l6.135-1.582a2 2 0 001.437-1.437L11.437 2.37a.5.5 0 01.956-.037l1.582 6.135a2 2 0 001.437 1.437l6.135 1.582a.5.5 0 01.037.956l-6.135 1.582a2 2 0 00-1.437 1.437l-1.582 6.135a.5.5 0 01-.956.037L9.937 15.5z"/></svg>
                   Saberes
                 </span>
                 <span class="text-[14px] text-orange-700 font-medium">Navegação Integrada</span>
@@ -2151,7 +2169,7 @@ export async function exportToInteractiveHTML(
 /**
  * Gera um HTML autônomo com o Mapa Curricular renderizado na tela
  * (inclui pan por arrastar, Tailwind via CDN e, em estruturas modulares,
- * o seletor Mapa Pedagógico / Mapa de Competências).
+ * o seletor Mapa da Trilha Formativa / Mapa de Competências).
  */
 export async function exportMapToHTML(
   elementId: string,
@@ -2212,7 +2230,7 @@ export async function exportMapToHTML(
           const key = panel.getAttribute('data-map-view') || '';
           const label =
             panel.getAttribute('data-map-title') ||
-            (key === 'competences' ? 'Mapa de Competências' : 'Mapa Pedagógico');
+            (key === 'competences' ? 'Mapa de Competências' : 'Mapa da Trilha Formativa');
           const active = key === initialMap;
           const activeClass =
             key === 'competences' ? 'is-active-orange' : 'is-active-blue';
@@ -2434,7 +2452,7 @@ export async function exportMapToHTML(
           }
         });
         if (titleEl) {
-          var label = mode === 'competences' ? 'Mapa de Competências' : 'Mapa Pedagógico';
+          var label = mode === 'competences' ? 'Mapa de Competências' : 'Mapa da Trilha Formativa';
           if (panels.length <= 1) label = 'Mapa Curricular';
           titleEl.textContent = label + ' — ' + courseName;
         }
@@ -2457,13 +2475,122 @@ export async function exportMapToHTML(
         setMapMode(initial);
       }
 
+      // Soft hide: preserva layout (sem display:none) para não saltar o pan
+      function softHide(el, hide) {
+        if (!el) return;
+        el.style.transition = 'opacity 0.3s ease, filter 0.3s ease, transform 0.3s ease';
+        if (hide) {
+          el.style.opacity = '0';
+          el.style.filter = 'blur(1px)';
+          el.style.transform = 'scale(0.985)';
+          el.style.pointerEvents = 'none';
+          el.setAttribute('aria-hidden', 'true');
+          el.classList.add('is-map-collapsed');
+        } else {
+          el.style.opacity = '';
+          el.style.filter = '';
+          el.style.transform = '';
+          el.style.pointerEvents = '';
+          el.setAttribute('aria-hidden', 'false');
+          el.classList.remove('is-map-collapsed');
+        }
+      }
+
+      // Legenda Trilha Formativa: oculta/mostra camadas
+      document.querySelectorAll('[data-map-legend="trilha"] [data-map-toggle]').forEach(function (btn) {
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var layer = btn.getAttribute('data-map-toggle');
+          if (!layer || layer === 'modulos') return;
+          var panel = btn.closest('[data-map-view]') || document;
+          var nodes = panel.querySelectorAll('[data-map-layer="' + layer + '"]');
+          if (!nodes.length) return;
+          var hide = !nodes[0].classList.contains('is-map-collapsed') && nodes[0].style.opacity !== '0';
+          nodes.forEach(function (n) { softHide(n, hide); });
+          btn.setAttribute('aria-pressed', hide ? 'false' : 'true');
+          btn.style.opacity = hide ? '0.4' : '1';
+        });
+      });
+
+      // Trilha: topo do módulo = conhecimentos; base = saberes
+      document.querySelectorAll(
+        '[data-map-toggle="trilha-module-conhecimentos"], [data-map-toggle="trilha-module-saberes"]'
+      ).forEach(function (btn) {
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var mid = btn.getAttribute('data-module-id');
+          var toggle = btn.getAttribute('data-map-toggle') || '';
+          var layer = toggle.indexOf('saberes') >= 0 ? 'saberes' : 'conhecimentos';
+          if (!mid) return;
+          var panel = btn.closest('[data-map-view]') || document;
+          var nodes = panel.querySelectorAll(
+            '[data-map-module="' + mid + '"][data-map-layer="' + layer + '"]'
+          );
+          if (!nodes.length) return;
+          var hide = !nodes[0].classList.contains('is-map-collapsed') && nodes[0].style.opacity !== '0';
+          nodes.forEach(function (n) { softHide(n, hide); });
+          btn.setAttribute('aria-pressed', hide ? 'false' : 'true');
+        });
+      });
+
+      // Compat: clique antigo no módulo inteiro (se ainda existir no DOM)
+      document.querySelectorAll('[data-map-toggle="trilha-module"]').forEach(function (btn) {
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var mid = btn.getAttribute('data-module-id');
+          if (!mid) return;
+          var panel = btn.closest('[data-map-view]') || document;
+          var nodes = panel.querySelectorAll('[data-map-module="' + mid + '"]');
+          if (!nodes.length) return;
+          var hide = !nodes[0].classList.contains('is-map-collapsed') && nodes[0].style.opacity !== '0';
+          nodes.forEach(function (n) { softHide(n, hide); });
+          btn.setAttribute('aria-expanded', hide ? 'false' : 'true');
+        });
+      });
+
+      // Mapa de Competências: módulo oculta tudo; competência oculta perfis
+      document.querySelectorAll('[data-map-toggle="module"]').forEach(function (btn) {
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var root = btn.closest('[data-map-branch]') || btn.parentElement;
+          if (!root) return;
+          var body = root.querySelector('[data-map-collapse="module-body"]');
+          if (!body) return;
+          var hide = !body.classList.contains('is-map-collapsed') && body.style.opacity !== '0';
+          softHide(body, hide);
+          btn.setAttribute('aria-expanded', hide ? 'false' : 'true');
+        });
+      });
+      document.querySelectorAll('[data-map-toggle="competence"]').forEach(function (btn) {
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var root = btn.closest('[data-map-branch]') || btn.parentElement;
+          if (!root) return;
+          var body = root.querySelector('[data-map-collapse="profiles"]');
+          if (!body) return;
+          var hide = !body.classList.contains('is-map-collapsed') && body.style.opacity !== '0';
+          softHide(body, hide);
+          btn.setAttribute('aria-expanded', hide ? 'false' : 'true');
+        });
+      });
+
       if (!vp) return;
       var dragging = false;
       var ox = 0, oy = 0, sl = 0, st = 0;
       vp.addEventListener('pointerdown', function (e) {
         if (e.button !== 0) return;
         var t = e.target;
-        if (t && t.closest && t.closest('button, a, input, label, select, textarea, [data-period-toggle]')) return;
+        if (t && t.closest && t.closest('button, a, input, label, select, textarea, [data-period-toggle], [data-map-toggle]')) return;
         if (e.pointerType === 'touch') return;
         dragging = true;
         vp.classList.add('dragging');

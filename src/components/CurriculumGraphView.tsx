@@ -36,8 +36,12 @@ import { exportToPNG, exportElementToPDF, exportMapToHTML } from '../services/ex
 import { WorkloadSummaryCard } from './WorkloadSummaryCard';
 import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
 import { StructureOfficialHeader } from './StructureOfficialHeader';
-import { CompetencesCurriculumMap } from './CompetencesCurriculumMap';
-import { showsModuleMeetings } from '../services/workloadSummary';
+import { CompetencesCurriculumMap, CompetencesMapLegend } from './CompetencesCurriculumMap';
+import {
+  showsModuleMeetings,
+  buildModuleMeetingsSummary,
+  summaryPairGridClass,
+} from '../services/workloadSummary';
 import { labelForCategory } from '../utils/nomenclature';
 import { formatModuleName } from '../utils/roman';
 
@@ -236,24 +240,87 @@ function ModuleNode({
   mod,
   nodeRef,
   hideMeetings,
+  collapsedConhecimentos,
+  collapsedSaberes,
+  onToggleConhecimentos,
+  onToggleSaberes,
 }: {
   mod: ModuleData;
-  nodeRef?: React.Ref<HTMLDivElement>;
+  nodeRef?: React.Ref<HTMLElement>;
   hideMeetings?: boolean;
+  collapsedConhecimentos?: boolean;
+  collapsedSaberes?: boolean;
+  onToggleConhecimentos?: () => void;
+  onToggleSaberes?: () => void;
 }) {
+  const anyCollapsed = !!collapsedConhecimentos || !!collapsedSaberes;
+
   return (
     <div
-      ref={nodeRef}
+      ref={nodeRef as React.Ref<HTMLDivElement>}
       data-module-anchor
-      className="relative z-10 w-[168px] rounded-xl bg-[#002B49] px-3 py-2.5 text-center shadow-md shadow-[#002B49]/25"
+      data-module-id={mod.id}
+      className={`relative z-10 w-[168px] rounded-xl bg-[#002B49] text-center shadow-md shadow-[#002B49]/25 transition-[filter,box-shadow] duration-200 ${
+        anyCollapsed ? 'ring-1 ring-[#FF6B00]/50' : ''
+      }`}
     >
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00]" />
-      <p className="text-[12px] font-bold text-white leading-snug">
-        {formatModuleName(mod.number, mod.title, mod.branch)}
-      </p>
-      <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
-        {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
-      </p>
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00] pointer-events-none z-30" />
+      {collapsedConhecimentos && (
+        <div
+          className="absolute inset-x-1 top-1 h-0.5 rounded-full bg-[#FF6B00]/80 pointer-events-none z-30"
+          aria-hidden
+        />
+      )}
+      {collapsedSaberes && (
+        <div
+          className="absolute inset-x-1 bottom-1 h-0.5 rounded-full bg-[#FF6B00]/80 pointer-events-none z-30"
+          aria-hidden
+        />
+      )}
+
+      <button
+        type="button"
+        data-map-toggle="trilha-module-conhecimentos"
+        data-module-id={mod.id}
+        data-no-pan
+        aria-pressed={!collapsedConhecimentos}
+        title={
+          collapsedConhecimentos
+            ? 'Mostrar conhecimentos deste módulo'
+            : 'Ocultar conhecimentos deste módulo'
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleConhecimentos?.();
+        }}
+        className="absolute inset-x-0 top-0 h-1/2 z-20 rounded-t-xl cursor-pointer hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#FF6B00]/60"
+      />
+      <button
+        type="button"
+        data-map-toggle="trilha-module-saberes"
+        data-module-id={mod.id}
+        data-no-pan
+        aria-pressed={!collapsedSaberes}
+        title={
+          collapsedSaberes
+            ? 'Mostrar saberes deste módulo'
+            : 'Ocultar saberes deste módulo'
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSaberes?.();
+        }}
+        className="absolute inset-x-0 bottom-0 h-1/2 z-20 rounded-b-xl cursor-pointer hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#FF6B00]/60"
+      />
+
+      <div className="relative z-10 pointer-events-none px-3 py-2.5">
+        <p className="text-[12px] font-bold text-white leading-snug">
+          {formatModuleName(mod.number, mod.title, mod.branch)}
+        </p>
+        <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
+          {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
+        </p>
+      </div>
     </div>
   );
 }
@@ -291,53 +358,82 @@ function ModuleChain({
   nomenclature?: AppSettings['pedagogicalNomenclature'];
   hideMeetings?: boolean;
 }) {
+  const [collapsedByModule, setCollapsedByModule] = useState<
+    Record<string, { conhecimentos?: boolean; saberes?: boolean }>
+  >({});
+
   if (modules.length === 0) return null;
 
   const colTemplate = modules
     .map((_, i) => (i < modules.length - 1 ? '188px auto' : '188px'))
     .join(' ');
 
+  const softLayer = (visible: boolean) =>
+    `transition-[opacity,filter,transform] duration-300 ease-out ${
+      visible
+        ? 'opacity-100'
+        : 'opacity-0 pointer-events-none blur-[1px] scale-[0.985]'
+    }`;
+
+  const toggleLayer = (id: string, layer: 'conhecimentos' | 'saberes') => {
+    setCollapsedByModule((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], [layer]: !prev[id]?.[layer] },
+    }));
+  };
+
   return (
     <div
       className="inline-grid items-stretch"
       style={{
         gridTemplateColumns: colTemplate,
-        gridTemplateRows: `${showConhecimentos ? 'auto' : '0fr'} auto ${showSaberes ? 'auto' : '0fr'}`,
+        gridTemplateRows: 'auto auto auto',
       }}
+      data-map-canvas="trilha"
     >
       {/* Linha 1 — conhecimentos */}
-      {showConhecimentos &&
-        modules.map((mod, idx) => {
-          const items = getModuleConhecimentos(mod);
-          return (
-            <React.Fragment key={`k-${mod.id}`}>
-              <div
-                className="flex flex-col items-center justify-end gap-2 px-1 pb-0 self-end"
-                style={{ gridColumn: idx * 2 + 1, gridRow: 1 }}
-              >
-                {items.length === 0 ? (
-                  <p className="text-[10px] text-slate-400 italic">Sem conhecimentos</p>
-                ) : (
-                  items.map((item) => (
-                    <div key={item.id}>
-                      <ItemNode
-                        kind="conhecimento"
-                        label="Conhecimento"
-                        name={item.name}
-                        hours={item.hours}
-                        category={item.category}
-                      />
-                    </div>
-                  ))
-                )}
-                <Stem direction="up" />
-              </div>
-              {idx < modules.length - 1 && (
-                <div style={{ gridColumn: idx * 2 + 2, gridRow: 1 }} />
+      {modules.map((mod, idx) => {
+        const items = getModuleConhecimentos(mod);
+        const visible =
+          showConhecimentos && !collapsedByModule[mod.id]?.conhecimentos;
+        return (
+          <React.Fragment key={`k-${mod.id}`}>
+            <div
+              className={`flex flex-col items-center justify-end gap-2 px-1 pb-0 self-end ${softLayer(visible)}`}
+              style={{ gridColumn: idx * 2 + 1, gridRow: 1 }}
+              data-map-layer="conhecimentos"
+              data-map-module={mod.id}
+              aria-hidden={!visible}
+            >
+              {items.length === 0 ? (
+                <p className="text-[10px] text-slate-400 italic">Sem conhecimentos</p>
+              ) : (
+                items.map((item) => (
+                  <div key={item.id}>
+                    <ItemNode
+                      kind="conhecimento"
+                      label="Conhecimento"
+                      name={item.name}
+                      hours={item.hours}
+                      category={item.category}
+                    />
+                  </div>
+                ))
               )}
-            </React.Fragment>
-          );
-        })}
+              <Stem direction="up" />
+            </div>
+            {idx < modules.length - 1 && (
+              <div
+                className={softLayer(visible)}
+                style={{ gridColumn: idx * 2 + 2, gridRow: 1 }}
+                data-map-layer="conhecimentos"
+                data-map-module={mod.id}
+                aria-hidden={!visible}
+              />
+            )}
+          </React.Fragment>
+        );
+      })}
 
       {/* Linha 2 — módulos alinhados + conectores */}
       {modules.map((mod, idx) => {
@@ -364,13 +460,23 @@ function ModuleChain({
             <div
               className="flex items-center justify-center px-1"
               style={{ gridColumn: idx * 2 + 1, gridRow: 2 }}
+              data-map-layer="modulos"
             >
-              <ModuleNode mod={mod} nodeRef={ref} hideMeetings={hideMeetings} />
+              <ModuleNode
+                mod={mod}
+                nodeRef={ref}
+                hideMeetings={hideMeetings}
+                collapsedConhecimentos={!!collapsedByModule[mod.id]?.conhecimentos}
+                collapsedSaberes={!!collapsedByModule[mod.id]?.saberes}
+                onToggleConhecimentos={() => toggleLayer(mod.id, 'conhecimentos')}
+                onToggleSaberes={() => toggleLayer(mod.id, 'saberes')}
+              />
             </div>
             {idx < modules.length - 1 && (
               <div
                 className="flex items-center justify-center"
                 style={{ gridColumn: idx * 2 + 2, gridRow: 2 }}
+                data-map-layer="modulos"
               >
                 <ModuleConnector />
               </div>
@@ -380,40 +486,50 @@ function ModuleChain({
       })}
 
       {/* Linha 3 — saberes */}
-      {showSaberes &&
-        modules.map((mod, idx) => {
-          const saberes = mod.competencies || [];
-          return (
-            <React.Fragment key={`s-${mod.id}`}>
-              <div
-                className="flex flex-col items-center justify-start gap-2 px-1 self-start"
-                style={{ gridColumn: idx * 2 + 1, gridRow: 3 }}
-              >
-                <Stem direction="down" />
-                {saberes.length === 0 ? (
-                  <p className="text-[10px] text-slate-400 italic">Sem saberes</p>
-                ) : (
-                  saberes.map((s: CompetencyCHA) => (
-                    <div key={s.id}>
-                      <ItemNode
-                        kind="saber"
-                        label={labelForCategory(s.category, nomenclature)}
-                        name={s.name}
-                        category={s.category}
-                      />
-                    </div>
-                  ))
-                )}
-              </div>
-              {idx < modules.length - 1 && (
-                <div style={{ gridColumn: idx * 2 + 2, gridRow: 3 }} />
+      {modules.map((mod, idx) => {
+        const saberes = mod.competencies || [];
+        const visible = showSaberes && !collapsedByModule[mod.id]?.saberes;
+        return (
+          <React.Fragment key={`s-${mod.id}`}>
+            <div
+              className={`flex flex-col items-center justify-start gap-2 px-1 self-start ${softLayer(visible)}`}
+              style={{ gridColumn: idx * 2 + 1, gridRow: 3 }}
+              data-map-layer="saberes"
+              data-map-module={mod.id}
+              aria-hidden={!visible}
+            >
+              <Stem direction="down" />
+              {saberes.length === 0 ? (
+                <p className="text-[10px] text-slate-400 italic">Sem saberes</p>
+              ) : (
+                saberes.map((s: CompetencyCHA) => (
+                  <div key={s.id}>
+                    <ItemNode
+                      kind="saber"
+                      label={labelForCategory(s.category, nomenclature)}
+                      name={s.name}
+                      category={s.category}
+                    />
+                  </div>
+                ))
               )}
-            </React.Fragment>
-          );
-        })}
+            </div>
+            {idx < modules.length - 1 && (
+              <div
+                className={softLayer(visible)}
+                style={{ gridColumn: idx * 2 + 2, gridRow: 3 }}
+                data-map-layer="saberes"
+                data-map-module={mod.id}
+                aria-hidden={!visible}
+              />
+            )}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
+
 
 function BranchLaneLabel({
   lane,
@@ -654,17 +770,107 @@ function elbowPath(
   return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
 }
 
+function TrilhaFormativaLegend({
+  showConhecimentos,
+  showSaberes,
+  onToggleConhecimentos,
+  onToggleSaberes,
+}: {
+  showConhecimentos: boolean;
+  showSaberes: boolean;
+  onToggleConhecimentos?: () => void;
+  onToggleSaberes?: () => void;
+}) {
+  const items: Array<{
+    key: 'modulos' | 'conhecimentos' | 'saberes';
+    color: string;
+    label: string;
+    active?: boolean;
+    onClick?: () => void;
+  }> = [
+    { key: 'modulos', color: 'bg-[#002B49]', label: 'Módulos' },
+    {
+      key: 'conhecimentos',
+      color: 'bg-slate-400',
+      label: 'Conhecimentos',
+      active: showConhecimentos,
+      onClick: onToggleConhecimentos,
+    },
+    {
+      key: 'saberes',
+      color: 'bg-[#FF6B00]',
+      label: 'Saberes',
+      active: showSaberes,
+      onClick: onToggleSaberes,
+    },
+  ];
+
+  return (
+    <div
+      className="absolute bottom-3 left-3 z-30 flex flex-row flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-[#002B49]/10 bg-white/95 backdrop-blur-sm px-2.5 py-1.5 shadow-sm pointer-events-auto max-w-[calc(100%-1.5rem)]"
+      data-map-legend="trilha"
+    >
+      {items.map((item) => {
+        const clickable = !!item.onClick;
+        const dimmed = clickable && item.active === false;
+        if (!clickable) {
+          return (
+            <div key={item.key} className="flex items-center gap-1.5">
+              <span className={`w-2.5 h-2.5 rounded-sm shrink-0 ${item.color}`} aria-hidden />
+              <span className="text-[10px] font-semibold text-slate-600 whitespace-nowrap">
+                {item.label}
+              </span>
+            </div>
+          );
+        }
+        return (
+          <button
+            key={item.key}
+            type="button"
+            data-map-toggle={item.key}
+            aria-pressed={item.active}
+            title={
+              item.active
+                ? `Ocultar ${item.label.toLowerCase()}`
+                : `Mostrar ${item.label.toLowerCase()}`
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              item.onClick?.();
+            }}
+            className={`flex items-center gap-1.5 text-left cursor-pointer rounded-md px-0.5 py-0.5 hover:bg-slate-50 transition ${
+              dimmed ? 'opacity-40' : ''
+            }`}
+          >
+            <span className={`w-2.5 h-2.5 rounded-sm shrink-0 ${item.color}`} aria-hidden />
+            <span className="text-[10px] font-semibold text-slate-600 whitespace-nowrap">
+              {item.label}
+            </span>
+          </button>
+        );
+      })}
+      <span className="text-[9px] text-slate-400 leading-snug whitespace-nowrap border-l border-slate-200 pl-3">
+        Topo do módulo: conhecimentos · Base: saberes
+      </span>
+    </div>
+  );
+}
+
 /** Mapa contínuo com bifurcação Y até os módulos e alinhamento horizontal dos nós. */
 function ModularCurriculumMap({
   modules,
   showConhecimentos,
   showSaberes,
+  onToggleConhecimentos,
+  onToggleSaberes,
   nomenclature = 'cha',
   hideMeetings = false,
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
   showSaberes: boolean;
+  onToggleConhecimentos?: () => void;
+  onToggleSaberes?: () => void;
   nomenclature?: AppSettings['pedagogicalNomenclature'];
   hideMeetings?: boolean;
 }) {
@@ -746,19 +952,14 @@ function ModularCurriculumMap({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#FF6B00]" />
-          <h3 className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#002B49]">
-            {hasFork ? 'Trilha Formativa com Ramificação' : 'Trilha Formativa'}
-          </h3>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <span className="no-export inline-flex items-center gap-1.5 text-[10px] text-slate-400">
           <Hand className="w-3.5 h-3.5" />
           Segure e arraste para navegar
         </span>
       </div>
 
+      <div className="relative">
       <PanViewport className="max-h-[min(75vh,820px)] rounded-2xl border border-[#002B49]/8 bg-white/40 p-4">
         <div ref={canvasRef} className="relative inline-block min-w-full pr-4 pb-4">
           {/* SVG das setas da bifurcação — do módulo 8 até 9A/9B */}
@@ -889,6 +1090,13 @@ function ModularCurriculumMap({
           )}
         </div>
       </PanViewport>
+        <TrilhaFormativaLegend
+          showConhecimentos={showConhecimentos}
+          showSaberes={showSaberes}
+          onToggleConhecimentos={onToggleConhecimentos}
+          onToggleSaberes={onToggleSaberes}
+        />
+      </div>
     </div>
   );
 }
@@ -923,7 +1131,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
   const mapExportBase =
     mapMode === 'competences'
       ? `${structure.code}_Mapa_Competencias`
-      : `${structure.code}_Mapa_Curricular`;
+      : `${structure.code}_Mapa_Trilha_Formativa`;
 
   const handleExportPNG = async () => {
     setIsExporting(true);
@@ -988,7 +1196,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
           <div>
             <div className="flex items-center gap-2.5 flex-wrap">
               <h2 className="text-xl font-black text-[#002B49] tracking-tight">
-                {mapMode === 'competences' ? 'Mapa de Competências' : 'Mapa Curricular'}
+                {mapMode === 'competences'
+                  ? 'Mapa de Competências'
+                  : isModular
+                    ? 'Mapa da Trilha Formativa'
+                    : 'Mapa Curricular'}
               </h2>
               <span className="text-xs font-semibold text-slate-500">
                 Código: <strong className="text-[#002B49] font-mono">{structure.code}</strong>
@@ -1021,7 +1233,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
               title={
                 mapMode === 'competences'
                   ? 'Baixar PDF do Mapa de Competências (mapa atual)'
-                  : 'Baixar PDF do Mapa Pedagógico (mapa atual)'
+                  : 'Baixar PDF do Mapa da Trilha Formativa (mapa atual)'
               }
               className="px-3.5 py-2 rounded-xl bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50"
             >
@@ -1034,7 +1246,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
               title={
                 mapMode === 'competences'
                   ? 'Baixar PNG do Mapa de Competências (mapa atual)'
-                  : 'Baixar PNG do Mapa Pedagógico (mapa atual)'
+                  : 'Baixar PNG do Mapa da Trilha Formativa (mapa atual)'
               }
               className="px-3.5 py-2 rounded-xl bg-white hover:bg-orange-50 text-[#FF6B00] text-xs font-bold transition flex items-center gap-1.5 border border-[#FF6B00]/30 disabled:opacity-50"
             >
@@ -1074,7 +1286,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
                     : 'text-slate-600 hover:bg-white'
                 }`}
               >
-                Mapa Pedagógico
+                Mapa da Trilha Formativa
               </button>
               <button
                 type="button"
@@ -1177,13 +1389,15 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
               <>
                 <div
                   data-map-view="pedagogical"
-                  data-map-title="Mapa Pedagógico"
+                  data-map-title="Mapa da Trilha Formativa"
                   style={{ display: mapMode === 'pedagogical' ? 'block' : 'none' }}
                 >
                   <ModularCurriculumMap
                     modules={modules}
                     showConhecimentos={showConhecimentosOnMap}
                     showSaberes={showSaberesOnMap}
+                    onToggleConhecimentos={() => setShowConhecimentosOnMap((v) => !v)}
+                    onToggleSaberes={() => setShowSaberesOnMap((v) => !v)}
                     nomenclature={settings.pedagogicalNomenclature}
                     hideMeetings={!!structure.hideMeetings}
                   />
@@ -1191,11 +1405,13 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
                 <div
                   data-map-view="competences"
                   data-map-title="Mapa de Competências"
+                  className="relative"
                   style={{ display: mapMode === 'competences' ? 'block' : 'none' }}
                 >
                   <PanViewport className="max-h-[min(75vh,820px)] rounded-2xl border border-[#002B49]/8 bg-white/40 p-4">
                     <CompetencesCurriculumMap structure={structure} />
                   </PanViewport>
+                  <CompetencesMapLegend />
                 </div>
               </>
             )
@@ -1211,7 +1427,9 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
             <div
               className={`mt-4 grid gap-4 items-stretch ${
                 showsModuleMeetings(structure)
-                  ? 'grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,0.9fr)]'
+                  ? summaryPairGridClass(
+                      buildModuleMeetingsSummary(structure)?.rows.length ?? 0
+                    )
                   : 'grid-cols-1'
               }`}
             >

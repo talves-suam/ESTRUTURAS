@@ -8,7 +8,7 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '../firebase/config';
-import { CurriculumStructure, Course, AppSettings, getDisciplineChBreakdown, withStructurePresentialFlags } from '../types/curriculum';
+import { CurriculumStructure, Course, AppSettings, ReportNoteBlock, getDisciplineChBreakdown, withStructurePresentialFlags } from '../types/curriculum';
 import { initialSettings } from '../data/initialData';
 import { normalizeReportNotesTitle } from './reportNotes';
 import { getModularComponents, syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
@@ -45,7 +45,67 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     reportNotesTitle: normalizeReportNotesTitle(settings.reportNotesTitle),
+    reportNotesDisciplinar: Array.isArray(settings.reportNotesDisciplinar)
+      ? settings.reportNotesDisciplinar
+      : [],
+    reportNotesModular: Array.isArray(settings.reportNotesModular)
+      ? settings.reportNotesModular
+      : [],
   };
+}
+
+/** Conteúdo “útil” das observações (ignora blocos vazios). */
+function notesContentScore(blocks?: ReportNoteBlock[]): number {
+  if (!Array.isArray(blocks) || blocks.length === 0) return 0;
+  return blocks.reduce((acc, b) => {
+    const t = `${b?.title || ''} ${b?.text || ''}`.trim();
+    return acc + (t ? t.length + 1 : 0);
+  }, 0);
+}
+
+/**
+ * Une settings remoto + local.
+ * Observações: nunca deixa um lado vazio apagar o outro com conteúdo.
+ */
+function mergeAppSettings(
+  remote: AppSettings | null | undefined,
+  local: AppSettings | null | undefined
+): AppSettings {
+  const r = remote ? normalizeAppSettings(remote) : null;
+  const l = local ? normalizeAppSettings(local) : null;
+  if (!r && !l) return normalizeAppSettings(initialSettings);
+  if (!r) return l!;
+  if (!l) return r;
+
+  const pickNotes = (
+    remoteBlocks?: ReportNoteBlock[],
+    localBlocks?: ReportNoteBlock[]
+  ): ReportNoteBlock[] => {
+    const rScore = notesContentScore(remoteBlocks);
+    const lScore = notesContentScore(localBlocks);
+    if (lScore > 0 && rScore === 0) return localBlocks || [];
+    if (rScore > 0 && lScore === 0) return remoteBlocks || [];
+    if (lScore >= rScore) return localBlocks || remoteBlocks || [];
+    return remoteBlocks || localBlocks || [];
+  };
+
+  const remoteTitle = normalizeReportNotesTitle(r.reportNotesTitle);
+  const localTitle = normalizeReportNotesTitle(l.reportNotesTitle);
+  const defaultTitle = normalizeReportNotesTitle(undefined);
+  const title =
+    localTitle !== defaultTitle
+      ? localTitle
+      : remoteTitle !== defaultTitle
+        ? remoteTitle
+        : localTitle;
+
+  return normalizeAppSettings({
+    ...r,
+    ...l,
+    reportNotesTitle: title,
+    reportNotesDisciplinar: pickNotes(r.reportNotesDisciplinar, l.reportNotesDisciplinar),
+    reportNotesModular: pickNotes(r.reportNotesModular, l.reportNotesModular),
+  });
 }
 
 function readLocalList<T>(key: string): T[] {
@@ -149,7 +209,7 @@ export async function pushLocalCacheToServer(): Promise<void> {
   await upsertFirestoreDocs(COURSES_COLLECTION, courses);
   const settings = getCachedSettings();
   if (settings) {
-    await setDoc(doc(db!, 'settings', SETTINGS_DOC), toFirestorePayload(settings));
+    await setDoc(doc(db!, 'settings', SETTINGS_DOC), toFirestorePayload(settings), { merge: true });
   }
 }
 
@@ -175,20 +235,28 @@ export function subscribeCurriculumData(handlers: {
         const data = d.data() as CurriculumStructure;
         items.push({ ...data, id: data.id || d.id });
       });
-      if (items.length === 0 && !offeredLocalStructures) {
-        offeredLocalStructures = true;
-        const local = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
-        if (local.length > 0) {
+      const local = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
+
+      // Remoto vazio + local com dados → sobe o local (uma vez) e não apaga o cache
+      if (items.length === 0 && local.length > 0) {
+        if (!offeredLocalStructures) {
+          offeredLocalStructures = true;
           void upsertFirestoreDocs(STRUCTURES_COLLECTION, local).catch((err) =>
             handlers.onError?.(new Error(firestoreErrorMessage(err)))
           );
-          handlers.onStructures(local.map((s) => calculateStructureTotals(s)));
-          return;
         }
+        const withTotals = local.map((s) => calculateStructureTotals(s));
+        handlers.onStructures(withTotals);
+        return;
       }
-      const withTotals = items.map((s) => calculateStructureTotals(s));
+
+      const merged = mergeById(items, local);
+      const withTotals = merged.map((s) => calculateStructureTotals(s));
       cacheList(LOCAL_STORAGE_STRUCTURES_KEY, withTotals);
       handlers.onStructures(withTotals);
+      void syncMissingOrNewerToFirestore(STRUCTURES_COLLECTION, items, merged).catch((err) =>
+        handlers.onError?.(new Error(firestoreErrorMessage(err)))
+      );
     },
     (err) => handlers.onError?.(new Error(firestoreErrorMessage(err)))
   );
@@ -201,19 +269,26 @@ export function subscribeCurriculumData(handlers: {
         const data = d.data() as Course;
         items.push({ ...data, id: data.id || d.id });
       });
-      if (items.length === 0 && !offeredLocalCourses) {
-        offeredLocalCourses = true;
-        const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
-        if (local.length > 0) {
+      const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+
+      // Remoto vazio + local com dados → sobe o local; NUNCA sobrescreve o cache com []
+      if (items.length === 0 && local.length > 0) {
+        if (!offeredLocalCourses) {
+          offeredLocalCourses = true;
           void upsertFirestoreDocs(COURSES_COLLECTION, local).catch((err) =>
             handlers.onError?.(new Error(firestoreErrorMessage(err)))
           );
-          handlers.onCourses(local);
-          return;
         }
+        handlers.onCourses(local);
+        return;
       }
-      cacheList(LOCAL_STORAGE_COURSES_KEY, items);
-      handlers.onCourses(items);
+
+      const merged = mergeById(items, local);
+      cacheList(LOCAL_STORAGE_COURSES_KEY, merged);
+      handlers.onCourses(merged);
+      void syncMissingOrNewerToFirestore(COURSES_COLLECTION, items, merged).catch((err) =>
+        handlers.onError?.(new Error(firestoreErrorMessage(err)))
+      );
     },
     (err) => handlers.onError?.(new Error(firestoreErrorMessage(err)))
   );
@@ -568,44 +643,71 @@ export async function bulkUpdateCourseHours(
 }
 
 export async function getAppSettings(): Promise<AppSettings> {
+  const local = getCachedSettings();
+
   if (canUseFirestore()) {
     try {
       const docRef = doc(db!, 'settings', SETTINGS_DOC);
       const snap = await getDoc(docRef);
       if (snap.exists()) {
-        const data = normalizeAppSettings(snap.data() as AppSettings);
-        localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(data));
-        return data;
+        const remote = normalizeAppSettings(snap.data() as AppSettings);
+        const merged = mergeAppSettings(remote, local);
+        localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(merged));
+
+        // Se o local tinha observações e o remoto estava vazio, sobe de volta
+        const needPushNotes =
+          (notesContentScore(local?.reportNotesDisciplinar) > 0 &&
+            notesContentScore(remote.reportNotesDisciplinar) === 0) ||
+          (notesContentScore(local?.reportNotesModular) > 0 &&
+            notesContentScore(remote.reportNotesModular) === 0);
+        if (needPushNotes) {
+          void setDoc(docRef, toFirestorePayload(merged), { merge: true }).catch((err) =>
+            console.warn('Falha ao reenviar observações locais ao servidor', err)
+          );
+        }
+        return merged;
+      }
+
+      // Remoto sem documento: sobe o cache local se houver
+      if (local) {
+        void setDoc(docRef, toFirestorePayload(local), { merge: true }).catch((err) =>
+          console.warn('Falha ao criar settings no servidor a partir do cache', err)
+        );
+        return local;
       }
     } catch (err) {
       console.warn('Could not read settings from Firestore', err);
     }
   }
 
-  const cached = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
-  if (cached) {
-    try {
-      return normalizeAppSettings(JSON.parse(cached) as AppSettings);
-    } catch {
-      // ignore
-    }
-  }
-
-  return initialSettings;
+  if (local) return local;
+  return normalizeAppSettings(initialSettings);
 }
 
 export async function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
-  const normalized = normalizeAppSettings(settings);
-  localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(normalized));
+  const incoming = normalizeAppSettings(settings);
+  let toSave = incoming;
+
   if (canUseFirestore()) {
     try {
-        await setDoc(doc(db!, 'settings', SETTINGS_DOC), toFirestorePayload(normalized));
+      const docRef = doc(db!, 'settings', SETTINGS_DOC);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const remote = normalizeAppSettings(snap.data() as AppSettings);
+        // Protege observações: save parcial/vazio não apaga o que já está no servidor
+        toSave = mergeAppSettings(remote, incoming);
+      }
+      localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(toSave));
+      await setDoc(docRef, toFirestorePayload(toSave), { merge: true });
     } catch (err) {
       console.error('Error saving settings to Firestore', err);
+      localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(incoming));
       throw new Error(firestoreErrorMessage(err));
     }
+  } else {
+    localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(toSave));
   }
-  return normalized;
+  return toSave;
 }
 
 // Aliases for seamless imports
@@ -614,7 +716,43 @@ export const saveStructureToFirestore = saveCurriculumStructure;
 export const deleteStructureFromFirestore = deleteCurriculumStructure;
 export const getCoursesFromFirestore = getCoursesList;
 export const saveCourseToFirestore = saveCourseItem;
-export const saveAllCoursesToFirestore = async (courses: Course[]): Promise<void> => {
+
+export type SaveAllCoursesOptions = {
+  /** Permite lista vazia (apaga todos os cursos no servidor). Padrão: false. */
+  allowEmptyWipe?: boolean;
+};
+
+export const saveAllCoursesToFirestore = async (
+  courses: Course[],
+  options: SaveAllCoursesOptions = {}
+): Promise<void> => {
+  const { allowEmptyWipe = false } = options;
+
+  if (courses.length === 0 && !allowEmptyWipe) {
+    // Evita o bug clássico: modal abriu antes do load e “Salvar” mandava [] ao servidor
+    if (canUseFirestore()) {
+      try {
+        const existing = await getDocs(collection(db!, COURSES_COLLECTION));
+        if (!existing.empty) {
+          throw new Error(
+            'Lista de cursos vazia — nada foi enviado ao servidor para não apagar os cadastros. Se quiser apagar todos, use “Apagar todos” e confirme ao salvar.'
+          );
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('Lista de cursos vazia')) throw err;
+        console.warn('Não foi possível verificar cursos remotos antes do save vazio', err);
+      }
+    }
+    const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
+    if (local.length > 0) {
+      throw new Error(
+        'Lista de cursos vazia — nada foi enviado para não apagar os cadastros locais/remotos.'
+      );
+    }
+    localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify([]));
+    return;
+  }
+
   localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(courses));
   if (canUseFirestore()) {
     try {
@@ -626,10 +764,11 @@ export const saveAllCoursesToFirestore = async (courses: Course[]): Promise<void
         }
       }
       for (const c of courses) {
-        await setDoc(doc(db!, COURSES_COLLECTION, c.id), c);
+        await setDoc(doc(db!, COURSES_COLLECTION, c.id), toFirestorePayload(c), { merge: true });
       }
     } catch (e) {
       console.warn('Error saving all courses to firestore', e);
+      throw new Error(firestoreErrorMessage(e));
     }
   }
 };

@@ -5,7 +5,7 @@ import {
   buildModuleMeetingsSummary,
   formatWorkloadHours,
   formatWorkloadPercent,
-  summaryTableDensity,
+  workloadSummaryDensity,
 } from '../services/workloadSummary';
 
 interface WorkloadSummaryCardProps {
@@ -22,13 +22,14 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
   const totalRow = rows.find((row) => row.id === 'total');
   const meetings = buildModuleMeetingsSummary(structure);
 
-  const density = useMemo(() => {
-    const cols = Math.max(
-      componentRows.length,
-      meetings?.rows.length ?? 0
-    );
-    return summaryTableDensity(cols);
-  }, [componentRows.length, meetings?.rows.length]);
+  const density = useMemo(
+    () =>
+      workloadSummaryDensity(
+        componentRows.length,
+        meetings?.rows.length ?? 0
+      ),
+    [componentRows.length, meetings?.rows.length]
+  );
 
   return (
     <section
@@ -48,21 +49,22 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
         </p>
       </div>
 
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 overflow-x-auto">
         <table
-          className={`w-full table-fixed ${density.tableText} border-collapse`}
+          className={`w-full min-w-[36rem] table-fixed ${density.tableText} border-collapse`}
         >
           <thead>
             <tr className="bg-[#002B49]/5 border-b border-[#002B49]/10">
               <th
-                className={`${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] ${density.labelCol}`}
+                className={`${density.cellPad} text-left ${density.headerText} font-bold uppercase tracking-wide text-[#002B49] ${density.labelCol}`}
               >
                 Componentes
               </th>
               {componentRows.map((row) => (
                 <th
                   key={row.id}
-                  className={`${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wider text-[#002B49] leading-tight`}
+                  title={row.label}
+                  className={`${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wide text-[#002B49] leading-tight`}
                 >
                   {row.shortLabel || row.label}
                 </th>
@@ -104,18 +106,18 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
             </tr>
           </tbody>
         </table>
-
-        {totalRow && (
-          <div className="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49]">
-            <span className="uppercase tracking-wider text-[10px]">Total</span>
-            <span
-              className={`absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}`}
-            >
-              {formatWorkloadHours(totalRow.hours)} horas
-            </span>
-          </div>
-        )}
       </div>
+
+      {totalRow && (
+        <div className="mt-auto relative bg-[#FF6B00]/8 border-t border-[#002B49]/10 px-2 py-1.5 font-bold text-[#002B49] shrink-0">
+          <span className="uppercase tracking-wider text-[10px]">Total</span>
+          <span
+            className={`absolute inset-0 flex items-center justify-center tabular-nums whitespace-nowrap pointer-events-none ${density.footerText}`}
+          >
+            {formatWorkloadHours(totalRow.hours)} horas
+          </span>
+        </div>
+      )}
     </section>
   );
 };

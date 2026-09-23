@@ -27,8 +27,12 @@ import type { RequirementLevel } from '../types/curriculum';
 import {
   extractTextFromPdf,
   extractTextFromSpreadsheet,
+  extractSpreadsheetMatrix,
+  looksLikeEstruturaCurricularSheet,
+  parseEstruturaCurricularSheet,
   parseSagaReportText,
 } from '../services/sagaImportService';
+import type { SagaParseResult } from '../services/sagaImportService';
 import {
   Save, 
   Plus, 
@@ -48,6 +52,9 @@ import {
   ArrowUp,
   ArrowDown,
   GripVertical,
+  Copy,
+  Sparkles,
+  Briefcase,
 } from 'lucide-react';
 import { calculateStructureTotals } from '../services/curriculumService';
 import { DcnViewerModal } from './DcnViewerModal';
@@ -386,6 +393,9 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [newCourseAuthorizationAct, setNewCourseAuthorizationAct] = useState('');
   const [listDrag, setListDrag] = useState<ListDrag | null>(null);
   const [listDragOver, setListDragOver] = useState<ListDragOver | null>(null);
+  const [showBlockersModal, setShowBlockersModal] = useState<boolean>(false);
+  const [moduleAddFlash, setModuleAddFlash] = useState<string | null>(null);
+  const [justAddedModuleId, setJustAddedModuleId] = useState<string | null>(null);
 
   // Update linked fields when course is explicitly selected
   const clearCourseLinkedFields = () => {
@@ -494,7 +504,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     if (!isPdf && !isSheet) {
       setSeedImportMsg({
         type: 'err',
-        text: 'Use planilha (.xlsx, .xls, .csv) ou PDF no formato do relatório SAGA.',
+        text: 'Use planilha (.xlsx, .xls, .csv) de estrutura curricular ou PDF/planilha no formato SAGA.',
       });
       return;
     }
@@ -503,23 +513,35 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setSeedImportMsg(null);
 
     try {
-      let text = '';
-      if (isPdf) {
-        text = await extractTextFromPdf(await file.arrayBuffer());
-      } else if (/\.(xlsx|xls)$/.test(name)) {
-        text = await extractTextFromSpreadsheet(await file.arrayBuffer());
-      } else {
-        text = await file.text();
-      }
-
-      const result = parseSagaReportText(text, {
+      let result: SagaParseResult;
+      const baseParams = {
         courseName: '',
         courseId: '',
-        modality: 'Presencial',
+        modality: 'Presencial' as const,
         code: '',
         activeYearSemester: '',
-        structureType: 'disciplinar',
-      });
+        structureType: 'disciplinar' as const,
+      };
+
+      if (/\.(xlsx|xls)$/.test(name)) {
+        const buffer = await file.arrayBuffer();
+        const matrix = extractSpreadsheetMatrix(buffer);
+        if (looksLikeEstruturaCurricularSheet(matrix)) {
+          result = parseEstruturaCurricularSheet(matrix, {
+            ...baseParams,
+            structureType: 'modular',
+          });
+        } else {
+          const text = await extractTextFromSpreadsheet(buffer);
+          result = parseSagaReportText(text, baseParams);
+        }
+      } else if (isPdf) {
+        const text = await extractTextFromPdf(await file.arrayBuffer());
+        result = parseSagaReportText(text, baseParams);
+      } else {
+        const text = await file.text();
+        result = parseSagaReportText(text, baseParams);
+      }
 
       const parsed = result.structure;
       const hints = result.hints;
@@ -529,6 +551,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       setStatus('Em Elaboração');
       setPeriods(parsed.periods || []);
       setModules(parsed.modules || []);
+      if (parsed.hasLaboratory) setHasLaboratory(true);
 
       if (hints.structureCode) setCode(hints.structureCode);
       else if (parsed.code) setCode(parsed.code);
@@ -555,6 +578,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           // Carrega cadastro; mantém modalidade detectada no arquivo quando houver
           applyCourseData(matchedCourse, { skipModality: Boolean(hints.modality) });
           if (hints.modality) setModality(hints.modality);
+          if (parsed.hasLaboratory) setHasLaboratory(true);
           matchNote = ` Curso vinculado ao cadastro: “${courseBaseName(matchedCourse.name)}” (${matchedCourse.modality}).`;
         } else {
           setSelectedCourseId('');
@@ -570,7 +594,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
       const discCount =
         (parsed.periods || []).reduce((n, p) => n + (p.disciplines?.length || 0), 0) +
-        (parsed.modules || []).reduce((n, m) => n + (m.disciplines?.length || 0), 0);
+        (parsed.modules || []).reduce(
+          (n, m) => n + (m.knowledges?.length || m.disciplines?.length || 0),
+          0
+        );
       const unitLabel =
         parsed.structureType === 'modular'
           ? `${(parsed.modules || []).length} módulo(s)`
@@ -589,7 +616,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       setSeedImportMsg({
         type: 'err',
         text: isPdf
-          ? 'Não foi possível ler o PDF. Se for imagem digitalizada, preencha a estrutura manualmente ou use Importar SAGA.'
+          ? 'Não foi possível ler o PDF. Se for imagem digitalizada, use a planilha de estrutura curricular ou preencha manualmente.'
           : 'Não foi possível ler a planilha. Verifique o arquivo ou preencha manualmente.',
       });
     } finally {
@@ -879,13 +906,140 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       ],
     };
     setModules([...modules, newMod]);
+    setJustAddedModuleId(newMod.id);
+    setModuleAddFlash(
+      branch
+        ? `${formatModuleName(nextNum, newMod.title, branch)} adicionado`
+        : `${formatModuleName(nextNum, newMod.title)} adicionado ao tronco comum`
+    );
+    window.setTimeout(() => {
+      document
+        .getElementById(`module-editor-${newMod.id}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 80);
+    window.setTimeout(() => setModuleAddFlash(null), 2400);
+    window.setTimeout(() => setJustAddedModuleId(null), 1600);
   };
 
   const removeModule = (mId: string) => {
     setModules(modules.filter((m) => m.id !== mId));
   };
 
-  const [showBlockersModal, setShowBlockersModal] = useState<boolean>(false);
+  /** Duplica o módulo como o próximo da mesma trilha (conteúdo clonado, IDs novos). */
+  const duplicateModule = (sourceId: string) => {
+    const sourceIdx = modules.findIndex((m) => m.id === sourceId);
+    if (sourceIdx < 0) return;
+    const source = modules[sourceIdx];
+    const branch = source.branch;
+    const sameBranch = modules
+      .filter((m) => (branch ? m.branch === branch : !m.branch))
+      .sort((a, b) => a.number - b.number);
+    const nextNum =
+      Math.max(source.number, ...sameBranch.map((m) => m.number)) + 1;
+    const stamp = Date.now();
+    const uid = () => Math.random().toString(36).slice(2, 7);
+
+    const clonedKnowledges = (source.knowledges || []).map((k, i) => ({
+      ...k,
+      id: `know-${stamp}-${i}-${uid()}`,
+    }));
+
+    let newMod: ModuleData = {
+      ...source,
+      id: `m-${nextNum}-${stamp}`,
+      number: nextNum,
+      code: `MOD-${String(nextNum).padStart(2, '0')}${branch || ''}`,
+      branch: branch || undefined,
+      branchName: source.branchName,
+      parentModuleId: source.id,
+      title: source.title,
+      hours: source.hours,
+      meetings: source.meetings ?? 0,
+      summary: source.summary,
+      flags: source.flags ? { ...source.flags } : undefined,
+      competence: undefined,
+      competences: normalizeModuleCompetences(source, { keepEmpty: true }).map((c) =>
+        createModuleCompetenceItem({
+          text: c.text,
+          aspectIds: [...(c.aspectIds || [])],
+        })
+      ),
+      competencies: (source.competencies || []).map((c, i) => ({
+        ...c,
+        id: `c-${i + 1}-${stamp}-${uid()}`,
+      })),
+      knowledges: clonedKnowledges,
+      disciplines: [],
+    };
+    newMod = syncModuleKnowledgesToDisciplines(newMod);
+
+    const updated = [...modules];
+    updated.splice(sourceIdx + 1, 0, newMod);
+    setModules(updated);
+    setJustAddedModuleId(newMod.id);
+    setModuleAddFlash(
+      `${formatModuleName(nextNum, newMod.title, branch)} duplicado a partir de ${formatModuleName(
+        source.number,
+        source.title,
+        source.branch
+      )}`
+    );
+    window.setTimeout(() => {
+      document
+        .getElementById(`module-editor-${newMod.id}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 80);
+    window.setTimeout(() => setModuleAddFlash(null), 2800);
+    window.setTimeout(() => setJustAddedModuleId(null), 1600);
+  };
+
+  const moduleAddButtonClass =
+    'px-3.5 py-1.5 rounded-lg text-white text-xs font-bold flex items-center gap-1 shadow-sm transition-all duration-150 active:scale-95 active:brightness-90 hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6B00]/50';
+
+  const renderModuleAddButtons = (placement: 'top' | 'bottom') => (
+    <div
+      className={`flex flex-wrap items-center gap-2 ${
+        placement === 'bottom'
+          ? 'justify-center w-full pt-2 border-t border-dashed border-slate-200'
+          : ''
+      }`}
+    >
+      {placement === 'top' && (
+        <button
+          type="button"
+          onClick={handleClearAndStartFresh}
+          className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold flex items-center gap-1 hover:bg-slate-50 active:scale-95 transition-all duration-150"
+        >
+          <Eraser className="w-3.5 h-3.5" />
+          Limpar e começar do zero
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => addModule()}
+        className={`${moduleAddButtonClass} bg-[#002B49]`}
+      >
+        <Plus className="w-3.5 h-3.5" />
+        + Módulo Tronco Comum
+      </button>
+      <button
+        type="button"
+        onClick={() => addModule('A')}
+        className={`${moduleAddButtonClass} bg-emerald-700`}
+      >
+        <GitBranch className="w-3.5 h-3.5" />
+        + Trilha A
+      </button>
+      <button
+        type="button"
+        onClick={() => addModule('B')}
+        className={`${moduleAddButtonClass} bg-purple-700`}
+      >
+        <GitBranch className="w-3.5 h-3.5" />
+        + Trilha B
+      </button>
+    </div>
+  );
 
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1032,7 +1186,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                         : 'Importar Excel ou PDF para iniciar (opcional)'}
                     </span>
                     <span className="block text-[10px] text-slate-500 mt-0.5 leading-snug">
-                      Mesmo formato do Importar SAGA. Pré-preenche a matriz; o restante você completa aqui.
+                      Aceita planilha de estrutura curricular (módulos + CH) ou relatório SAGA.
                     </span>
                   </span>
                 </button>
@@ -1563,7 +1717,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 className="text-sm font-bold uppercase tracking-wider text-[#002B49]">
+              <h3 className="text-sm font-bold tracking-wide text-[#002B49]">
                 Perfil do Egresso
               </h3>
               <p className="text-xs text-slate-500 mt-1 max-w-3xl">
@@ -1918,40 +2072,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleClearAndStartFresh}
-                  className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold flex items-center gap-1 hover:bg-slate-50"
-                >
-                  <Eraser className="w-3.5 h-3.5" />
-                  Limpar e começar do zero
-                </button>
-                <button
-                  type="button"
-                  onClick={() => addModule()}
-                  className="px-3.5 py-1.5 rounded-lg bg-[#002B49] text-white text-xs font-bold flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  + Módulo Tronco Comum
-                </button>
-                <button
-                  type="button"
-                  onClick={() => addModule('A')}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-bold flex items-center gap-1"
-                >
-                  <GitBranch className="w-3.5 h-3.5" />
-                  + Trilha A
-                </button>
-                <button
-                  type="button"
-                  onClick={() => addModule('B')}
-                  className="px-3 py-1.5 rounded-lg bg-purple-700 text-white text-xs font-bold flex items-center gap-1"
-                >
-                  <GitBranch className="w-3.5 h-3.5" />
-                  + Trilha B
-                </button>
-              </div>
+              <div>{renderModuleAddButtons('top')}</div>
             </div>
 
             {modules.length === 0 && (
@@ -1960,12 +2081,26 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               </div>
             )}
 
+            {moduleAddFlash && (
+              <div
+                role="status"
+                className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 text-center animate-pulse"
+              >
+                {moduleAddFlash}
+              </div>
+            )}
+
             <div className="space-y-6">
               {modules.map((mod, mIdx) => (
                 <div 
-                  key={mod.id} 
-                  className={`border rounded-xl overflow-hidden bg-slate-50/50 ${
-                    mod.branch ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200'
+                  key={mod.id}
+                  id={`module-editor-${mod.id}`}
+                  className={`border rounded-xl overflow-hidden bg-slate-50/50 transition-shadow duration-500 ${
+                    justAddedModuleId === mod.id
+                      ? 'border-[#FF6B00] ring-2 ring-[#FF6B00]/40 shadow-md'
+                      : mod.branch
+                        ? 'border-amber-300 ring-2 ring-amber-100'
+                        : 'border-slate-200'
                   }`}
                 >
                   <div className="bg-[#002B49] text-white px-4 py-3 flex flex-wrap items-center justify-between gap-2">
@@ -2009,7 +2144,17 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                       )}
                       <button
                         type="button"
+                        onClick={() => duplicateModule(mod.id)}
+                        title="Duplicar para o próximo módulo (mesma trilha)"
+                        className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-100 hover:text-white px-1.5 py-1 rounded border border-white/20 hover:border-white/40 transition active:scale-95"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        Duplicar
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => removeModule(mod.id)}
+                        title="Remover módulo"
                         className="text-red-300 hover:text-white p-1"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -2100,7 +2245,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
                       <div className="md:col-span-4 space-y-2">
                         <div className="flex items-center justify-between gap-2">
-                          <label className="block text-[11px] font-bold text-slate-700">
+                          <label className="block text-[11px] font-bold text-slate-700 inline-flex items-center gap-1.5">
+                            <Briefcase className="w-3.5 h-3.5 text-[#FF6B00]" aria-hidden />
                             Competências do Módulo
                           </label>
                           <button
@@ -2252,7 +2398,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     {/* Saberes CHA / Zabala do Módulo */}
                     <div className="bg-orange-50/50 p-3.5 rounded-lg border border-orange-200 space-y-2">
                       <div className="flex justify-between items-center">
-                        <span className="text-xs font-bold text-orange-950 uppercase tracking-wider">
+                        <span className="text-xs font-bold text-orange-950 inline-flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-[#FF6B00]" aria-hidden />
                           Saberes
                         </span>
                         <button
@@ -2345,8 +2492,9 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     {/* Conhecimentos do Módulo — mesma grelha da matriz */}
                     <div className="rounded-lg border border-slate-200 overflow-hidden bg-white">
                       <div className="flex justify-between items-center px-3 py-2 bg-slate-50 border-b border-slate-200">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                          Conhecimentos{mod.knowledges?.length ? ` (${mod.knowledges.length})` : ''}
+                        <span className="text-xs font-bold text-slate-500 inline-flex items-center gap-1.5">
+                          <BookOpen className="w-3.5 h-3.5 text-[#002B49]" aria-hidden />
+                          Conhecimentos do Módulo{mod.knowledges?.length ? ` (${mod.knowledges.length})` : ''}
                         </span>
                         <button
                           type="button"
@@ -2373,11 +2521,11 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
                       <div className="overflow-x-auto">
                         <table className={`w-full text-left text-xs ${hasLaboratory || hasClinical ? 'min-w-[860px]' : 'min-w-[700px]'}`}>
-                          <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[10px] sticky top-0 z-10">
+                          <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold tracking-wide text-[10px] sticky top-0 z-10">
                             {hasLaboratory || hasClinical ? (
                               <>
                                 <tr>
-                                  <th rowSpan={2} className="px-3 py-2 min-w-[240px] align-bottom">Conhecimento</th>
+                                  <th rowSpan={2} className="px-3 py-2 min-w-[240px] align-bottom">Conhecimentos</th>
                                   <th rowSpan={2} className="px-2 py-2 text-center w-24 align-bottom">Tipo</th>
                                   <th colSpan={1 + (hasLaboratory ? 1 : 0) + (hasClinical ? 1 : 0)} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">
                                     Presencial
@@ -2402,7 +2550,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               </>
                             ) : (
                               <tr>
-                                  <th className="px-3 py-2 min-w-[240px]">Conhecimento</th>
+                                  <th className="px-3 py-2 min-w-[240px]">Conhecimentos</th>
                                 <th className="px-2 py-2 text-center w-24">Tipo</th>
                                 <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">Presencial</th>
                                 <th className="px-2.5 py-2 text-center w-28 bg-blue-50/70 text-[#002B49] border-l border-slate-200 leading-tight">Síncrona<br />Mediada</th>
@@ -2662,6 +2810,20 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 </div>
               ))}
             </div>
+
+            {modules.length > 0 && (
+              <div className="space-y-2 pt-1">
+                {moduleAddFlash && (
+                  <div
+                    role="status"
+                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 text-center animate-pulse"
+                  >
+                    {moduleAddFlash}
+                  </div>
+                )}
+                {renderModuleAddButtons('bottom')}
+              </div>
+            )}
           </div>
         )}
 

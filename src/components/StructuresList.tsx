@@ -57,6 +57,19 @@ export const StructuresList: React.FC<StructuresListProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<StructureSortMode>('name');
   const [dcnModalStructure, setDcnModalStructure] = useState<CurriculumStructure | null>(null);
+  const [pendingDuplicate, setPendingDuplicate] = useState<CurriculumStructure | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
+
+  const confirmDuplicate = async () => {
+    if (!pendingDuplicate || duplicating) return;
+    setDuplicating(true);
+    try {
+      await onDuplicateStructure(pendingDuplicate);
+      setPendingDuplicate(null);
+    } finally {
+      setDuplicating(false);
+    }
+  };
 
   const filteredStructures = useMemo(() => {
     const filtered = structures.filter((s) => {
@@ -406,9 +419,11 @@ export const StructuresList: React.FC<StructuresListProps> = ({
                       <Edit3 className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => onDuplicateStructure(struct)}
-                      title="Duplicar Estrutura"
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition"
+                      type="button"
+                      onClick={() => setPendingDuplicate(struct)}
+                      title="Duplicar estrutura"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-[#002B49] hover:bg-slate-200/80 transition"
+                      aria-label={`Duplicar estrutura ${struct.code}`}
                     >
                       <Copy className="w-4 h-4" />
                     </button>
@@ -434,6 +449,86 @@ export const StructuresList: React.FC<StructuresListProps> = ({
           onClose={() => setDcnModalStructure(null)}
           structure={dcnModalStructure}
         />
+      )}
+
+      {pendingDuplicate && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#002B49]/45 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="duplicate-structure-title"
+          onClick={() => {
+            if (!duplicating) setPendingDuplicate(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/80">
+              <div className="flex items-center gap-2.5">
+                <span className="w-9 h-9 rounded-xl bg-[#002B49]/8 text-[#002B49] flex items-center justify-center">
+                  <Copy className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3
+                    id="duplicate-structure-title"
+                    className="text-sm font-black text-[#002B49] tracking-tight"
+                  >
+                    Duplicar estrutura?
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Uma cópia independente será criada para edição.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-5 py-4 space-y-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Estrutura de origem
+                </p>
+                <p className="text-sm font-bold text-[#002B49] mt-1 leading-snug">
+                  {pendingDuplicate.courseName}
+                </p>
+                <p className="text-xs text-slate-600 mt-1 font-mono">
+                  {pendingDuplicate.code}
+                  <span className="text-slate-400 font-sans">
+                    {' '}
+                    · {pendingDuplicate.modality} ·{' '}
+                    {pendingDuplicate.structureType === 'modular' ? 'Modular' : 'Disciplinar'}
+                  </span>
+                </p>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                A cópia nasce com status <strong className="text-slate-800">Em Elaboração</strong> e
+                um código próprio (sufixo <span className="font-mono text-[#002B49]">-COPIA</span>).
+                O original permanece intacto.
+              </p>
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-slate-100 bg-white flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={duplicating}
+                onClick={() => setPendingDuplicate(null)}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-200 transition disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={duplicating}
+                onClick={confirmDuplicate}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-[#002B49] hover:bg-[#003a63] transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Copy className="w-3.5 h-3.5 text-[#FF6B00]" />
+                {duplicating ? 'Duplicando…' : 'Duplicar'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

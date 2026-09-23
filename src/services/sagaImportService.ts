@@ -8,7 +8,9 @@ import {
   ModalityType,
   PeriodData,
   ModuleData,
+  KnowledgeItem,
 } from '../types/curriculum';
+import { syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -65,26 +67,41 @@ export async function extractTextFromPdf(data: ArrayBuffer): Promise<string> {
 }
 
 export async function extractTextFromSpreadsheet(data: ArrayBuffer): Promise<string> {
-  const workbook = XLSX.read(data, { type: 'array' });
-  const lines: string[] = [];
+  const rows = extractSpreadsheetMatrix(data);
+  return rows
+    .map((row) => row.map((c) => c.trim()).filter(Boolean).join(' '))
+    .filter(Boolean)
+    .join('\n');
+}
 
+/** Matriz crua da planilha (preserva colunas — necessário para estrutura curricular). */
+export function extractSpreadsheetMatrix(data: ArrayBuffer): string[][] {
+  const workbook = XLSX.read(data, { type: 'array' });
+  const out: string[][] = [];
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+    const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
       header: 1,
-      raw: false,
+      raw: true,
       defval: '',
     });
     for (const row of rows) {
-      const line = (row || [])
-        .map((cell) => String(cell ?? '').trim())
-        .filter(Boolean)
-        .join(' ');
-      if (line) lines.push(line);
+      out.push((row || []).map((cell) => (cell == null ? '' : String(cell).trim())));
     }
   }
+  return out;
+}
 
-  return lines.join('\n');
+/** Detecta planilha no layout “ESTRUTURA CURRICULAR” (módulos + conhecimentos com CH presencial/distância). */
+export function looksLikeEstruturaCurricularSheet(rows: string[][]): boolean {
+  const head = rows
+    .slice(0, 12)
+    .map((r) => r.join(' '))
+    .join('\n');
+  const hasTitle = /estrutura\s+curricular/i.test(head);
+  const hasModule = rows.some((r) => /^m[oó]dulo\s+([ivxlcdm]+|\d+)/i.test(r[0] || ''));
+  const hasKnowledgeHeader = rows.some((r) => /^conhecimento$/i.test((r[0] || '').trim()));
+  return (hasTitle || hasKnowledgeHeader) && hasModule;
 }
 
 /** Reconstrói linhas a partir dos itens de texto do PDF (agrupa pelo eixo Y). */
@@ -149,8 +166,27 @@ export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
   if (codeMatch) {
     hints.structureCode = codeMatch[1].toUpperCase();
   } else {
-    const loose = head.match(/\b([A-Z]{3}\d{3})\b/);
-    if (loose) hints.structureCode = loose[1];
+    const estruturaNum = head.match(/estrutura\s+curricular\s*[-–—]\s*(\d{2,4})/i);
+    if (estruturaNum) {
+      hints.structureCode = estruturaNum[1];
+    } else {
+      const loose = head.match(/\b([A-Z]{3}\d{3})\b/);
+      if (loose) hints.structureCode = loose[1];
+    }
+  }
+
+  if (!hints.courseName) {
+    const lines = head.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i < Math.min(lines.length, 6); i++) {
+      const line = lines[i];
+      if (/estrutura\s+curricular/i.test(line)) continue;
+      if (/^m[oó]dulo\b/i.test(line)) break;
+      if (/conhecimento|carga\s+hor/i.test(line)) break;
+      if (/^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç\s]{2,60}$/.test(line) && !/\d{3,}/.test(line)) {
+        hints.courseName = line.replace(/\s+/g, ' ').trim();
+        break;
+      }
+    }
   }
 
   const semMatch = head.match(/\b(20\d{2}\s*[./]\s*[12])\b/);
@@ -169,7 +205,8 @@ export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
   const modularSignals =
     /m[oó]dulo\s*(?:[ivxlcdm]+|\d+)/i.test(full) ||
     /m[oó]dulos?\s+tem[aá]ticos?/i.test(full) ||
-    /componente\s+curricular\s*\/\s*conhecimento/i.test(full);
+    /componente\s+curricular\s*\/\s*conhecimento/i.test(full) ||
+    /estrutura\s+curricular/i.test(full);
   if (modularSignals) {
     hints.structureType = 'modular';
   } else if (/\d+\s*[ºo°]?\s*per[íi]odo/i.test(full)) {
@@ -177,15 +214,15 @@ export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
   }
 
   const totalMatch = full.match(
-    /(?:carga\s+hor[aá]ria\s+total(?:\s+do\s+curso)?|ch\s+total)\s*[:\-]?\s*([\d.]+)\s*h/i
+    /(?:carga\s+hor[aá]ria\s+total(?:\s+do\s+curso)?|ch\s+total)\s*[:\-]?\s*([\d.]+)\s*h?/i
   );
   if (totalMatch) {
-    hints.totalHours = Number(totalMatch[1].replace(/\./g, ''));
+    hints.totalHours = Number(String(totalMatch[1]).replace(/\./g, '').replace(',', '.'));
   }
 
-  const compMatch = full.match(/atividades\s+complementares\s+([\d.]+)\s*h/i);
+  const compMatch = full.match(/atividades\s+complementares\s*[:\-]?\s*([\d.,]+)\s*h?/i);
   if (compMatch) {
-    hints.complementaryHours = Number(compMatch[1].replace(/\./g, ''));
+    hints.complementaryHours = Number(String(compMatch[1]).replace(/\./g, '').replace(',', '.'));
   }
 
   return hints;
@@ -377,6 +414,7 @@ function romanOrDigitToNumber(token: string): number {
   if (/^\d+$/.test(t)) return parseInt(t, 10);
   const map: Record<string, number> = {
     i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
+    xi: 11, xii: 12, xiii: 13, xiv: 14, xv: 15, xvi: 16, xvii: 17, xviii: 18, xix: 19, xx: 20,
   };
   return map[t] || 0;
 }
@@ -655,6 +693,248 @@ function parseModular(
       withoutCredits,
       withoutName: 0,
       textChars,
+    },
+  };
+}
+
+function sheetCellNumber(raw: string | undefined): number {
+  if (raw == null || String(raw).trim() === '') return 0;
+  const s = String(raw).trim().replace(/\s/g, '').replace(',', '.');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isSheetSkipRow(name: string): boolean {
+  const n = name.trim();
+  if (!n) return true;
+  if (/^(conhecimento|conhecimentos|carga\s+hor[aá]ria|presencial|a\s+dist[aâ]ncia|te[oó]rico|pr[aá]tico|te[oó]rico-pr[aá]tico|total|subtotal|resumo)$/i.test(n)) {
+    return true;
+  }
+  if (/^componentes$/i.test(n)) return true;
+  if (/^hora-?rel[oó]gio$/i.test(n)) return true;
+  if (/^percentual$/i.test(n)) return true;
+  return false;
+}
+
+function classifyKnowledgeFlags(name: string): {
+  isExtension?: boolean;
+  isInternship?: boolean;
+  isFinalPaper?: boolean;
+  type: Discipline['type'];
+} {
+  if (/^extens[aã]o\b/i.test(name)) {
+    return { isExtension: true, type: 'Obrigatória' };
+  }
+  if (/^est[aá]gio\b/i.test(name)) {
+    return { isInternship: true, type: 'Obrigatória' };
+  }
+  if (
+    /\btrabalho de conclus/i.test(name) ||
+    /\btcc\b/i.test(name) ||
+    /\bpr[eé]\s*projeto\b/i.test(name)
+  ) {
+    return { isFinalPaper: true, type: 'Obrigatória' };
+  }
+  return { type: 'Obrigatória' };
+}
+
+/**
+ * Pré-preenche estrutura modular a partir da planilha “ESTRUTURA CURRICULAR”
+ * (módulos romanos + conhecimentos com CH presencial/distância em colunas).
+ */
+export function parseEstruturaCurricularSheet(
+  rows: string[][],
+  params: SagaParseParams
+): SagaParseResult {
+  const flatText = rows.map((r) => r.join(' ')).join('\n');
+  const hints = extractSagaHeaderHints(flatText);
+  const warnings: string[] = [];
+  const modules: ModuleData[] = [];
+  let current: ModuleData | null = null;
+  let withoutHours = 0;
+  let hasLaboratory = false;
+  let stamp = Date.now();
+  const specialFlags = new Map<
+    string,
+    { isExtension?: boolean; isInternship?: boolean; isFinalPaper?: boolean }
+  >();
+
+  const moduleHeader = /^m[oó]dulo\s+([ivxlcdm]+|\d+)\s*[—–:\-.]?\s*(.*)$/i;
+
+  const pushCurrent = () => {
+    if (!current) return;
+    current = syncModuleKnowledgesToDisciplines(current);
+    for (const know of current.knowledges || []) {
+      const f = specialFlags.get(know.id);
+      if (!f) continue;
+      const disc = (current.disciplines || []).find((d) => d.id === know.id);
+      if (!disc) continue;
+      if (f.isExtension) disc.isExtension = true;
+      if (f.isInternship) disc.isInternship = true;
+      if (f.isFinalPaper) disc.isFinalPaper = true;
+    }
+    modules.push(current);
+    current = null;
+  };
+
+  for (const row of rows) {
+    const cells = row.map((c) => String(c ?? '').trim());
+    const name = cells[0] || '';
+    if (!name) continue;
+
+    const modMatch = name.match(moduleHeader);
+    if (modMatch) {
+      pushCurrent();
+      stamp += 1;
+      const num = romanOrDigitToNumber(modMatch[1]) || modules.length + 1;
+      const title = (modMatch[2] || '').replace(/\s+/g, ' ').trim();
+      current = {
+        id: `mod-${num}-${stamp}`,
+        number: num,
+        code: `MOD-${String(num).padStart(2, '0')}`,
+        title: title || `Módulo ${modMatch[1].toUpperCase()}`,
+        hours: 0,
+        meetings: 0,
+        disciplines: [],
+        competencies: [],
+        knowledges: [],
+        competences: [],
+      };
+      continue;
+    }
+
+    // Resumo final (fora dos módulos)
+    if (/^resumo\b/i.test(name)) {
+      pushCurrent();
+      continue;
+    }
+    if (/^atividades\s+complementares$/i.test(name)) {
+      pushCurrent();
+      const h = sheetCellNumber(cells[1]);
+      if (h > 0) hints.complementaryHours = h;
+      continue;
+    }
+    if (/^total$/i.test(name) && !current) {
+      const h = sheetCellNumber(cells[1]);
+      if (h > 0) hints.totalHours = h;
+      continue;
+    }
+
+    if (!current) continue;
+    if (isSheetSkipRow(name)) continue;
+    if (/^subtotal$/i.test(name) || /^total$/i.test(name)) continue;
+
+    const presTheo = sheetCellNumber(cells[1]);
+    const presPrac = sheetCellNumber(cells[2]);
+    const presTheoPrac = sheetCellNumber(cells[3]);
+    const distTheo = sheetCellNumber(cells[4]);
+    const distPrac = sheetCellNumber(cells[5]);
+    const distTheoPrac = sheetCellNumber(cells[6]);
+    const totalCol = sheetCellNumber(cells[7]);
+
+    const presential = presTheo + presPrac + presTheoPrac;
+    const distance = distTheo + distPrac + distTheoPrac;
+    const hours = totalCol > 0 ? totalCol : presential + distance;
+
+    if (hours <= 0 && presential <= 0 && distance <= 0) continue;
+
+    if (presPrac > 0 || distPrac > 0) hasLaboratory = true;
+
+    const flags = classifyKnowledgeFlags(name);
+    const chTheoretical = (presTheo || 0) + (presTheoPrac || 0);
+    const chLaboratory = presPrac || 0;
+    const chAsync = distance;
+
+    stamp += 1;
+    const knowId = `know-${stamp}`;
+    const know: KnowledgeItem = {
+      id: knowId,
+      name,
+      category: 'conhecimento',
+      hours: hours || presential + distance,
+      modalityDelivery:
+        distance > 0 && presential === 0
+          ? 'assincrono'
+          : presential > 0 && distance === 0
+            ? 'presencial'
+            : 'assincrono',
+      hasLaboratory: chLaboratory > 0,
+      chTheoretical: chTheoretical || undefined,
+      chLaboratory: chLaboratory || undefined,
+      chPresential: presential || undefined,
+      chAsync: chAsync || undefined,
+      type: flags.type,
+    };
+
+    if (flags.isExtension || flags.isInternship || flags.isFinalPaper) {
+      specialFlags.set(knowId, flags);
+    }
+
+    current.knowledges = current.knowledges || [];
+    current.knowledges.push(know);
+    current.hours = (current.hours || 0) + (know.hours || 0);
+
+    if (!know.hours) withoutHours++;
+  }
+
+  pushCurrent();
+
+  modules.sort((a, b) => a.number - b.number);
+  modules.forEach((m, i) => {
+    m.parentModuleId = i > 0 ? modules[i - 1].id : undefined;
+    m.hours = (m.knowledges || []).reduce((a, k) => a + (k.hours || 0), 0);
+  });
+
+  const resolvedParams: SagaParseParams = {
+    ...params,
+    code: params.code || hints.structureCode || '',
+    activeYearSemester: params.activeYearSemester || hints.semester || '',
+    modality:
+      hints.modality ||
+      params.modality ||
+      (hasLaboratory ? 'Semipresencial' : 'Presencial'),
+    courseName: params.courseName || hints.courseName || '',
+    structureType: 'modular',
+    requiredTotalHours: params.requiredTotalHours || hints.totalHours,
+  };
+
+  hints.structureType = 'modular';
+  if (!hints.modality && flatText.match(/a\s+dist[aâ]ncia/i)) {
+    hints.modality = 'Semipresencial';
+  }
+
+  const disciplines = modules.reduce(
+    (acc, m) => acc + (m.knowledges?.length || m.disciplines?.length || 0),
+    0
+  );
+
+  if (modules.length === 0) {
+    warnings.push('Nenhum módulo foi identificado na planilha de estrutura curricular.');
+  }
+  if (disciplines === 0) {
+    warnings.push('Nenhum conhecimento/componente foi identificado nos módulos.');
+  }
+
+  const structure = emptyStructure(resolvedParams, [], modules);
+  structure.hasLaboratory = hasLaboratory;
+  if (hints.complementaryHours) {
+    structure.complementaryTotalHours = hints.complementaryHours;
+  }
+  if (hints.totalHours && structure.requiredTotalHours <= 0) {
+    structure.requiredTotalHours = hints.totalHours;
+  }
+
+  return {
+    structure,
+    hints,
+    warnings,
+    stats: {
+      periods: modules.length,
+      disciplines,
+      withoutHours,
+      withoutCredits: 0,
+      withoutName: 0,
+      textChars: flatText.length,
     },
   };
 }

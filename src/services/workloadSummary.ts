@@ -191,7 +191,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
     {
       id: 'sincrono-mediado',
       label: 'Síncrono-Mediado',
-      shortLabel: 'Síncrono-Mediado',
+      shortLabel: 'Sínc.-Mediado',
       hours: syncMediatedShown,
       percent: pct(syncMediatedShown),
     },
@@ -226,7 +226,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
     {
       id: 'complementares',
       label: 'Atividades Complementares',
-      shortLabel: 'Ativ. Complementares',
+      shortLabel: 'Ativ. Comp.',
       hours: complementary,
       percent: pct(complementary),
     },
@@ -360,4 +360,22 @@ export function summaryTableDensity(columnCount: number): {
     titleText: 'text-[14px]',
     subtitleText: 'text-[12px]',
   };
+}
+
+/**
+ * Proporção CH × Encontros lado a lado.
+ * Em telas xl+ divide em metades iguais; abaixo empilha (evita corte).
+ */
+export function summaryPairGridClass(_meetingColumnCount: number): string {
+  return 'grid-cols-1 xl:grid-cols-2';
+}
+
+/**
+ * Densidade tipográfica do quadro de CH (só pelas colunas dele).
+ */
+export function workloadSummaryDensity(
+  componentColumnCount: number,
+  _meetingColumnCount?: number
+) {
+  return summaryTableDensity(componentColumnCount);
 }

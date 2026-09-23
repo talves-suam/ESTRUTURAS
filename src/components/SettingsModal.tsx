@@ -46,7 +46,10 @@ interface SettingsModalProps {
   connectingServer?: boolean;
   onConnectFirebase?: (paste: string) => Promise<void>;
   onSaveSettings: (settings: AppSettings) => Promise<void>;
-  onBatchUpdateCourses: (courses: Course[]) => Promise<void>;
+  onBatchUpdateCourses: (
+    courses: Course[],
+    options?: { allowEmptyWipe?: boolean }
+  ) => Promise<void>;
   onRestoreLocalBackup?: (raw: string) => void;
   onClose: () => void;
 }
@@ -70,14 +73,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [hideValidityDefault, setHideValidityDefault] = useState(
     settings.hideValidityStartDefault
   );
-
-  useEffect(() => {
-    setNomenclature(settings.pedagogicalNomenclature);
-  }, [settings.pedagogicalNomenclature]);
   const [institutionName, setInstitutionName] = useState(settings.institutionName);
   const [defaultEadLimit, setDefaultEadLimit] = useState(settings.defaultEadPercentLimit);
-  const [defaultExtensionMin, setDefaultExtensionMin] = useState(settings.defaultExtensionPercentMin);
-
+  const [defaultExtensionMin, setDefaultExtensionMin] = useState(
+    settings.defaultExtensionPercentMin
+  );
   const [reportNotesTitle, setReportNotesTitle] = useState(
     normalizeReportNotesTitle(settings.reportNotesTitle)
   );
@@ -89,14 +89,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     modular: settings.reportNotesModular || [],
   });
   const [activeNotesType, setActiveNotesType] = useState<'disciplinar' | 'modular'>('disciplinar');
-
   const [editableCourses, setEditableCourses] = useState<Course[]>(courses);
+  const [coursesCleared, setCoursesCleared] = useState(false);
   const [selectedDcnCourse, setSelectedDcnCourse] = useState<Course | null>(null);
   const [csvText, setCsvText] = useState('');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [backupText, setBackupText] = useState('');
   const batchFileInputRef = useRef<HTMLInputElement>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sincroniza quando o App termina de carregar settings/cursos (evita Salvar com estado vazio)
+  useEffect(() => {
+    setNomenclature(settings.pedagogicalNomenclature);
+    setHideValidityDefault(settings.hideValidityStartDefault);
+    setInstitutionName(settings.institutionName);
+    setDefaultEadLimit(settings.defaultEadPercentLimit);
+    setDefaultExtensionMin(settings.defaultExtensionPercentMin);
+    setReportNotesTitle(normalizeReportNotesTitle(settings.reportNotesTitle));
+    setReportNotes({
+      disciplinar: settings.reportNotesDisciplinar || [],
+      modular: settings.reportNotesModular || [],
+    });
+  }, [settings]);
+
+  useEffect(() => {
+    if (coursesCleared) return;
+    setEditableCourses((prev) => {
+      // Hidrata quando o App carrega os cursos; não sobrescreve edições em andamento
+      if (prev.length === 0 && courses.length > 0) return courses;
+      return prev.length > 0 ? prev : courses;
+    });
+  }, [courses, coursesCleared]);
 
   const handleCourseFieldChange = <K extends keyof Course>(
     courseId: string,
@@ -140,6 +163,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const applyBatchResult = (result: ReturnType<typeof applyCourseBatchRows>) => {
     const dcnCount = result.courses.reduce((n, c) => n + (c.dcns?.length || 0), 0);
+    setCoursesCleared(false);
     setEditableCourses(result.courses);
     setSaveSuccessMsg(
       `${result.matchedCount} atualizado(s)${result.createdCount ? `, ${result.createdCount} novo(s)` : ''}. ${dcnCount} DCN(s) vinculadas no total. Clique em Salvar Alterações.`
@@ -191,6 +215,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     ) {
       return;
     }
+    setCoursesCleared(true);
     setEditableCourses([]);
     setSelectedDcnCourse(null);
     setSaveSuccessMsg('Lista de cursos limpa. Clique em Salvar para confirmar.');
@@ -225,10 +250,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSaveAll = async () => {
-    await onSaveSettings(buildSettingsDraft());
-    await onBatchUpdateCourses(editableCourses);
-    setSaveSuccessMsg('Configurações e carga em lote salvas!');
-    setTimeout(() => setSaveSuccessMsg(null), 3000);
+    try {
+      await onSaveSettings(buildSettingsDraft());
+      if (editableCourses.length === 0 && courses.length > 0) {
+        if (
+          !window.confirm(
+            'A lista de cursos está vazia. Confirma APAGAR TODOS os cursos no servidor? Esta ação não tem volta fácil.'
+          )
+        ) {
+          setCoursesCleared(false);
+          setEditableCourses(courses);
+          setSaveSuccessMsg('Salvamento cancelado — cursos no servidor preservados.');
+          setTimeout(() => setSaveSuccessMsg(null), 4000);
+          return;
+        }
+        await onBatchUpdateCourses([], { allowEmptyWipe: true });
+      } else {
+        await onBatchUpdateCourses(editableCourses);
+      }
+      setCoursesCleared(false);
+      setSaveSuccessMsg('Configurações e carga em lote salvas!');
+      setTimeout(() => setSaveSuccessMsg(null), 3000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao salvar.';
+      setSaveSuccessMsg(message);
+      setTimeout(() => setSaveSuccessMsg(null), 6000);
+    }
   };
 
   return (

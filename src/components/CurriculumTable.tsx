@@ -44,7 +44,11 @@ import { ModuleCompetencesTableCards } from './ModuleCompetencesTableCards';
 import { getSaberesLabels, matchesSaberesColumn } from '../utils/nomenclature';
 import { formatModuleName } from '../utils/roman';
 import { getModularComponents } from '../utils/modularComponents';
-import { showsModuleMeetings } from '../services/workloadSummary';
+import {
+  showsModuleMeetings,
+  buildModuleMeetingsSummary,
+  summaryPairGridClass,
+} from '../services/workloadSummary';
 import { hasPpcSummary } from '../services/ppcSummary';
 
 interface CurriculumTableProps {
@@ -125,7 +129,10 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
   );
 
   const toggleModule = (id: string) => {
-    setExpandedModules((prev) => ({ ...prev, [id]: !prev[id] }));
+    setExpandedModules((prev) => ({
+      ...prev,
+      [id]: !(prev[id] ?? true),
+    }));
   };
 
   const prepareMatrixForCapture = async () => {
@@ -295,7 +302,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                       ) : (
                         <Eye className="w-3 h-3 text-emerald-600" />
                       )}
-                      Competências
+                      Competências e Perfil
                     </span>
                   </label>
                   <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -735,15 +742,19 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                           )}
 
                           <button
+                            type="button"
                             onClick={() => toggleModule(mod.id)}
                             className="no-export p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
-                            title={isExpanded ? 'Recolher detalhes de CHA' : 'Expandir detalhes de CHA'}
+                            title={isExpanded ? 'Recolher conteúdo do módulo' : 'Expandir conteúdo do módulo'}
+                            aria-expanded={isExpanded}
                           >
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </button>
                         </div>
                       </div>
 
+                      {isExpanded && (
+                        <>
                       {/* Competências do módulo (acima dos conhecimentos) — cards em texto */}
                       {!hideModuleCompetencesInReport &&
                         normalizeModuleCompetences(mod).length > 0 && (
@@ -757,15 +768,16 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                       {/* Conhecimentos do Módulo (em estrutura modular) */}
                       {!hideKnowledgesInReport && components.length > 0 && (
                         <div className="p-4 border-b border-slate-100 overflow-x-auto">
-                          <h5 className="text-[15px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                          <h5 className="text-[15px] font-bold text-slate-500 mb-2 flex items-center gap-2">
+                            <BookOpen className="w-4 h-4 text-[#002B49] shrink-0" aria-hidden />
                             Conhecimentos do Módulo
                           </h5>
                           <table className={`w-full text-left text-[15px] bg-slate-50/50 rounded-lg border border-slate-200 overflow-hidden ${usePresentialSplit ? 'min-w-[860px]' : 'min-w-[700px]'}`}>
-                            <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[12px]">
+                            <thead className="bg-slate-100/80 border-b border-slate-200 text-slate-700 font-bold tracking-wide text-[12px]">
                               {usePresentialSplit ? (
                                 <>
                                   <tr>
-                                    <th rowSpan={2} className="px-3 py-2 min-w-[160px] align-bottom">Conhecimento</th>
+                                    <th rowSpan={2} className="px-3 py-2 min-w-[160px] align-bottom">Conhecimentos</th>
                                     <th rowSpan={2} className="px-2 py-2 text-center w-24 align-bottom">Tipo</th>
                                     <th colSpan={presentialColSpan} className="px-2 py-1 text-center bg-blue-50/80 text-[#002B49] border-l border-slate-200">Presencial</th>
                                     <th rowSpan={2} className="px-2 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200 align-bottom leading-tight">Síncrona<br />Mediada</th>
@@ -783,7 +795,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                                 </>
                               ) : (
                                 <tr>
-                                  <th className="px-3 py-2 min-w-[180px]">Conhecimento</th>
+                                  <th className="px-3 py-2 min-w-[180px]">Conhecimentos</th>
                                   <th className="px-2 py-2 text-center w-24">Tipo</th>
                                   <th className="px-2.5 py-2 text-center w-24 bg-blue-50/70 text-[#002B49] border-l border-slate-200">Presencial</th>
                                   <th className="px-2.5 py-2 text-center w-28 bg-blue-50/70 text-[#002B49] border-l border-slate-200 leading-tight">Síncrona<br />Mediada</th>
@@ -884,7 +896,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                       )}
 
                       {/* Conhecimentos, Habilidades e Atitudes (CHA / Zabala) */}
-                      {isExpanded && !hideCompetenciesInReport && (() => {
+                      {!hideCompetenciesInReport && (() => {
                         const conceptual = (mod.competencies || []).filter((c) =>
                           matchesSaberesColumn(c.category, 'c')
                         );
@@ -907,8 +919,8 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                         return (
                         <div className="p-5 bg-gradient-to-br from-orange-50/40 to-blue-50/30 space-y-3">
                           <div className="flex items-center gap-2 border-b border-orange-200/60 pb-2">
-                            <Sparkles className="w-4 h-4 text-[#FF6B00]" />
-                            <h5 className="text-[15px] font-bold uppercase tracking-wider text-slate-800">
+                            <Sparkles className="w-4 h-4 text-[#FF6B00] shrink-0" aria-hidden />
+                            <h5 className="text-[15px] font-bold tracking-wide text-slate-800">
                               {chaTitle.sectionTitle}
                             </h5>
                           </div>
@@ -935,6 +947,8 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                         </div>
                         );
                       })()}
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -948,7 +962,9 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
             data-ppc-section="summary"
             className={`grid gap-4 items-stretch ${
               showsModuleMeetings(structure)
-                ? 'grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,0.9fr)]'
+                ? summaryPairGridClass(
+                    buildModuleMeetingsSummary(structure)?.rows.length ?? 0
+                  )
                 : 'grid-cols-1'
             }`}
           >

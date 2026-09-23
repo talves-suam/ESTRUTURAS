@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   CurriculumStructure,
   ModuleData,
@@ -9,6 +9,7 @@ import {
   aspectShortLabel,
 } from '../types/curriculum';
 import { formatModuleName } from '../utils/roman';
+import { showsModuleMeetings } from '../services/workloadSummary';
 
 function sortModuleChain(list: ModuleData[]): ModuleData[] {
   if (list.length <= 1) return list;
@@ -144,26 +145,39 @@ function BranchFrom({
   parent,
   children,
   dir,
+  bodyHidden,
+  bodyAttrs,
 }: {
   parent: React.ReactNode;
   children: React.ReactNode;
   dir: Dir;
+  bodyHidden?: boolean;
+  bodyAttrs?: React.HTMLAttributes<HTMLDivElement>;
 }) {
   const items = React.Children.toArray(children).filter(Boolean);
   if (items.length === 0) {
-    return <div className="flex items-center">{parent}</div>;
+    return <div className="flex items-center" data-map-branch="1">{parent}</div>;
   }
 
   const bracket = (
     <SideBracket side={dir === 'ltr' ? 'right' : 'left'}>{items}</SideBracket>
   );
   const stem = <div className={`w-5 h-px shrink-0 ${LINE}`} />;
-
-  return (
-    <div className="flex items-center">
+  const body = (
+    <div
+      {...bodyAttrs}
+      aria-hidden={bodyHidden}
+      className={`flex items-center transition-[opacity,filter,transform] duration-300 ease-out ${
+        bodyHidden
+          ? 'opacity-0 pointer-events-none blur-[1px] scale-[0.985]'
+          : 'opacity-100'
+      } ${bodyAttrs?.className || ''}`}
+      style={{
+        ...((bodyAttrs?.style as React.CSSProperties) || {}),
+      }}
+    >
       {dir === 'ltr' ? (
         <>
-          <div className="shrink-0">{parent}</div>
           {stem}
           {bracket}
         </>
@@ -171,6 +185,21 @@ function BranchFrom({
         <>
           {bracket}
           {stem}
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="flex items-center" data-map-branch="1">
+      {dir === 'ltr' ? (
+        <>
+          <div className="shrink-0">{parent}</div>
+          {body}
+        </>
+      ) : (
+        <>
+          {body}
           <div className="shrink-0">{parent}</div>
         </>
       )}
@@ -184,23 +213,72 @@ const ProfileBox: React.FC<{
 }> = ({ aspect, index }) => {
   const title = aspect.title?.trim() || aspectShortLabel(aspect, index);
   return (
-    <div className="rounded-lg bg-[#4a7fa3] px-3.5 py-2 shadow-sm w-max min-w-[8.5rem] max-w-[18rem]">
-      <MapLabel className="text-[11px] text-white">{title}</MapLabel>
+    <div
+      className="rounded-lg bg-[#4a7fa3] px-3.5 py-2 shadow-sm w-max min-w-[8.5rem] max-w-[18rem]"
+      data-map-role="perfil"
+    >
+      <MapLabel className="flex items-start gap-2 text-[11px] text-white">
+        <span className="mt-1 w-1.5 h-1.5 rounded-full bg-white/90 shrink-0" aria-hidden />
+        <span>{title}</span>
+      </MapLabel>
     </div>
   );
 };
 
-function CompetenceBox({ text }: { text: string }) {
+function CompetenceBox({
+  text,
+  onToggle,
+  collapsed,
+}: {
+  text: string;
+  onToggle?: () => void;
+  collapsed?: boolean;
+}) {
   return (
-    <div className="rounded-lg bg-[#2a5f87] px-3.5 py-2.5 shadow-sm w-max min-w-[10rem] max-w-[22rem]">
+    <button
+      type="button"
+      data-map-toggle="competence"
+      data-map-role="competencia"
+      aria-expanded={!collapsed}
+      title={collapsed ? 'Mostrar perfil do egresso' : 'Ocultar perfil do egresso'}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle?.();
+      }}
+      className={`rounded-lg bg-[#2a5f87] px-3.5 py-2.5 shadow-sm w-max min-w-[10rem] max-w-[22rem] text-left cursor-pointer hover:brightness-110 transition-[filter,box-shadow] duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6B00]/60 ${
+        collapsed ? 'ring-1 ring-white/25' : ''
+      }`}
+    >
       <MapLabel className="text-[12px] text-white">{text}</MapLabel>
-    </div>
+    </button>
   );
 }
 
-function ModuleBox({ mod }: { mod: ModuleData }) {
+function ModuleBox({
+  mod,
+  hideMeetings,
+  onToggle,
+  collapsed,
+}: {
+  mod: ModuleData;
+  hideMeetings?: boolean;
+  onToggle?: () => void;
+  collapsed?: boolean;
+}) {
   return (
-    <div className="rounded-xl bg-[#002B49] px-4 py-3 shadow-md shadow-[#002B49]/20 w-max min-w-[11rem] max-w-[20rem]">
+    <button
+      type="button"
+      data-map-toggle="module"
+      data-map-role="modulo"
+      aria-expanded={!collapsed}
+      title={collapsed ? 'Mostrar competências e perfis' : 'Ocultar competências e perfis'}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle?.();
+      }}
+      className="relative rounded-xl bg-[#002B49] px-4 py-3 shadow-md shadow-[#002B49]/20 w-max min-w-[11rem] max-w-[20rem] text-left cursor-pointer hover:brightness-110 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6B00]/60"
+    >
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00]" />
       {mod.branch && (
         <span className="inline-block mb-1 text-[10px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 rounded-full">
           Trilha {mod.branch}
@@ -209,7 +287,10 @@ function ModuleBox({ mod }: { mod: ModuleData }) {
       <MapLabel className="text-[13px] text-white">
         {formatModuleName(mod.number, mod.title, mod.branch)}
       </MapLabel>
-    </div>
+      <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
+        {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
+      </p>
+    </button>
   );
 }
 
@@ -221,6 +302,7 @@ const CompetenceBranch: React.FC<{
   aspectIndex: Map<string, number>;
   dir: Dir;
 }> = ({ competence, aspects, aspectIndex, dir }) => {
+  const [profilesHidden, setProfilesHidden] = useState(false);
   const linked = (competence.aspectIds || [])
     .map((id) => {
       const i = aspectIndex.get(id);
@@ -229,7 +311,18 @@ const CompetenceBranch: React.FC<{
     .filter((x): x is LinkedProfile => !!x);
 
   return (
-    <BranchFrom dir={dir} parent={<CompetenceBox text={competence.text} />}>
+    <BranchFrom
+      dir={dir}
+      bodyHidden={profilesHidden}
+      bodyAttrs={{ 'data-map-collapse': 'profiles' } as React.HTMLAttributes<HTMLDivElement>}
+      parent={
+        <CompetenceBox
+          text={competence.text}
+          collapsed={profilesHidden}
+          onToggle={() => setProfilesHidden((v) => !v)}
+        />
+      }
+    >
       {linked.length === 0 ? (
         <span className="text-[10px] text-slate-400 italic px-1">Sem perfil</span>
       ) : (
@@ -246,19 +339,45 @@ const ModuleCompetenceTree: React.FC<{
   aspects: GraduateProfileAspect[];
   aspectIndex: Map<string, number>;
   dir: Dir;
-}> = ({ mod, aspects, aspectIndex, dir }) => {
+  hideMeetings?: boolean;
+}> = ({ mod, aspects, aspectIndex, dir, hideMeetings }) => {
+  const [bodyHidden, setBodyHidden] = useState(false);
   const comps = normalizeModuleCompetences(mod);
 
   if (comps.length === 0) {
     return (
-      <BranchFrom dir={dir} parent={<ModuleBox mod={mod} />}>
+      <BranchFrom
+        dir={dir}
+        bodyHidden={bodyHidden}
+        bodyAttrs={{ 'data-map-collapse': 'module-body' } as React.HTMLAttributes<HTMLDivElement>}
+        parent={
+          <ModuleBox
+            mod={mod}
+            hideMeetings={hideMeetings}
+            collapsed={bodyHidden}
+            onToggle={() => setBodyHidden((v) => !v)}
+          />
+        }
+      >
         <span className="text-[11px] text-slate-400 italic px-1">Sem competências</span>
       </BranchFrom>
     );
   }
 
   return (
-    <BranchFrom dir={dir} parent={<ModuleBox mod={mod} />}>
+    <BranchFrom
+      dir={dir}
+      bodyHidden={bodyHidden}
+      bodyAttrs={{ 'data-map-collapse': 'module-body' } as React.HTMLAttributes<HTMLDivElement>}
+      parent={
+        <ModuleBox
+          mod={mod}
+          hideMeetings={hideMeetings}
+          collapsed={bodyHidden}
+          onToggle={() => setBodyHidden((v) => !v)}
+        />
+      }
+    >
       {comps.map((c) => (
         <CompetenceBranch
           key={c.id}
@@ -278,7 +397,8 @@ const MirroredModuleRows: React.FC<{
   aspects: GraduateProfileAspect[];
   aspectIndex: Map<string, number>;
   label?: string;
-}> = ({ chain, aspects, aspectIndex, label }) => {
+  hideMeetings?: boolean;
+}> = ({ chain, aspects, aspectIndex, label, hideMeetings }) => {
   if (chain.length === 0) return null;
   const pairs = pairModules(chain);
 
@@ -302,6 +422,7 @@ const MirroredModuleRows: React.FC<{
                   aspects={aspects}
                   aspectIndex={aspectIndex}
                   dir="ltr"
+                  hideMeetings={hideMeetings}
                 />
               )}
             </div>
@@ -313,6 +434,7 @@ const MirroredModuleRows: React.FC<{
                   aspects={aspects}
                   aspectIndex={aspectIndex}
                   dir="rtl"
+                  hideMeetings={hideMeetings}
                 />
               )}
             </div>
@@ -322,6 +444,32 @@ const MirroredModuleRows: React.FC<{
     </div>
   );
 };
+
+export function CompetencesMapLegend() {
+  const items = [
+    { color: 'bg-[#002B49]', label: 'Módulo' },
+    { color: 'bg-[#2a5f87]', label: 'Competência' },
+    { color: 'bg-[#4a7fa3]', label: 'Perfil do Egresso' },
+  ];
+  return (
+    <div
+      className="absolute bottom-3 left-3 z-30 flex flex-row flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-[#002B49]/10 bg-white/95 backdrop-blur-sm px-2.5 py-1.5 shadow-sm pointer-events-auto max-w-[calc(100%-1.5rem)]"
+      data-map-legend="competences"
+    >
+      {items.map((item) => (
+        <div key={item.label} className="flex items-center gap-1.5">
+          <span className={`w-2.5 h-2.5 rounded-sm shrink-0 ${item.color}`} aria-hidden />
+          <span className="text-[10px] font-semibold text-slate-600 whitespace-nowrap">
+            {item.label}
+          </span>
+        </div>
+      ))}
+      <span className="text-[9px] text-slate-400 leading-snug whitespace-nowrap border-l border-slate-200 pl-3">
+        Clique no módulo ou na competência
+      </span>
+    </div>
+  );
+}
 
 interface CompetencesCurriculumMapProps {
   structure: CurriculumStructure;
@@ -337,6 +485,7 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
     [aspects]
   );
   const { trunk, branches } = useMemo(() => partitionBranches(modules), [modules]);
+  const hideMeetings = !showsModuleMeetings(structure);
 
   if (modules.length === 0) {
     return (
@@ -347,11 +496,12 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
   }
 
   return (
-    <div className="w-max min-w-full space-y-12 pb-2" data-map-canvas="competences">
+    <div className="relative w-max min-w-full space-y-12 pb-2 pt-2" data-map-canvas="competences">
       <MirroredModuleRows
         chain={trunk}
         aspects={aspects}
         aspectIndex={aspectIndex}
+        hideMeetings={hideMeetings}
         label={trunk.length > 0 && branches.length > 0 ? 'Tronco comum' : undefined}
       />
       {branches.map((b) => (
@@ -360,6 +510,7 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
           chain={b.modules}
           aspects={aspects}
           aspectIndex={aspectIndex}
+          hideMeetings={hideMeetings}
           label={`Trilha ${b.key}`}
         />
       ))}

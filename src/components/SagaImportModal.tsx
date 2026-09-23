@@ -3,6 +3,9 @@ import { Course, CurriculumStructure, ModalityType } from '../types/curriculum';
 import {
   extractTextFromPdf,
   extractTextFromSpreadsheet,
+  extractSpreadsheetMatrix,
+  looksLikeEstruturaCurricularSheet,
+  parseEstruturaCurricularSheet,
   parseSagaReportText,
   SagaParseResult,
 } from '../services/sagaImportService';
@@ -290,15 +293,17 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
 
   const canProceed = (parseResult?.stats.disciplines || 0) > 0;
 
-  const ingestParse = (text: string) => {
-    const firstPass = parseSagaReportText(text, {
-      courseName: '',
-      courseId: '',
-      modality: 'EAD',
-      code: '',
-      activeYearSemester: '',
-      structureType: 'disciplinar',
-    });
+  const ingestParse = (text: string, sheetResult?: SagaParseResult) => {
+    const firstPass =
+      sheetResult ||
+      parseSagaReportText(text, {
+        courseName: '',
+        courseId: '',
+        modality: 'EAD',
+        code: '',
+        activeYearSemester: '',
+        structureType: 'disciplinar',
+      });
 
     const detectedType = firstPass.hints.structureType || 'disciplinar';
     const course = findCourseFromHints(
@@ -307,24 +312,45 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
       firstPass.hints.modality
     );
 
-    const result = parseSagaReportText(text, {
-      courseName: course ? courseBaseName(course.name) : firstPass.hints.courseName || '',
-      courseId: course?.id || '',
-      modality: firstPass.hints.modality || course?.modality || 'EAD',
-      code: firstPass.hints.structureCode || '',
-      activeYearSemester: firstPass.hints.semester || '',
-      structureType: detectedType,
-      requiredTotalHours: course?.minTotalHours || firstPass.hints.totalHours,
-    });
+    const result =
+      sheetResult ||
+      parseSagaReportText(text, {
+        courseName: course ? courseBaseName(course.name) : firstPass.hints.courseName || '',
+        courseId: course?.id || '',
+        modality: firstPass.hints.modality || course?.modality || 'EAD',
+        code: firstPass.hints.structureCode || '',
+        activeYearSemester: firstPass.hints.semester || '',
+        structureType: detectedType,
+        requiredTotalHours: course?.minTotalHours || firstPass.hints.totalHours,
+      });
 
-    const structure = applyCourseToStructure(result.structure, course, result.hints);
+    // Reaplica curso no resultado da planilha estrutural
+    const structure = applyCourseToStructure(
+      sheetResult
+        ? {
+            ...result.structure,
+            courseId: course?.id || result.structure.courseId,
+            courseName: course
+              ? courseBaseName(course.name)
+              : result.structure.courseName || firstPass.hints.courseName || '',
+            modality: firstPass.hints.modality || course?.modality || result.structure.modality,
+            requiredTotalHours:
+              course?.minTotalHours ||
+              firstPass.hints.totalHours ||
+              result.structure.requiredTotalHours,
+            hasLaboratory: result.structure.hasLaboratory || course?.hasLaboratory,
+          }
+        : result.structure,
+      course,
+      result.hints
+    );
     setParseResult(result);
     setMatchedCourse(course);
     setDraftStructure(structure);
 
     if (result.stats.disciplines === 0) {
       setError(
-        'O texto foi lido, mas nenhum componente curricular foi identificado. Verifique o layout do PDF ou complete a estrutura no editor.'
+        'O texto foi lido, mas nenhum componente curricular foi identificado. Verifique o layout do PDF/planilha ou complete a estrutura no editor.'
       );
     } else if (!firstPass.hints.courseName) {
       setError(
@@ -361,13 +387,34 @@ export const SagaImportModal: React.FC<SagaImportModalProps> = ({
       let text = '';
       if (isPdf) {
         text = await extractTextFromPdf(await file.arrayBuffer());
+        setExtractedText(text);
+        ingestParse(text);
       } else if (/\.(xlsx|xls)$/.test(name)) {
-        text = await extractTextFromSpreadsheet(await file.arrayBuffer());
+        const buffer = await file.arrayBuffer();
+        const matrix = extractSpreadsheetMatrix(buffer);
+        text = matrix
+          .map((row) => row.map((c) => c.trim()).filter(Boolean).join(' '))
+          .filter(Boolean)
+          .join('\n');
+        setExtractedText(text);
+        if (looksLikeEstruturaCurricularSheet(matrix)) {
+          const sheetResult = parseEstruturaCurricularSheet(matrix, {
+            courseName: '',
+            courseId: '',
+            modality: 'Presencial',
+            code: '',
+            activeYearSemester: '',
+            structureType: 'modular',
+          });
+          ingestParse(text, sheetResult);
+        } else {
+          ingestParse(text);
+        }
       } else {
         text = await file.text();
+        setExtractedText(text);
+        ingestParse(text);
       }
-      setExtractedText(text);
-      ingestParse(text);
     } catch (err) {
       console.error(err);
       setExtractedText('');
