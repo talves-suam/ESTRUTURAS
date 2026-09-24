@@ -28,19 +28,46 @@ function canUseFirestore(): boolean {
 }
 
 /**
- * Remove PDFs/base64 embutidos (data:) para caber no Spark e evitar docs gigantes.
- * O arquivo original continua só no navegador/localStorage se existir.
+ * Remove PDFs/base64 embutidos antes de serializar — evita JSON.stringify de MBs de data:.
  */
+function slimForCloud(item: object): Record<string, unknown> {
+  const base = item as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...base };
+
+  if (Array.isArray(base.dcns)) {
+    out.dcns = (base.dcns as Record<string, unknown>[]).map((d) => {
+      const pdfUrl = String(d.pdfUrl || '');
+      const isEmbedded = pdfUrl.startsWith('data:') || pdfUrl.length > 2048;
+      return {
+        id: d.id,
+        title: d.title,
+        resolutionNumber: d.resolutionNumber,
+        year: d.year,
+        description: d.description,
+        pdfUrl: isEmbedded ? '' : pdfUrl,
+        pdfHostedLocally: isEmbedded || !!d.pdfHostedLocally,
+        fileName: d.fileName,
+        fileSize: d.fileSize,
+        isMain: d.isMain,
+        uploadedAt: d.uploadedAt,
+      };
+    });
+  }
+
+  return out;
+}
+
 function stripHeavyFields(value: unknown): unknown {
   if (typeof value === 'string') {
-    if (value.startsWith('data:') && value.length > 4096) return '';
-    if (value.length > 900_000) return value.slice(0, 900_000);
+    if (value.startsWith('data:') && value.length > 2048) return '';
+    if (value.length > 200_000) return value.slice(0, 200_000);
     return value;
   }
   if (Array.isArray(value)) return value.map(stripHeavyFields);
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
       out[k] = stripHeavyFields(v);
     }
     return out;
@@ -49,14 +76,17 @@ function stripHeavyFields(value: unknown): unknown {
 }
 
 function toFirestorePayload(item: object): Record<string, unknown> {
-  return stripHeavyFields(JSON.parse(JSON.stringify(item))) as Record<string, unknown>;
+  return stripHeavyFields(JSON.parse(JSON.stringify(slimForCloud(item)))) as Record<
+    string,
+    unknown
+  >;
 }
 
 export function firestoreErrorMessage(err: unknown): string {
   const code = typeof err === 'object' && err && 'code' in err ? String((err as { code?: string }).code) : '';
   const message = err instanceof Error ? err.message : String(err);
   if (code.includes('permission-denied') || /permission/i.test(message)) {
-    return 'O banco recusou a escrita. No Firebase, abra Firestore → Regras, cole as regras de teste e clique em Publicar.';
+    return 'O Firestore recusou a escrita (permission-denied). No Console do Firebase: Firestore → Regras → cole as regras com “allow read, write: if true;”, clique em Publicar. Se já publicou regras com Auth, entre com Google UNISUAM (não use só o login local).';
   }
   if (code.includes('not-found') || /not found|404/i.test(message)) {
     return 'O Firestore ainda não existe. No Console do Firebase: Build → Firestore Database → Criar banco (modo de teste).';
@@ -194,7 +224,7 @@ async function upsertFirestoreDocs<T extends { id: string }>(
   if (!canUseFirestore() || items.length === 0) return;
   try {
     for (const item of items) {
-      await setDoc(doc(db!, collectionName, item.id), toFirestorePayload(item));
+      await setDoc(doc(db!, collectionName, item.id), toFirestorePayload(item), { merge: true });
       trackFirestoreOp('write', 1);
     }
   } catch (err) {
@@ -286,9 +316,7 @@ export function subscribeCurriculumData(handlers: {
       const withTotals = merged.map((s) => calculateStructureTotals(s));
       cacheList(LOCAL_STORAGE_STRUCTURES_KEY, withTotals);
       handlers.onStructures(withTotals);
-      void syncMissingOrNewerToFirestore(STRUCTURES_COLLECTION, items, merged).catch((err) =>
-        handlers.onError?.(new Error(firestoreErrorMessage(err)))
-      );
+      // Não re-sincroniza a cada snapshot (causava demora e writes extras no Spark).
     },
     (err) => handlers.onError?.(new Error(firestoreErrorMessage(err)))
   );
@@ -319,9 +347,7 @@ export function subscribeCurriculumData(handlers: {
       const merged = mergeById(items, local);
       cacheList(LOCAL_STORAGE_COURSES_KEY, merged);
       handlers.onCourses(merged);
-      void syncMissingOrNewerToFirestore(COURSES_COLLECTION, items, merged).catch((err) =>
-        handlers.onError?.(new Error(firestoreErrorMessage(err)))
-      );
+      // Sem syncMissing a cada snapshot.
     },
     (err) => handlers.onError?.(new Error(firestoreErrorMessage(err)))
   );
@@ -543,8 +569,18 @@ export async function saveCurriculumStructure(structure: CurriculumStructure): P
     console.error('Error saving to localStorage', e);
   }
 
+  // Nuvem em segundo plano: UI não espera o round-trip do Firestore.
   if (canUseFirestore()) {
-    await upsertFirestoreDocs(STRUCTURES_COLLECTION, [calculated]);
+    void upsertFirestoreDocs(STRUCTURES_COLLECTION, [calculated]).catch((err) => {
+      console.error('Falha ao sincronizar estrutura com Firestore', err);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('unisuam-firestore-sync-error', {
+            detail: { message: firestoreErrorMessage(err) },
+          })
+        );
+      }
+    });
   }
   return calculated;
 }
@@ -588,7 +624,6 @@ export async function getCoursesList(): Promise<Course[]> {
 export async function saveCourseItem(course: Course): Promise<Course> {
   const stamped: Course = {
     ...course,
-    // Course type may not have updatedAt — keep id stable and persist as-is
   };
 
   try {
@@ -605,7 +640,9 @@ export async function saveCourseItem(course: Course): Promise<Course> {
   }
 
   if (canUseFirestore()) {
-    await upsertFirestoreDocs(COURSES_COLLECTION, [stamped]);
+    void upsertFirestoreDocs(COURSES_COLLECTION, [stamped]).catch((err) => {
+      console.error('Falha ao sincronizar curso com Firestore', err);
+    });
   }
   return stamped;
 }

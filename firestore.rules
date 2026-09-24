@@ -1,16 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Qualquer conta Google @unisuam.edu.br autenticada pode ler/gravar dados do app.
-    // Perfil admin (alerta de faturamento) é só no front — não precisa de regra extra aqui.
-    function isUnisuam() {
-      return request.auth != null
-        && request.auth.token.email is string
-        && request.auth.token.email.matches('.*@unisuam\\.edu\\.br$');
-    }
-
+    // Regras de teste (time interno). O login do app já restringe quem entra.
+    // Quando Auth Google estiver estável para todo o time, troque por isUnisuam().
     match /{document=**} {
-      allow read, write: if isUnisuam();
+      allow read, write: if true;
     }
   }
 }

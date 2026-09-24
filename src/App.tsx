@@ -151,9 +151,15 @@ function AuthenticatedApp() {
 
     startListening();
     window.addEventListener(FIREBASE_CHANGED_EVENT, startListening);
+    const onSyncErr = (ev: Event) => {
+      const message = (ev as CustomEvent<{ message?: string }>).detail?.message;
+      showToast(message || 'Falha ao sincronizar com o Firebase.', 'error');
+    };
+    window.addEventListener('unisuam-firestore-sync-error', onSyncErr);
     return () => {
       stop();
       window.removeEventListener(FIREBASE_CHANGED_EVENT, startListening);
+      window.removeEventListener('unisuam-firestore-sync-error', onSyncErr);
     };
   }, []);
 
@@ -187,10 +193,10 @@ function AuthenticatedApp() {
             ? ` (a partir do cadastro ${clonedFromModality})`
             : '';
           showToast(
-            `Estrutura [${calculated.code}] salva no Firebase. Curso ${course.name} (${course.modality}) incluído${cloneNote}.`
+            `Estrutura [${calculated.code}] salva. Sincronizando com o Firebase… Curso ${course.name} (${course.modality}) incluído${cloneNote}.`
           );
         } else {
-          showToast(`Estrutura [${calculated.code}] salva no Firebase.`);
+          showToast(`Estrutura [${calculated.code}] salva. Sincronizando com o Firebase…`);
         }
       } else {
         showToast(

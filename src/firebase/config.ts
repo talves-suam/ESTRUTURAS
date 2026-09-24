@@ -21,8 +21,21 @@ export type FirebaseClientConfig = {
   firestoreDatabaseId?: string;
 };
 
-/** Regras: só @unisuam.edu.br autenticado. Publique no Console (troca o allow if true). */
+/**
+ * Regras abertas de teste — copie e publique em Firestore → Regras.
+ * (O login do app já restringe quem usa o sistema.)
+ */
 export const FIRESTORE_TEST_RULES = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`;
+
+/** Versão com Auth (use depois que o Google Sign-In estiver ok para todo o time). */
+export const FIRESTORE_AUTH_RULES = `rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isUnisuam() {
