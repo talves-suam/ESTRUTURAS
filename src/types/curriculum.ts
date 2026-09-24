@@ -266,9 +266,10 @@ export function getDisciplineChBreakdown(disc: Discipline): DisciplineChBreakdow
     }
 
     const split = resolvePresentialSplit(presentialBase, disc);
-    const total =
-      disc.hours ||
-      split.presential + sync + syncMediated + async;
+    // Total SEMPRE = soma das modalidades explícitas (não preferir hours desatualizado).
+    const partsTotal = split.presential + sync + syncMediated + async;
+    const hoursFallback = Number(disc.hours) || 0;
+    const total = partsTotal > 0 ? partsTotal : hoursFallback;
 
     return {
       presential: split.presential,
@@ -608,10 +609,19 @@ export interface DcnDocument {
   year?: string | number; // Ex: "2005"
   description?: string; // Ex: "Institui as Diretrizes Curriculares Nacionais do Curso de Graduação em Administração"
   pdfUrl: string; // Data URL (base64) ou URL direta para o PDF
+  /** true quando o PDF ficou só no navegador (não enviamos data:URL ao Firestore). */
+  pdfHostedLocally?: boolean;
   fileName?: string;
   fileSize?: string;
   isMain?: boolean;
   uploadedAt?: string;
+}
+
+/** Ato autorizativo vinculado a uma unidade/campus. */
+export interface CampusAuthorizationAct {
+  id: string;
+  unitName: string; // ex.: "Bangu", "Bonsucesso", "Campo Grande" ou outra
+  act: string; // texto do ato (Portaria…)
 }
 
 export interface Course {
@@ -623,7 +633,9 @@ export interface Course {
   cineBrasilArea: string;
   activeDcn: string;
   dcnLink?: string; // URL / link oficial da DCN ativa
-  authorizationAct?: string; // Ato autorizativo do curso
+  authorizationAct?: string; // Espelho do ato ativo (compatibilidade)
+  authorizationActs?: CampusAuthorizationAct[];
+  activeAuthorizationActId?: string;
   dcns?: DcnDocument[]; // Suporte a múltiplas DCNs vinculadas com PDF
   minTotalHours: number;
   minPresentialPercent: number; // Ex: 60%
@@ -645,6 +657,9 @@ export interface Course {
   hasLaboratory?: boolean;
   /** Curso usa CH presencial de Clínica (vale para toda estrutura) */
   hasClinical?: boolean;
+  /** ISO — usado no merge local/remoto para não perder CH/DCN no sync */
+  updatedAt?: string;
+  createdAt?: string;
 }
 
 export interface CurriculumStructure {
@@ -687,6 +702,11 @@ export interface CurriculumStructure {
   hasLaboratory?: boolean;
   /** Herdado do curso: estrutura usa Clínica na CH presencial */
   hasClinical?: boolean;
+  /**
+   * Inclui “Libras (Optativa)” no resumo de CH e no mapa (20h).
+   * Não entra na CH total do curso.
+   */
+  hasLibrasOptativa?: boolean;
 
   // Totais Calculados em Tempo Real
   calculatedTotalHours: number;
@@ -711,7 +731,12 @@ export interface CurriculumStructure {
   habilitation?: string;
   /** @deprecated use authorizationAct */
   recognitionPortaria?: string;
-  authorizationAct?: string; // Ato autorizativo do curso/estrutura
+  /** Espelho do ato ativo (compatibilidade com exports/lote). */
+  authorizationAct?: string;
+  /** Atos autorizativos por unidade/campus. */
+  authorizationActs?: CampusAuthorizationAct[];
+  /** Id do ato que aparece no documento. */
+  activeAuthorizationActId?: string;
   dcnRef?: string;
   dcns?: DcnDocument[]; // Documentos DCNs vinculados com visualização em PDF
   cineBrasilRef?: string;

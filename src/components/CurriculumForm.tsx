@@ -11,6 +11,7 @@ import {
   DeliveryModalityFlag,
   ComponentDeliveryFlags,
   DcnDocument,
+  CampusAuthorizationAct,
   applyExplicitChBreakdown,
   getDisciplineChBreakdown,
   ExplicitChPart,
@@ -21,11 +22,13 @@ import {
   aspectShortLabel,
 } from '../types/curriculum';
 import { getSaberesLabels, defaultSaberCategory } from '../utils/nomenclature';
-import { toRoman, fromRoman, formatModuleName } from '../utils/roman';
-import { summarizeCourseDcns, generateCourseCodeFromName, courseSelectOptions, resolveCourseByNameAndModality, courseBaseName, stripAcademicCoursePrefix, findCourseByNameAndModality, findCourseTemplateByName, formatCineBrasilLabel } from '../utils/courseBatch';
+import { toRoman, fromRoman, formatModuleName, normalizeModuleTitle, formatBranchLabel } from '../utils/roman';
+import { summarizeCourseDcns, generateCourseCodeFromName, courseSelectOptions, resolveCourseByNameAndModality, courseBaseName, stripAcademicCoursePrefix, findCourseByNameAndModality, findCourseTemplateByName, formatCineBrasilLabel, dcnsToRefString } from '../utils/courseBatch';
 import type { RequirementLevel } from '../types/curriculum';
 import {
   extractTextFromPdf,
+  extractPdfMatrix,
+  extractFromWord,
   extractTextFromSpreadsheet,
   extractSpreadsheetMatrix,
   looksLikeEstruturaCurricularSheet,
@@ -57,8 +60,28 @@ import {
   Briefcase,
 } from 'lucide-react';
 import { calculateStructureTotals } from '../services/curriculumService';
+import { getWorkloadBranchKey, listBranchKeys } from '../utils/modularBranches';
 import { DcnViewerModal } from './DcnViewerModal';
 import { syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
+import { WorkloadSummaryCard } from './WorkloadSummaryCard';
+import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
+import {
+  buildModuleMeetingsSummary,
+  showsModuleMeetings,
+  summaryPairGridClass,
+} from '../services/workloadSummary';
+import {
+  PROFILE_DOC_FORMAT_HINT,
+  competenceTextsToItems,
+  importProfilePedagogyFromWord,
+  matchImportedModuleIndex,
+  saberesToCompetencyCha,
+} from '../services/profileDocImport';
+import {
+  createCampusAuthorizationAct,
+  normalizeAuthorizationActs,
+} from '../utils/authorizationActs';
+import { AuthorizationActsEditor } from './AuthorizationActsEditor';
 
 interface CurriculumFormProps {
   initialData?: CurriculumStructure | null;
@@ -310,11 +333,31 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [maxEadHoursPercent, setMaxEadHoursPercent] = useState<number>(
     initialData?.maxEadHoursPercent ?? 100
   );
+
+  /** Presencial e EAD são complementares (sempre somam 100%). */
+  const setLinkedPresentialPercent = (raw: number) => {
+    const p = Math.min(100, Math.max(0, Math.round(Number(raw) || 0)));
+    setMinPresentialHoursPercent(p);
+    setMaxEadHoursPercent(100 - p);
+  };
+  const setLinkedEadPercent = (raw: number) => {
+    const e = Math.min(100, Math.max(0, Math.round(Number(raw) || 0)));
+    setMaxEadHoursPercent(e);
+    setMinPresentialHoursPercent(100 - e);
+  };
   const [dcnRef, setDcnRef] = useState<string>(initialData?.dcnRef || '');
   const [cineBrasilRef, setCineBrasilRef] = useState<string>(initialData?.cineBrasilRef || '');
-  const [authorizationAct, setAuthorizationAct] = useState<string>(
-    initialData?.authorizationAct || initialData?.recognitionPortaria || ''
+  const initialAuth = normalizeAuthorizationActs(initialData || undefined);
+  const [authorizationActs, setAuthorizationActs] = useState<CampusAuthorizationAct[]>(
+    initialAuth.authorizationActs
   );
+  const [activeAuthorizationActId, setActiveAuthorizationActId] = useState<string>(
+    initialAuth.activeAuthorizationActId
+  );
+  const authorizationAct = normalizeAuthorizationActs({
+    authorizationActs,
+    activeAuthorizationActId,
+  }).authorizationAct;
   const [structureDcns, setStructureDcns] = useState<DcnDocument[]>(initialData?.dcns || []);
   const [isDcnModalOpen, setIsDcnModalOpen] = useState(false);
 
@@ -350,6 +393,9 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     initialData?.hasLaboratory ?? false
   );
   const [hasClinical, setHasClinical] = useState<boolean>(initialData?.hasClinical ?? false);
+  const [hasLibrasOptativa, setHasLibrasOptativa] = useState<boolean>(
+    initialData?.hasLibrasOptativa ?? false
+  );
   const splitFlags: SplitFlags = { hasLaboratory, hasClinical };
 
   // Periods (for disciplinar) — nova estrutura começa vazia (dados do curso vêm da planilha)
@@ -361,6 +407,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [modules, setModules] = useState<ModuleData[]>(
     (initialData?.modules || []).map((m) => ({
       ...m,
+      title: normalizeModuleTitle(m.title),
       competences: normalizeModuleCompetences(m),
       competence: undefined,
     }))
@@ -384,6 +431,14 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     text: string;
   } | null>(null);
 
+  const profileDocRef = useRef<HTMLInputElement>(null);
+  const [profileDocBusy, setProfileDocBusy] = useState(false);
+  const [profileDocMsg, setProfileDocMsg] = useState<{
+    type: 'ok' | 'warn' | 'err';
+    text: string;
+  } | null>(null);
+  const [showProfileDocHelp, setShowProfileDocHelp] = useState(false);
+
   // State for Add Course Modal
   const [showAddCourseModal, setShowAddCourseModal] = useState(false);
   const [newCourseName, setNewCourseName] = useState('');
@@ -396,13 +451,15 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   const [showBlockersModal, setShowBlockersModal] = useState<boolean>(false);
   const [moduleAddFlash, setModuleAddFlash] = useState<string | null>(null);
   const [justAddedModuleId, setJustAddedModuleId] = useState<string | null>(null);
+  const [isSavingStructure, setIsSavingStructure] = useState(false);
 
   // Update linked fields when course is explicitly selected
   const clearCourseLinkedFields = () => {
     setRequiredTotalHours(0);
     setDcnRef('');
     setCineBrasilRef('');
-    setAuthorizationAct('');
+    setAuthorizationActs([]);
+    setActiveAuthorizationActId('');
     setStructureDcns([]);
     setDegrees(undefined);
     setInternshipRequirement('Não Informado');
@@ -423,10 +480,18 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
   const applyCourseData = (selected: Course, opts?: { skipModality?: boolean }) => {
     setDraftCourseName(courseBaseName(selected.name));
-    setRequiredTotalHours(selected.minTotalHours);
+    setRequiredTotalHours(Number(selected.minTotalHours) || 0);
     setDcnRef(selected.activeDcn || '');
     setCineBrasilRef(formatCineBrasilLabel(selected.cineBrasilCode, selected.cineBrasilArea));
-    setAuthorizationAct(selected.authorizationAct || '');
+    setAuthorizationActs((prev) => {
+      const hasLocal = prev.some((a) => a.act.trim() || a.unitName.trim());
+      if (hasLocal) return prev;
+      const seeded = normalizeAuthorizationActs(selected);
+      if (seeded.activeAuthorizationActId) {
+        setActiveAuthorizationActId(seeded.activeAuthorizationActId);
+      }
+      return seeded.authorizationActs;
+    });
     setStructureDcns(selected.dcns || []);
     if (selected.modality && !opts?.skipModality) setModality(selected.modality);
     setDegrees(selected.degrees);
@@ -458,10 +523,12 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setCoordinatorEmail(selected.coordinatorEmail || '');
     setHasLaboratory(!!selected.hasLaboratory);
     setHasClinical(!!selected.hasClinical);
-    setMinPresentialHoursPercent(
-      selected.minPresentialPercent ?? (selected.modality === 'EAD' ? 10 : 60)
+    const p = Math.min(
+      100,
+      Math.max(0, selected.minPresentialPercent ?? (selected.modality === 'EAD' ? 10 : 60))
     );
-    setMaxEadHoursPercent(selected.maxEadPercent ?? (selected.modality === 'EAD' ? 90 : 40));
+    setMinPresentialHoursPercent(p);
+    setMaxEadHoursPercent(100 - p);
   };
 
   const handleCourseChange = (courseId: string) => {
@@ -493,18 +560,21 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     clearCourseLinkedFields();
   };
 
-  /** Pré-preenche a matriz a partir de Excel/PDF.
+  /** Pré-preenche a matriz a partir de Excel/PDF/Word.
    *  Se o nome do curso do arquivo bater com o cadastro, carrega os dados cadastrados. */
   const handleSeedFile = async (file: File) => {
     const name = file.name.toLowerCase();
     const isPdf = file.type.includes('pdf') || name.endsWith('.pdf');
+    const isWord =
+      /\.(docx|doc)$/.test(name) ||
+      /wordprocessingml|msword/.test(file.type);
     const isSheet =
       /\.(xlsx|xls|csv|tsv|txt)$/.test(name) || /spreadsheet|excel|csv/.test(file.type);
 
-    if (!isPdf && !isSheet) {
+    if (!isPdf && !isSheet && !isWord) {
       setSeedImportMsg({
         type: 'err',
-        text: 'Use planilha (.xlsx, .xls, .csv) de estrutura curricular ou PDF/planilha no formato SAGA.',
+        text: 'Use planilha (.xlsx/.xls), Word (.docx/.doc) ou PDF de estrutura curricular.',
       });
       return;
     }
@@ -536,8 +606,35 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           result = parseSagaReportText(text, baseParams);
         }
       } else if (isPdf) {
-        const text = await extractTextFromPdf(await file.arrayBuffer());
-        result = parseSagaReportText(text, baseParams);
+        const buffer = await file.arrayBuffer();
+        const matrix = await extractPdfMatrix(buffer);
+        if (looksLikeEstruturaCurricularSheet(matrix)) {
+          result = parseEstruturaCurricularSheet(matrix, {
+            ...baseParams,
+            structureType: 'modular',
+          });
+        } else {
+          const text = await extractTextFromPdf(buffer);
+          result = parseSagaReportText(text, {
+            ...baseParams,
+            structureType: /m[oó]dulo\s+/i.test(text) ? 'modular' : baseParams.structureType,
+          });
+        }
+      } else if (isWord) {
+        const buffer = await file.arrayBuffer();
+        const { text, rows, warnings } = await extractFromWord(buffer, file.name);
+        if (rows.length && looksLikeEstruturaCurricularSheet(rows)) {
+          result = parseEstruturaCurricularSheet(rows, {
+            ...baseParams,
+            structureType: 'modular',
+          });
+        } else {
+          result = parseSagaReportText(text, {
+            ...baseParams,
+            structureType: /m[oó]dulo\s+/i.test(text) ? 'modular' : baseParams.structureType,
+          });
+        }
+        result.warnings = [...warnings, ...result.warnings];
       } else {
         const text = await file.text();
         result = parseSagaReportText(text, baseParams);
@@ -550,7 +647,12 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       setStructureType(parsed.structureType);
       setStatus('Em Elaboração');
       setPeriods(parsed.periods || []);
-      setModules(parsed.modules || []);
+      setModules(
+        (parsed.modules || []).map((m) => ({
+          ...m,
+          title: normalizeModuleTitle(m.title),
+        }))
+      );
       if (parsed.hasLaboratory) setHasLaboratory(true);
 
       if (hints.structureCode) setCode(hints.structureCode);
@@ -559,9 +661,6 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       if (hints.semester) setActiveYearSemester(hints.semester);
       else if (parsed.activeYearSemester) setActiveYearSemester(parsed.activeYearSemester);
 
-      const fileModality = hints.modality || 'Presencial';
-      if (hints.modality) setModality(hints.modality);
-
       let matchedCourse: Course | undefined;
       let matchNote = '';
 
@@ -569,27 +668,44 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         const cleanName = courseBaseName(stripAcademicCoursePrefix(hints.courseName));
         setDraftCourseName(cleanName);
 
-        matchedCourse =
-          findCourseByNameAndModality(courses, cleanName, fileModality) ||
-          findCourseTemplateByName(courses, cleanName);
+        // Modalidade do arquivo só refina o match se for sinal explícito (não colunas de CH).
+        matchedCourse = hints.modality
+          ? findCourseByNameAndModality(courses, cleanName, hints.modality) ||
+            findCourseTemplateByName(courses, cleanName)
+          : findCourseTemplateByName(courses, cleanName);
 
         if (matchedCourse) {
-          setSelectedCourseId(matchedCourse.id);
-          // Carrega cadastro; mantém modalidade detectada no arquivo quando houver
-          applyCourseData(matchedCourse, { skipModality: Boolean(hints.modality) });
-          if (hints.modality) setModality(hints.modality);
+          // Releitura do cadastro atual (pode ter sido editado em Configurações).
+          const fromCatalog =
+            courses.find((c) => c.id === matchedCourse!.id) || matchedCourse;
+          setSelectedCourseId(fromCatalog.id);
+          // Cadastro vence: modalidade, CH mínima, DCN, CINE, extensão, etc.
+          applyCourseData(fromCatalog);
           if (parsed.hasLaboratory) setHasLaboratory(true);
-          matchNote = ` Curso vinculado ao cadastro: “${courseBaseName(matchedCourse.name)}” (${matchedCourse.modality}).`;
+          matchNote = ` Curso vinculado ao cadastro: “${courseBaseName(fromCatalog.name)}” (${fromCatalog.modality}).`;
+          if (!(Number(fromCatalog.minTotalHours) > 0)) {
+            matchNote +=
+              ' Atenção: CH mínima do curso está zerada no cadastro — preencha em Configurações.';
+          }
+          matchedCourse = fromCatalog;
         } else {
           setSelectedCourseId('');
+          if (hints.modality) setModality(hints.modality);
           matchNote = ` Curso detectado: “${cleanName}” (ainda não há correspondência no cadastro — selecione ou salve para incluir).`;
         }
+      } else if (hints.modality) {
+        setModality(hints.modality);
       }
 
-      // Valores do arquivo complementam / não apagam o que veio do cadastro quando não informados
-      if (hints.totalHours && hints.totalHours > 0) setRequiredTotalHours(hints.totalHours);
+      // Total do arquivo só preenche CH mínima se o cadastro não trouxe valor.
+      const catalogMin = matchedCourse ? Number(matchedCourse.minTotalHours) || 0 : 0;
+      if (catalogMin <= 0 && hints.totalHours && hints.totalHours > 0) {
+        setRequiredTotalHours(hints.totalHours);
+      }
       if (hints.complementaryHours != null && hints.complementaryHours > 0) {
-        setComplementaryTotalHours(hints.complementaryHours);
+        const already =
+          matchedCourse && Number(matchedCourse.complementaryTotalHours || 0) > 0;
+        if (!already) setComplementaryTotalHours(hints.complementaryHours);
       }
 
       const discCount =
@@ -603,12 +719,16 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           ? `${(parsed.modules || []).length} módulo(s)`
           : `${(parsed.periods || []).length} período(s)`;
 
-      const warnSuffix = result.warnings.length > 0 ? ` ${result.warnings[0]}` : '';
+      const warnSuffix =
+        result.warnings.length > 0 ? ` Aviso: ${result.warnings.join(' ')}` : '';
+      const totalH = (parsed.modules || []).reduce((a, m) => a + (m.hours || 0), 0);
       setSeedImportMsg({
         type: discCount > 0 ? 'ok' : 'warn',
         text:
           discCount > 0
-            ? `Pré-preenchido a partir de “${file.name}”: ${unitLabel}, ${discCount} componente(s).${matchNote}`
+            ? `Pré-preenchido a partir de “${file.name}”: ${unitLabel}, ${discCount} componente(s)${
+                totalH > 0 ? `, ~${totalH}h` : ''
+              }.${matchNote}${warnSuffix}`
             : `Arquivo lido, mas poucos dados de matriz foram reconhecidos.${warnSuffix} Complete manualmente.`,
       });
     } catch (err) {
@@ -616,8 +736,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       setSeedImportMsg({
         type: 'err',
         text: isPdf
-          ? 'Não foi possível ler o PDF. Se for imagem digitalizada, use a planilha de estrutura curricular ou preencha manualmente.'
-          : 'Não foi possível ler a planilha. Verifique o arquivo ou preencha manualmente.',
+          ? 'Não foi possível ler o PDF. Se for imagem digitalizada, use Excel/.docx ou preencha manualmente.'
+          : isWord
+            ? 'Não foi possível ler o Word. Prefira .docx ou a planilha Excel.'
+            : 'Não foi possível ler a planilha. Verifique o arquivo ou preencha manualmente.',
       });
     } finally {
       setSeedImportBusy(false);
@@ -647,6 +769,16 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       cineBrasilCode: newCourseCine || '0413A01',
       cineBrasilArea: 'Área Acadêmica Geral',
       authorizationAct: newCourseAuthorizationAct || '',
+      authorizationActs: newCourseAuthorizationAct
+        ? [
+            createCampusAuthorizationAct({
+              id: 'ato-new-course',
+              unitName: '',
+              act: newCourseAuthorizationAct,
+            }),
+          ]
+        : [],
+      activeAuthorizationActId: newCourseAuthorizationAct ? 'ato-new-course' : undefined,
       minTotalHours: newCourseHours,
       minPresentialPercent: 60,
       maxEadPercent: 40,
@@ -660,39 +792,66 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setNewCourseAuthorizationAct('');
   };
 
-  /** CH do módulo = soma das CH dos conhecimentos (ou disciplinas, se não houver conhecimentos). */
+  /** CH do módulo = soma Presencial + Síncrona + Assíncrona dos componentes (nunca hours stale). */
   const sumModuleComponentHours = (mod: ModuleData): number => {
+    const flags: SplitFlags = { hasLaboratory, hasClinical };
     const knows = mod.knowledges || [];
     if (knows.length > 0) {
-      return knows.reduce((acc, k) => acc + (Number(k.hours) || 0), 0);
+      return knows.reduce((acc, k) => {
+        const bd = getDisciplineChBreakdown(knowledgeAsDiscipline(k, flags));
+        return acc + (Number(bd.total) || 0);
+      }, 0);
     }
     const discs = mod.disciplines || [];
     if (discs.length > 0) {
-      return discs.reduce((acc, d) => acc + (Number(d.hours) || 0), 0);
+      return discs.reduce((acc, d) => {
+        const bd = getDisciplineChBreakdown({
+          ...d,
+          hasLaboratory,
+          hasClinical,
+        });
+        return acc + (Number(bd.total) || 0);
+      }, 0);
     }
-    return 0;
+    return Number(mod.hours) || 0;
   };
 
   /** Espelha knowledges → disciplines para a tabela/totais não perderem itens manuais. */
   const withSyncedModules = (list: ModuleData[]): ModuleData[] =>
-    list.map((m) =>
-      syncModuleKnowledgesToDisciplines({
-        ...m,
-        competences: normalizeModuleCompetences(m).filter((c) => c.text.trim()),
-        competence: undefined,
-        disciplines: (m.disciplines || []).map((d) => ({
-          ...d,
-          hasLaboratory,
-          hasClinical,
-        })),
-        knowledges: (m.knowledges || []).map((k) => ({
+    list.map((m) => {
+      const flags: SplitFlags = { hasLaboratory, hasClinical };
+      const knowledges = (m.knowledges || []).map((k) => {
+        const bd = getDisciplineChBreakdown(knowledgeAsDiscipline(k, flags));
+        return {
           ...k,
           hasLaboratory,
           hasClinical,
-        })),
-        hours: sumModuleComponentHours(m),
-      })
-    );
+          // Mantém hours alinhado à soma das colunas de modalidade
+          hours: Number(bd.total) || Number(k.hours) || 0,
+        };
+      });
+      const disciplines = (m.disciplines || []).map((d) => {
+        const bd = getDisciplineChBreakdown({ ...d, hasLaboratory, hasClinical });
+        return {
+          ...d,
+          hasLaboratory,
+          hasClinical,
+          hours: Number(bd.total) || Number(d.hours) || 0,
+        };
+      });
+      const synced = syncModuleKnowledgesToDisciplines({
+        ...m,
+        competences: normalizeModuleCompetences(m).filter((c) => c.text.trim()),
+        competence: undefined,
+        disciplines,
+        knowledges,
+      });
+      return {
+        ...synced,
+        title: normalizeModuleTitle(synced.title),
+        hours: sumModuleComponentHours({ ...synced, knowledges, disciplines }),
+      };
+    });
 
   const cleanedAspects = profileAspects
     .map((a) => ({
@@ -739,6 +898,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     coordinatorEmail,
     hasLaboratory,
     hasClinical,
+    hasLibrasOptativa,
     calculatedTotalHours: 0,
     calculatedPresentialHours: 0,
     calculatedEadHours: 0,
@@ -767,12 +927,16 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     dcns: structureDcns,
     cineBrasilRef,
     authorizationAct,
+    authorizationActs,
+    activeAuthorizationActId,
     recognitionPortaria: authorizationAct,
     createdAt: initialData?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
   const calculated = calculateStructureTotals(currentStructurePreview);
+  const parallelBranchKeys = listBranchKeys(modules);
+  const workloadBranchKey = getWorkloadBranchKey(modules);
 
   // Validation conditions
   const isChTotalValid = calculated.calculatedTotalHours >= calculated.requiredTotalHours;
@@ -1028,7 +1192,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         className={`${moduleAddButtonClass} bg-emerald-700`}
       >
         <GitBranch className="w-3.5 h-3.5" />
-        + Trilha A
+        + Ênfase I
       </button>
       <button
         type="button"
@@ -1036,22 +1200,219 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         className={`${moduleAddButtonClass} bg-purple-700`}
       >
         <GitBranch className="w-3.5 h-3.5" />
-        + Trilha B
+        + Ênfase II
       </button>
     </div>
   );
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleProfileDocImport = async (file: File) => {
+    setProfileDocBusy(true);
+    setProfileDocMsg(null);
+    try {
+      const result = await importProfilePedagogyFromWord(file);
+      const hasAspects = result.aspects.some((a) => a.title.trim() || a.text.trim());
+      const hasModPedagogy = result.modules.some(
+        (m) => m.competences.length > 0 || m.saberes.length > 0
+      );
+      if (!hasAspects && !hasModPedagogy) {
+        setProfileDocMsg({
+          type: 'err',
+          text:
+            result.warnings.join(' ') ||
+            'Nada reconhecido no documento. Veja o modelo sugerido.',
+        });
+        return;
+      }
+
+      let aspectsForLinks = profileAspects;
+      if (hasAspects) {
+        const replace =
+          profileAspects.every((a) => !a.title.trim() && !a.text.trim()) ||
+          window.confirm(
+            `Substituir os ${profileAspects.filter((a) => a.title || a.text).length} aspecto(s) atuais pelos ${result.aspects.length} do Word?`
+          );
+        if (replace) {
+          aspectsForLinks = result.aspects;
+          setProfileAspects(result.aspects);
+        } else {
+          aspectsForLinks = [
+            ...profileAspects.filter((a) => a.title || a.text),
+            ...result.aspects,
+          ];
+          setProfileAspects(aspectsForLinks);
+        }
+      }
+
+      let matchedMods = 0;
+      let compCount = 0;
+      let saberCount = 0;
+      let linkCount = 0;
+      const unmatched: string[] = [];
+
+      if (hasModPedagogy && structureType === 'modular') {
+        type Patch = {
+          competences?: ReturnType<typeof competenceTextsToItems>;
+          competencies?: ReturnType<typeof saberesToCompetencyCha>;
+        };
+        const patches = new Map<number, Patch>();
+
+        for (const block of result.modules) {
+          const idx = matchImportedModuleIndex(modules, block);
+          if (idx < 0) {
+            unmatched.push(
+              block.moduleNumber
+                ? `Módulo ${block.moduleNumber}`
+                : block.moduleTitleHint || 'módulo'
+            );
+            continue;
+          }
+          matchedMods++;
+          const patch: Patch = { ...(patches.get(idx) || {}) };
+          if (block.competences.length > 0) {
+            const items = competenceTextsToItems(block.competences, {
+              links: block.competenceAspectLinks,
+              aspects: aspectsForLinks,
+            });
+            patch.competences = items;
+            compCount += items.length;
+            linkCount += items.reduce((n, c) => n + (c.aspectIds?.length || 0), 0);
+          }
+          if (block.saberes.length > 0) {
+            const saberes = saberesToCompetencyCha(
+              block.saberes,
+              settings.pedagogicalNomenclature
+            );
+            patch.competencies = saberes;
+            saberCount += saberes.length;
+          }
+          patches.set(idx, patch);
+        }
+
+        if (patches.size > 0) {
+          setModules((prev) =>
+            prev.map((m, i) => {
+              const patch = patches.get(i);
+              if (!patch) return m;
+              return {
+                ...m,
+                ...(patch.competences
+                  ? { competences: patch.competences, competence: undefined }
+                  : {}),
+                ...(patch.competencies ? { competencies: patch.competencies } : {}),
+              };
+            })
+          );
+        }
+      } else if (hasModPedagogy && structureType !== 'modular') {
+        result.warnings.push(
+          'Competências/saberes por módulo só se aplicam em estrutura modular.'
+        );
+      }
+
+      const parts: string[] = [];
+      if (hasAspects) parts.push(`${result.aspects.length} aspecto(s) do perfil`);
+      if (matchedMods > 0) {
+        parts.push(
+          `${matchedMods} módulo(s): ${compCount} competência(s), ${saberCount} saber(es)`
+        );
+        if (linkCount > 0) {
+          parts.push(`${linkCount} vínculo(s) competência↔aspecto`);
+        }
+      }
+      if (unmatched.length) {
+        result.warnings.push(
+          `Não achei na estrutura: ${unmatched.join(', ')} — confira se os módulos já existem com o mesmo número.`
+        );
+      }
+
+      const warn = result.warnings.filter(Boolean);
+      setProfileDocMsg({
+        type: warn.length && parts.length ? 'warn' : parts.length ? 'ok' : 'err',
+        text:
+          (parts.length ? `Importado: ${parts.join(' · ')}.` : 'Nada aplicado.') +
+          (warn.length ? ` ${warn.join(' ')}` : ''),
+      });
+    } catch (err) {
+      console.error(err);
+      setProfileDocMsg({
+        type: 'err',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'Falha ao ler o Word. Prefira .docx.',
+      });
+    } finally {
+      setProfileDocBusy(false);
+    }
+  };
+
+  const handleFormSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!canSave) {
       setShowBlockersModal(true);
       return;
     }
-    await onSave(calculated);
+    if (isSavingStructure) return;
+    setIsSavingStructure(true);
+    try {
+      await onSave(calculated);
+    } catch (err) {
+      console.error(err);
+      // App já mostra toast de erro; garante que o botão não fica preso
+    } finally {
+      setIsSavingStructure(false);
+    }
+  };
+
+  const scrollPageTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const scrollPageBottom = () => {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+      {/* Atalhos flutuantes — sempre acessíveis em estruturas longas */}
+      <div className="fixed bottom-6 right-4 z-40 flex flex-col items-center gap-1.5 print:hidden">
+        <button
+          type="button"
+          onClick={scrollPageTop}
+          title="Ir ao topo"
+          className="w-9 h-9 rounded-full bg-white/95 border border-slate-200 text-slate-500 hover:text-[#002B49] hover:border-[#002B49]/40 shadow-md flex items-center justify-center transition"
+        >
+          <ArrowUp className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleFormSubmit()}
+          disabled={!canSave || isSavingStructure}
+          title={
+            isSavingStructure
+              ? 'Salvando…'
+              : canSave
+                ? 'Salvar estrutura'
+                : 'Há requisitos pendentes para salvar'
+          }
+          className="w-11 h-11 rounded-full bg-[#FF6B00] hover:bg-[#e05e00] text-white shadow-lg flex items-center justify-center transition disabled:opacity-45 disabled:cursor-not-allowed"
+        >
+          {isSavingStructure ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <Save className="w-5 h-5" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={scrollPageBottom}
+          title="Ir ao final"
+          className="w-9 h-9 rounded-full bg-white/95 border border-slate-200 text-slate-500 hover:text-[#002B49] hover:border-[#002B49]/40 shadow-md flex items-center justify-center transition"
+        >
+          <ArrowDown className="w-4 h-4" />
+        </button>
+      </div>
+
       {/* Top Banner */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
         <div className="flex flex-wrap items-center justify-between border-b border-slate-200 pb-4 gap-4">
@@ -1074,12 +1435,16 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             </button>
             <button
               type="button"
-              onClick={handleFormSubmit}
-              disabled={!canSave}
+              onClick={() => void handleFormSubmit()}
+              disabled={!canSave || isSavingStructure}
               className="px-5 py-2 rounded-lg bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-black transition flex items-center gap-1.5 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Save className="w-4 h-4" />
-              Salvar no Firebase
+              {isSavingStructure ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              {isSavingStructure ? 'Salvando…' : 'Salvar estrutura'}
             </button>
           </div>
         </div>
@@ -1158,7 +1523,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 <input
                   ref={seedFileRef}
                   type="file"
-                  accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
@@ -1183,10 +1548,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     <span className="block text-[11px] font-bold text-slate-700">
                       {seedImportBusy
                         ? 'Lendo arquivo…'
-                        : 'Importar Excel ou PDF para iniciar (opcional)'}
+                        : 'Importar Excel, Word ou PDF para iniciar (opcional)'}
                     </span>
                     <span className="block text-[10px] text-slate-500 mt-0.5 leading-snug">
-                      Aceita planilha de estrutura curricular (módulos + CH) ou relatório SAGA.
+                      Aceita planilha (.xlsx), Word (.docx/.doc) ou PDF com módulos e CH.
                     </span>
                   </span>
                 </button>
@@ -1268,13 +1633,23 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 Status da Estrutura
               </label>
               <select
-                value={status === 'Ativa' || status === 'Em Desativação' ? status : 'Ativa'}
-                onChange={(e) => setStatus(e.target.value as 'Ativa' | 'Em Desativação')}
+                value={status}
+                onChange={(e) =>
+                  setStatus(
+                    e.target.value as 'Ativa' | 'Em Desativação' | 'Em Elaboração' | 'Inativa'
+                  )
+                }
                 className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
               >
+                <option value="Em Elaboração">Em Elaboração</option>
                 <option value="Ativa">Ativa</option>
                 <option value="Em Desativação">Em Desativação</option>
+                <option value="Inativa">Inativa</option>
               </select>
+              <p className="mt-1 text-[10px] text-slate-500">
+                Novas estruturas começam em <strong>Em Elaboração</strong>. Altere para Ativa ou Em
+                Desativação quando for o caso.
+              </p>
               <label className="flex items-center gap-1.5 mt-1.5 text-[11px] text-slate-600 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1314,21 +1689,26 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               </div>
             </div>
 
-            {/* Ato Autorizativo */}
+            {/* Atos autorizativos por unidade */}
             <div className="md:col-span-2">
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Ato Autorizativo *
-              </label>
-              <input
-                type="text"
-                value={authorizationAct}
-                onChange={(e) => setAuthorizationAct(e.target.value)}
-                placeholder="Ex: Portaria SERES/MEC nº 123/2022"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
-                required
+              <AuthorizationActsEditor
+                acts={authorizationActs}
+                activeId={activeAuthorizationActId}
+                datalistId="campus-unit-suggestions-form"
+                onChange={(acts, activeId) => {
+                  setAuthorizationActs(acts);
+                  setActiveAuthorizationActId(activeId);
+                }}
               />
               <p className="text-[10px] text-slate-500 mt-1">
-                Valor cadastrado no curso (planilha) ou informado nesta estrutura.
+                A estrutura é a mesma; cada unidade pode ter seu ato. Marque “No documento” para
+                escolher qual aparece (pode trocar a qualquer momento).
+                {authorizationAct ? (
+                  <>
+                    {' '}
+                    Ativo: <strong className="text-slate-700">{authorizationAct}</strong>
+                  </>
+                ) : null}
               </p>
             </div>
 
@@ -1501,6 +1881,13 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                   {calculated.calculatedTotalHours}h {isChTotalValid ? '(OK)' : '(Insuficiente)'}
                 </span>
               </div>
+              {structureType === 'modular' && parallelBranchKeys.length > 1 && workloadBranchKey && (
+                <p className="text-[10px] text-slate-500 leading-snug">
+                  Ênfases {parallelBranchKeys.map((k) => formatBranchLabel(k)).join(' / ')} são
+                  equivalentes: a CH do curso conta o tronco +{' '}
+                  {formatBranchLabel(workloadBranchKey)} (não soma as paralelas).
+                </p>
+              )}
             </div>
 
             {/* Slider / Input % Presencial */}
@@ -1515,7 +1902,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     min={0}
                     max={100}
                     value={minPresentialHoursPercent}
-                    onChange={(e) => setMinPresentialHoursPercent(Number(e.target.value))}
+                    onChange={(e) => setLinkedPresentialPercent(Number(e.target.value))}
                     className="w-14 px-2 py-0.5 text-xs font-bold text-center border rounded bg-white"
                   />
                   <span className="text-xs font-bold">%</span>
@@ -1527,7 +1914,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 min={0}
                 max={100}
                 value={minPresentialHoursPercent}
-                onChange={(e) => setMinPresentialHoursPercent(Number(e.target.value))}
+                onChange={(e) => setLinkedPresentialPercent(Number(e.target.value))}
                 className="w-full accent-[#002B49] cursor-pointer"
               />
 
@@ -1551,7 +1938,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     min={0}
                     max={100}
                     value={maxEadHoursPercent}
-                    onChange={(e) => setMaxEadHoursPercent(Number(e.target.value))}
+                    onChange={(e) => setLinkedEadPercent(Number(e.target.value))}
                     className="w-14 px-2 py-0.5 text-xs font-bold text-center border rounded bg-white"
                   />
                   <span className="text-xs font-bold">%</span>
@@ -1563,7 +1950,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 min={0}
                 max={100}
                 value={maxEadHoursPercent}
-                onChange={(e) => setMaxEadHoursPercent(Number(e.target.value))}
+                onChange={(e) => setLinkedEadPercent(Number(e.target.value))}
                 className="w-full accent-[#FF6B00] cursor-pointer"
               />
 
@@ -1675,6 +2062,20 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             </div>
           </div>
 
+          <div className="bg-sky-50/80 p-4 rounded-xl border border-sky-200/80 space-y-2">
+            <label className="text-xs text-slate-800 font-semibold flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hasLibrasOptativa}
+                onChange={(e) => setHasLibrasOptativa(e.target.checked)}
+              />
+              Incluir Libras (Optativa) — 20h
+            </label>
+            <p className="text-[10px] text-slate-500 pl-6">
+              Aparece no resumo de carga horária e no mapa da trilha. Não contabiliza na CH total do curso.
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -1723,19 +2124,76 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
               <p className="text-xs text-slate-500 mt-1 max-w-3xl">
                 Cadastre o perfil em trechos (aspectos). Cada competência dos módulos poderá se
                 relacionar a um ou mais trechos — usado no mapa de competências e na impressão da
-                estrutura.
+                estrutura. Você também pode importar um Word com perfil, competências e saberes
+                dos módulos de uma vez.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                setProfileAspects((prev) => [...prev, createGraduateProfileAspect({ title: '', text: '' })])
-              }
-              className="text-[11px] font-bold text-[#FF6B00] hover:text-[#d95300]"
-            >
-              + Adicionar aspecto
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={profileDocRef}
+                type="file"
+                accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleProfileDocImport(file);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                disabled={profileDocBusy}
+                onClick={() => profileDocRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-slate-50 hover:bg-white text-[11px] font-bold text-[#002B49] disabled:opacity-60"
+              >
+                {profileDocBusy ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Upload className="w-3.5 h-3.5" />
+                )}
+                {profileDocBusy ? 'Lendo Word…' : 'Importar Word'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowProfileDocHelp((v) => !v)}
+                className="text-[11px] font-bold text-slate-500 hover:text-[#002B49]"
+              >
+                {showProfileDocHelp ? 'Ocultar modelo' : 'Ver modelo do documento'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setProfileAspects((prev) => [
+                    ...prev,
+                    createGraduateProfileAspect({ title: '', text: '' }),
+                  ])
+                }
+                className="text-[11px] font-bold text-[#FF6B00] hover:text-[#d95300]"
+              >
+                + Adicionar aspecto
+              </button>
+            </div>
           </div>
+
+          {showProfileDocHelp && (
+            <pre className="text-[10px] leading-relaxed text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 whitespace-pre-wrap font-sans">
+              {PROFILE_DOC_FORMAT_HINT}
+            </pre>
+          )}
+
+          {profileDocMsg && (
+            <p
+              className={`text-[11px] font-semibold leading-snug ${
+                profileDocMsg.type === 'ok'
+                  ? 'text-emerald-700'
+                  : profileDocMsg.type === 'warn'
+                    ? 'text-amber-700'
+                    : 'text-rose-700'
+              }`}
+            >
+              {profileDocMsg.text}
+            </p>
+          )}
 
           <div className="space-y-3">
             {profileAspects.map((asp, aIdx) => (
@@ -2107,7 +2565,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     <div className="flex items-center gap-2 min-w-0">
                       {mod.branch && (
                         <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-xs font-bold shrink-0">
-                          Trilha {mod.branch}
+                          {formatBranchLabel(mod.branch)}
                         </span>
                       )}
                       <span className="font-bold text-xs truncate">
@@ -2198,6 +2656,13 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             updated[mIdx].title = e.target.value;
                             setModules(updated);
                           }}
+                          onBlur={(e) => {
+                            const normalized = normalizeModuleTitle(e.target.value);
+                            if (normalized === modules[mIdx]?.title) return;
+                            const updated = [...modules];
+                            updated[mIdx] = { ...updated[mIdx], title: normalized };
+                            setModules(updated);
+                          }}
                           className="w-full px-3 py-1.5 border rounded text-xs bg-white"
                           required
                         />
@@ -2205,7 +2670,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Ramificação / Trilha
+                          Ênfase / Ramificação
                         </label>
                         <select
                           value={mod.branch || ''}
@@ -2238,8 +2703,8 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           className="w-full px-2 py-1.5 border rounded text-xs bg-white"
                         >
                           <option value="">Tronco Comum</option>
-                          <option value="A">Trilha A (ex: 9A, 10A)</option>
-                          <option value="B">Trilha B (ex: 9B, 10B)</option>
+                          <option value="A">Ênfase I</option>
+                          <option value="B">Ênfase II</option>
                         </select>
                       </div>
 
@@ -2827,6 +3292,37 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           </div>
         )}
 
+        {/* Quadros de resumo ao vivo — acompanhar preenchimento antes de salvar */}
+        {((structureType === 'modular' && modules.length > 0) ||
+          (structureType === 'disciplinar' && periods.length > 0)) && (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-2">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-[#002B49] flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#FF6B00]" />
+                Resumo de Carga Horária (ao vivo)
+              </h3>
+              <span className="text-[10px] font-semibold text-slate-500">
+                Atualiza conforme você preenche · Total apurado:{' '}
+                <strong className="text-[#FF6B00]">{calculated.calculatedTotalHours}h</strong>
+              </span>
+            </div>
+            <div
+              className={`grid gap-4 items-stretch ${
+                showsModuleMeetings(calculated)
+                  ? summaryPairGridClass(
+                      buildModuleMeetingsSummary(calculated)?.rows.length ?? 0
+                    )
+                  : 'grid-cols-1'
+              }`}
+            >
+              <WorkloadSummaryCard structure={calculated} className="w-full" />
+              {showsModuleMeetings(calculated) && (
+                <ModuleMeetingsSummaryCard structure={calculated} className="w-full" />
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Action bar at bottom */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex justify-between items-center">
           <button
@@ -3018,13 +3514,13 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
           onUpdateCourseDcns={async (cId, updatedDcns) => {
             setStructureDcns(updatedDcns);
             if (updatedDcns.length > 0) {
-              setDcnRef(updatedDcns[0].resolutionNumber || updatedDcns[0].title);
+              setDcnRef(dcnsToRefString(updatedDcns));
             }
           }}
           onUpdateStructureDcns={async (sId, updatedDcns) => {
             setStructureDcns(updatedDcns);
             if (updatedDcns.length > 0) {
-              setDcnRef(updatedDcns[0].resolutionNumber || updatedDcns[0].title);
+              setDcnRef(dcnsToRefString(updatedDcns));
             }
           }}
         />

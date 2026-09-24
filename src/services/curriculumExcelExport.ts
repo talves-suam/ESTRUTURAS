@@ -12,7 +12,9 @@ import {
 } from '../types/curriculum';
 import { buildWorkloadSummary, buildModuleMeetingsSummary } from './workloadSummary';
 import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
-import { formatModuleName, toRoman } from '../utils/roman';
+import { formatModuleName, toRoman, formatBranchLabel } from '../utils/roman';
+import { formatDcnsDisplayLabel } from '../utils/courseBatch';
+import { getActiveAuthorizationActLabel } from '../utils/authorizationActs';
 import { getModularComponents } from '../utils/modularComponents';
 import logoUnisuamUrl from '../assets/logo-unisuam.png';
 
@@ -167,8 +169,8 @@ async function buildCurriculumIdentificationSheet(
   row++;
 
   ws.mergeCells(row, 1, row, lastCol);
-  const ato = structure.authorizationAct || structure.recognitionPortaria || '—';
-  const dcn = structure.dcnRef || '—';
+  const ato = getActiveAuthorizationActLabel(structure);
+  const dcn = formatDcnsDisplayLabel(structure.dcns, structure.dcnRef);
   ws.getCell(row, 1).value =
     `Código: ${structure.code}  |  Curso e Modalidade: ${structure.courseName} (${structure.modality})  |  Ato Autorizativo: ${ato}  |  DCN do Curso: ${dcn}`;
   ws.getCell(row, 1).font = { size: 11, italic: true, color: { argb: C.navy } };
@@ -498,9 +500,9 @@ export async function exportCurriculumToXlsx(
     ],
     [
       'Ato Autorizativo:',
-      structure.authorizationAct || structure.recognitionPortaria || '-',
+      getActiveAuthorizationActLabel(structure),
       'DCN do Curso:',
-      structure.dcnRef || '—',
+      formatDcnsDisplayLabel(structure.dcns, structure.dcnRef),
     ],
     [
       'Tipo de Estrutura:',
@@ -576,17 +578,17 @@ export async function exportCurriculumToXlsx(
     !structure.hideCompetenciesInReport
   ) {
     const saberRows: (string | number)[][] = [
-      ['Módulo', 'Código do Módulo', 'Trilha / Ramificação', 'Categoria', 'Descrição'],
+      ['Módulo', 'Código do Módulo', 'Ênfase / Ramificação', 'Categoria', 'Descrição'],
     ];
     let hasSaberes = false;
     structure.modules.forEach((mod) => {
       const branchText = mod.branch
-        ? `Trilha ${mod.branch}${mod.branchName ? ` — ${mod.branchName}` : ''}`
+        ? `${formatBranchLabel(mod.branch)}${mod.branchName ? ` — ${mod.branchName}` : ''}`
         : 'Tronco Comum';
       (mod.competencies || []).forEach((comp) => {
         hasSaberes = true;
         saberRows.push([
-          formatModuleName(mod.number, mod.title),
+          formatModuleName(mod.number, mod.title, mod.branch),
           mod.code,
           branchText,
           labelForCategory(comp.category, settings?.pedagogicalNomenclature),
@@ -618,7 +620,7 @@ export async function exportCurriculumToXlsx(
       [],
       ['Componentes', ...componentRows.map((r) => r.shortLabel || r.label)],
       ['Hora-relógio', ...componentRows.map((r) => r.hours)],
-      ['Percentual', ...componentRows.map((r) => pct(r.percent))],
+      ['Percentual', ...componentRows.map((r) => (r.excludeFromTotal ? '—' : pct(r.percent)))],
       ...(totalRow ? [['Total', totalRow.hours]] : []),
     ];
     chRows.forEach((r, i) =>

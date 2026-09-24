@@ -1,5 +1,7 @@
 import React from 'react';
 import { CurriculumStructure } from '../types/curriculum';
+import { formatDcnsDisplayLabel } from '../utils/courseBatch';
+import { getActiveAuthorizationActLabel } from '../utils/authorizationActs';
 import logoUnisuam from '../assets/logo-unisuam.png';
 
 interface StructureOfficialHeaderProps {
@@ -75,13 +77,13 @@ export const StructureOfficialHeader: React.FC<StructureOfficialHeaderProps> = (
       <div>
         <span className="text-slate-400 block font-medium text-[14px]">Ato Autorizativo:</span>
         <span className="font-semibold text-slate-800 leading-snug">
-          {structure.authorizationAct || structure.recognitionPortaria || '—'}
+          {getActiveAuthorizationActLabel(structure)}
         </span>
       </div>
       <div>
         <span className="text-slate-400 block font-medium text-[14px]">DCN do Curso:</span>
         <span className="font-semibold text-slate-800 leading-snug">
-          {structure.dcnRef || '—'}
+          {formatDcnsDisplayLabel(structure.dcns, structure.dcnRef)}
         </span>
       </div>
       <div>

@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Course, DcnDocument, CurriculumStructure } from '../types/curriculum';
 import { generateOfficialDcnPdf, getSampleDcnsForCourse } from '../services/dcnService';
-import { googleDrivePreviewUrl } from '../utils/courseBatch';
+import {
+  extractUrlsFromCell,
+  googleDriveFileId,
+  normalizeGoogleDriveUrl,
+  parseDcnsFromNameAndLinkCells,
+  resolveDcnDownloadUrl,
+  resolveDcnEmbedUrl,
+  resolveDcnOpenUrl,
+} from '../utils/courseBatch';
 import { 
   FileText, 
   Download, 
@@ -17,7 +25,9 @@ import {
   FileCheck,
   Sparkles,
   Layers,
-  ChevronRight
+  ChevronRight,
+  Pencil,
+  Check,
 } from 'lucide-react';
 
 interface DcnViewerModalProps {
@@ -27,6 +37,28 @@ interface DcnViewerModalProps {
   onClose: () => void;
   onUpdateCourseDcns?: (courseId: string, updatedDcns: DcnDocument[]) => Promise<void>;
   onUpdateStructureDcns?: (structureId: string, updatedDcns: DcnDocument[]) => Promise<void>;
+}
+
+/** Monta lista de DCNs a partir de links já cadastrados (Drive / URL), sem PDF embutido. */
+function dcnsFromLegacyLinks(
+  course: Course | null | undefined,
+  structure: CurriculumStructure | null | undefined
+): DcnDocument[] {
+  const names = [course?.activeDcn, structure?.dcnRef].filter(Boolean).join(' | ');
+  const links = [course?.dcnLink, structure?.dcnRef].filter(Boolean).join('\n');
+  const fromCells = parseDcnsFromNameAndLinkCells(names, links);
+  if (fromCells.length) return fromCells;
+  const urls = extractUrlsFromCell(course?.dcnLink || '');
+  return urls.map((url, i) => ({
+    id: `dcn-drive-${i}-${googleDriveFileId(url) || i}`,
+    title: course?.activeDcn || `DCN ${i + 1} (Google Drive)`,
+    resolutionNumber: course?.activeDcn || `DCN ${i + 1}`,
+    description: 'Documento hospedado no Google Drive',
+    pdfUrl: normalizeGoogleDriveUrl(url),
+    fileName: 'documento-drive.pdf',
+    isMain: i === 0,
+    uploadedAt: new Date().toISOString().split('T')[0],
+  }));
 }
 
 export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
@@ -56,9 +88,13 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
   const [newFileName, setNewFileName] = useState('');
   const [newFileSize, setNewFileSize] = useState('');
   const [isMainDcn, setIsMainDcn] = useState(false);
-  const [uploadMode, setUploadMode] = useState<'file' | 'generate' | 'url'>('file');
+  const [uploadMode, setUploadMode] = useState<'file' | 'generate' | 'url'>('url');
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [editingDcnId, setEditingDcnId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editResolution, setEditResolution] = useState('');
+  const [isRenaming, setIsRenaming] = useState(false);
 
   // Initialize DCNs when modal opens
   useEffect(() => {
@@ -70,9 +106,22 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
     } else if (course?.dcns && course.dcns.length > 0) {
       initialList = course.dcns;
     } else {
-      // Load bundled sample DCNs for this specific course
-      initialList = getSampleDcnsForCourse(courseCode, courseName);
+      const fromLinks = dcnsFromLegacyLinks(course, structure);
+      if (fromLinks.length > 0) {
+        initialList = fromLinks;
+      } else {
+        // Amostra só se não houver nenhum link cadastrado
+        initialList = getSampleDcnsForCourse(courseCode, courseName);
+      }
     }
+
+    // Garante URLs do Drive normalizadas (links estáveis; preview no iframe)
+    initialList = initialList.map((d) => {
+      const url = (d.pdfUrl || '').trim();
+      if (!url || url.startsWith('data:')) return d;
+      if (!googleDriveFileId(url)) return d;
+      return { ...d, pdfUrl: normalizeGoogleDriveUrl(url) };
+    });
 
     setDcns(initialList);
     if (initialList.length > 0) {
@@ -83,6 +132,10 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
   if (!isOpen) return null;
 
   const selectedDcn = dcns.find((d) => d.id === selectedDcnId) || dcns[0];
+  const embedSrc = resolveDcnEmbedUrl(selectedDcn?.pdfUrl);
+  const openSrc = resolveDcnOpenUrl(selectedDcn?.pdfUrl);
+  const downloadSrc = resolveDcnDownloadUrl(selectedDcn?.pdfUrl);
+  const isDriveDoc = Boolean(selectedDcn?.pdfUrl && googleDriveFileId(selectedDcn.pdfUrl));
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -116,11 +169,22 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
     }
 
     setIsSaving(true);
-    let finalPdfUrl = newPdfUrl;
+    let finalPdfUrl = newPdfUrl.trim();
     let fileName = newFileName || `${newTitle.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
-    let fileSize = newFileSize || '380 KB';
+    let fileSize = newFileSize || '';
 
-    if (uploadMode === 'generate' || !finalPdfUrl) {
+    if (uploadMode === 'url') {
+      if (!finalPdfUrl) {
+        setIsSaving(false);
+        alert('Cole o link de compartilhamento do Google Drive (ou URL pública do PDF).');
+        return;
+      }
+      finalPdfUrl = normalizeGoogleDriveUrl(finalPdfUrl);
+      fileName = googleDriveFileId(finalPdfUrl)
+        ? 'documento-google-drive.pdf'
+        : fileName || 'documento.pdf';
+      fileSize = googleDriveFileId(finalPdfUrl) ? 'Google Drive' : fileSize || 'URL';
+    } else if (uploadMode === 'generate' || !finalPdfUrl) {
       // Generate official PDF on the fly using jsPDF
       finalPdfUrl = generateOfficialDcnPdf(
         courseName,
@@ -137,7 +201,11 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
       title: newTitle.trim(),
       resolutionNumber: newResolution.trim() || newTitle.trim(),
       year: newYear.trim() || new Date().getFullYear().toString(),
-      description: newDescription.trim() || `Diretriz Curricular Nacional vinculada ao curso ${courseName}.`,
+      description:
+        newDescription.trim() ||
+        (googleDriveFileId(finalPdfUrl)
+          ? 'Documento hospedado no Google Drive'
+          : `Diretriz Curricular Nacional vinculada ao curso ${courseName}.`),
       pdfUrl: finalPdfUrl,
       fileName,
       fileSize,
@@ -152,13 +220,7 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
     setDcns(updated);
     setSelectedDcnId(newDcn.id);
 
-    // Save to persistence
-    if (onUpdateCourseDcns && courseId) {
-      await onUpdateCourseDcns(courseId, updated);
-    }
-    if (onUpdateStructureDcns && structure?.id) {
-      await onUpdateStructureDcns(structure.id, updated);
-    }
+    await persistDcns(updated);
 
     setIsSaving(false);
     setActiveTab('view');
@@ -173,6 +235,50 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
     setNewFileName('');
     setNewFileSize('');
     setIsMainDcn(false);
+    setUploadMode('url');
+  };
+
+  const persistDcns = async (updated: DcnDocument[]) => {
+    if (onUpdateCourseDcns && courseId) {
+      await onUpdateCourseDcns(courseId, updated);
+    }
+    if (onUpdateStructureDcns && structure?.id) {
+      await onUpdateStructureDcns(structure.id, updated);
+    }
+  };
+
+  const startRenameDcn = (dcn: DcnDocument) => {
+    setEditingDcnId(dcn.id);
+    setEditTitle(dcn.title || '');
+    setEditResolution(dcn.resolutionNumber || '');
+  };
+
+  const cancelRenameDcn = () => {
+    setEditingDcnId(null);
+    setEditTitle('');
+    setEditResolution('');
+  };
+
+  const handleSaveRename = async () => {
+    if (!editingDcnId) return;
+    const title = editTitle.trim();
+    if (!title) {
+      alert('Informe um nome para a DCN.');
+      return;
+    }
+    setIsRenaming(true);
+    const resolution = editResolution.trim() || title;
+    const updated = dcns.map((d) =>
+      d.id === editingDcnId
+        ? { ...d, title, resolutionNumber: resolution }
+        : d
+    );
+    setDcns(updated);
+    await persistDcns(updated);
+    setIsRenaming(false);
+    cancelRenameDcn();
+    setSuccessMessage('Nome da DCN atualizado.');
+    setTimeout(() => setSuccessMessage(null), 2500);
   };
 
   const handleDeleteDcn = async (id: string) => {
@@ -183,20 +289,24 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
     if (selectedDcnId === id && updated.length > 0) {
       setSelectedDcnId(updated[0].id);
     }
+    if (editingDcnId === id) cancelRenameDcn();
 
-    if (onUpdateCourseDcns && courseId) {
-      await onUpdateCourseDcns(courseId, updated);
-    }
-    if (onUpdateStructureDcns && structure?.id) {
-      await onUpdateStructureDcns(structure.id, updated);
-    }
+    await persistDcns(updated);
   };
 
   const openInNewTab = (pdfUrl: string) => {
+    const src = resolveDcnOpenUrl(pdfUrl) || pdfUrl;
+    if (!src) return;
+    // Preview do Drive em aba própria (documento embutido, não a página de compartilhamento)
+    if (googleDriveFileId(src)) {
+      window.open(src, '_blank', 'noopener,noreferrer');
+      return;
+    }
     const win = window.open();
     if (win) {
+      const safe = src.replace(/"/g, '&quot;');
       win.document.write(
-        `<iframe src="${pdfUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`
+        `<iframe src="${safe}" frameborder="0" style="border:0;top:0;left:0;bottom:0;right:0;width:100%;height:100%" allowfullscreen></iframe>`
       );
       win.document.title = selectedDcn?.title || 'DCN PDF UNISUAM';
     }
@@ -278,66 +388,136 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                 <div className="p-2 space-y-2 flex-1">
                   {dcns.map((dcn) => {
                     const isSelected = dcn.id === selectedDcnId;
+                    const isEditing = editingDcnId === dcn.id;
                     return (
                       <div
                         key={dcn.id}
-                        onClick={() => setSelectedDcnId(dcn.id)}
-                        className={`p-3 rounded-xl border text-xs cursor-pointer transition relative group ${
+                        onClick={() => {
+                          if (!isEditing) setSelectedDcnId(dcn.id);
+                        }}
+                        className={`p-3 rounded-xl border text-xs transition relative group ${
                           isSelected
                             ? 'bg-white border-[#FF6B00] shadow-md ring-1 ring-[#FF6B00]'
                             : 'bg-white/70 border-slate-200 hover:bg-white hover:border-slate-300'
-                        }`}
+                        } ${isEditing ? '' : 'cursor-pointer'}`}
                       >
-                        <div className="flex items-start justify-between gap-1">
-                          <div className="space-y-0.5 flex-1 pr-4">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-mono font-bold text-slate-800 text-[11px]">
-                                {dcn.resolutionNumber || 'DCN Oficial'}
-                              </span>
-                              {dcn.year && (
-                                <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
-                                  {dcn.year}
-                                </span>
-                              )}
-                              {dcn.isMain && (
-                                <span className="text-[9px] font-extrabold text-[#002B49] bg-blue-100 px-1.5 py-0.2 rounded border border-blue-200">
-                                  Principal
-                                </span>
-                              )}
-                            </div>
-                            <h4 className="font-semibold text-slate-700 text-[11px] line-clamp-2 leading-tight">
-                              {dcn.title}
-                            </h4>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteDcn(dcn.id);
-                            }}
-                            className="text-slate-400 hover:text-rose-600 p-1 opacity-0 group-hover:opacity-100 transition"
-                            title="Remover DCN"
+                        {isEditing ? (
+                          <div
+                            className="space-y-2"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
+                                Nome de apresentação
+                              </label>
+                              <input
+                                type="text"
+                                value={editTitle}
+                                onChange={(e) => setEditTitle(e.target.value)}
+                                autoFocus
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-[11px] font-semibold text-slate-900 focus:ring-2 focus:ring-[#002B49] focus:border-[#002B49]"
+                                placeholder="Ex: DCN Administração 2005"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
+                                Resolução / referência
+                              </label>
+                              <input
+                                type="text"
+                                value={editResolution}
+                                onChange={(e) => setEditResolution(e.target.value)}
+                                className="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-[11px] text-slate-800 focus:ring-2 focus:ring-[#002B49]"
+                                placeholder="Ex: Resolução CNE/CES nº 4/2005"
+                              />
+                            </div>
+                            <div className="flex items-center justify-end gap-1.5 pt-0.5">
+                              <button
+                                type="button"
+                                onClick={cancelRenameDcn}
+                                className="px-2 py-1 rounded-md text-[10px] font-bold text-slate-600 hover:bg-slate-100"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isRenaming}
+                                onClick={() => void handleSaveRename()}
+                                className="px-2.5 py-1 rounded-md bg-[#FF6B00] hover:bg-[#e05e00] text-white text-[10px] font-bold flex items-center gap-1 disabled:opacity-50"
+                              >
+                                <Check className="w-3 h-3" />
+                                Salvar
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-start justify-between gap-1">
+                              <div className="space-y-0.5 flex-1 pr-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-mono font-bold text-slate-800 text-[11px]">
+                                    {dcn.resolutionNumber || 'DCN Oficial'}
+                                  </span>
+                                  {dcn.year && (
+                                    <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
+                                      {dcn.year}
+                                    </span>
+                                  )}
+                                  {dcn.isMain && (
+                                    <span className="text-[9px] font-extrabold text-[#002B49] bg-blue-100 px-1.5 py-0.2 rounded border border-blue-200">
+                                      Principal
+                                    </span>
+                                  )}
+                                </div>
+                                <h4 className="font-semibold text-slate-700 text-[11px] line-clamp-2 leading-tight">
+                                  {dcn.title}
+                                </h4>
+                              </div>
 
-                        {dcn.description && (
-                          <p className="text-[10px] text-slate-500 mt-1 line-clamp-2 italic">
-                            {dcn.description}
-                          </p>
+                              <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100 transition">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDcnId(dcn.id);
+                                    startRenameDcn(dcn);
+                                  }}
+                                  className="text-slate-400 hover:text-[#002B49] p-1"
+                                  title="Alterar nome"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteDcn(dcn.id);
+                                  }}
+                                  className="text-slate-400 hover:text-rose-600 p-1"
+                                  title="Remover DCN"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {dcn.description && (
+                              <p className="text-[10px] text-slate-500 mt-1 line-clamp-2 italic">
+                                {dcn.description}
+                              </p>
+                            )}
+
+                            <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+                              <span className="flex items-center gap-1">
+                                <FileText className="w-3 h-3 text-red-500" />
+                                {dcn.fileSize || 'PDF'}
+                              </span>
+                              <span className="font-bold text-[#FF6B00]">
+                                {isSelected ? 'Visualizando' : 'Clique p/ abrir'}
+                              </span>
+                            </div>
+                          </>
                         )}
-
-                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
-                          <span className="flex items-center gap-1">
-                            <FileText className="w-3 h-3 text-red-500" />
-                            {dcn.fileSize || 'PDF'}
-                          </span>
-                          <span className="font-bold text-[#FF6B00]">
-                            {isSelected ? 'Visualizando' : 'Clique p/ abrir'}
-                          </span>
-                        </div>
                       </div>
                     );
                   })}
@@ -381,13 +561,30 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                         </h4>
                         <span className="text-[10px] text-slate-500">
                           {selectedDcn.resolutionNumber} • Publicação: {selectedDcn.year || 'MEC/CNE'}
+                          {isDriveDoc ? ' • Google Drive' : ''}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => startRenameDcn(selectedDcn)}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 border border-slate-300"
+                          title="Alterar nome de apresentação"
+                        >
+                          <Pencil className="w-3.5 h-3.5 text-slate-600" />
+                          Renomear
+                        </button>
+
                         <a
-                          href={selectedDcn.pdfUrl}
-                          download={selectedDcn.fileName || `${selectedDcn.resolutionNumber}.pdf`}
+                          href={downloadSrc || selectedDcn.pdfUrl}
+                          download={
+                            isDriveDoc
+                              ? undefined
+                              : selectedDcn.fileName || `${selectedDcn.resolutionNumber}.pdf`
+                          }
+                          target={isDriveDoc ? '_blank' : undefined}
+                          rel={isDriveDoc ? 'noopener noreferrer' : undefined}
                           className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 border border-slate-300"
                           title="Baixar arquivo PDF"
                         >
@@ -396,7 +593,7 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                         </a>
 
                         <button
-                          onClick={() => openInNewTab(selectedDcn.pdfUrl)}
+                          onClick={() => openInNewTab(openSrc || selectedDcn.pdfUrl)}
                           className="px-2.5 py-1.5 rounded-lg bg-[#002B49] hover:bg-[#003860] text-white text-xs font-semibold flex items-center gap-1 shadow-2xs"
                           title="Abrir PDF em tela cheia / nova aba"
                         >
@@ -406,16 +603,28 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                       </div>
                     </div>
 
-                    {/* PDF Embedded Frame */}
+                    {/* PDF Embedded Frame — preview do Drive mostra o documento, não a página de link */}
                     <div className="flex-1 p-2 sm:p-3 relative bg-slate-200 overflow-hidden">
-                      <iframe
-                        src={
-                          googleDrivePreviewUrl(selectedDcn.pdfUrl) || selectedDcn.pdfUrl
-                        }
-                        className="w-full h-full rounded-xl border border-slate-300 bg-white shadow-inner"
-                        title={selectedDcn.title}
-                        allow="autoplay"
-                      />
+                      {embedSrc ? (
+                        <iframe
+                          key={selectedDcn.id}
+                          src={embedSrc}
+                          className="w-full h-full rounded-xl border border-slate-300 bg-white shadow-inner"
+                          title={selectedDcn.title}
+                          allow="autoplay"
+                        />
+                      ) : (
+                        <div className="w-full h-full rounded-xl border border-dashed border-slate-300 bg-white flex flex-col items-center justify-center gap-2 p-6 text-center">
+                          <AlertCircle className="w-8 h-8 text-amber-500" />
+                          <p className="text-sm font-semibold text-slate-700">
+                            Sem link do documento
+                          </p>
+                          <p className="text-xs text-slate-500 max-w-sm">
+                            Cadastre o link de compartilhamento do Google Drive desta DCN para
+                            visualizá-la aqui.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -504,12 +713,23 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                     />
                   </div>
 
-                  {/* Mode Selector for PDF */}
+                  {/* Fonte: prioriza Google Drive (arquivo fica hospedado lá; aqui só o link) */}
                   <div>
                     <label className="block font-bold text-slate-700 mb-2">
                       Fonte do Documento PDF *
                     </label>
                     <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setUploadMode('url')}
+                        className={`p-2.5 rounded-lg border text-center font-bold transition ${
+                          uploadMode === 'url'
+                            ? 'bg-[#002B49] text-white border-[#002B49]'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        Google Drive
+                      </button>
                       <button
                         type="button"
                         onClick={() => setUploadMode('file')}
@@ -532,21 +752,30 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                       >
                         Gerar Oficial MEC
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setUploadMode('url')}
-                        className={`p-2.5 rounded-lg border text-center font-bold transition ${
-                          uploadMode === 'url'
-                            ? 'bg-[#002B49] text-white border-[#002B49]'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        Link / URL
-                      </button>
                     </div>
                   </div>
 
-                  {/* Upload File Input */}
+                  {uploadMode === 'url' && (
+                    <div className="space-y-2">
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Link de compartilhamento do Google Drive *
+                      </label>
+                      <input
+                        type="url"
+                        required
+                        placeholder="https://drive.google.com/file/d/.../view?usp=sharing"
+                        value={newPdfUrl}
+                        onChange={(e) => setNewPdfUrl(e.target.value)}
+                        className="w-full px-3 py-2 border rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
+                      />
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        O PDF continua no Drive. Aqui guardamos só o link e a janela de DCN mostra o
+                        documento (preview), não a página “Abrir no Drive”. Compartilhe o arquivo como
+                        “qualquer pessoa com o link”.
+                      </p>
+                    </div>
+                  )}
+
                   {uploadMode === 'file' && (
                     <div className="border-2 border-dashed border-slate-300 rounded-xl p-5 text-center bg-slate-50 hover:bg-slate-100 transition">
                       <input
@@ -559,10 +788,13 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                       <label htmlFor="dcn-pdf-upload" className="cursor-pointer space-y-2 block">
                         <UploadCloud className="w-8 h-8 text-[#FF6B00] mx-auto" />
                         <span className="font-bold text-slate-800 block text-xs">
-                          {newFileName ? `Arquivo: ${newFileName} (${newFileSize})` : 'Clique para selecionar o PDF da DCN ou arraste aqui'}
+                          {newFileName
+                            ? `Arquivo: ${newFileName} (${newFileSize})`
+                            : 'Clique para selecionar o PDF da DCN ou arraste aqui'}
                         </span>
-                        <span className="text-[11px] text-slate-500 block">
-                          Formato aceito: .pdf • Visualização em tempo real na ferramenta
+                        <span className="text-[11px] text-amber-700 block">
+                          Preferível: hospede no Google Drive e use a opção “Google Drive” — upload
+                          embutido não sincroniza bem entre computadores.
                         </span>
                       </label>
                     </div>
@@ -575,23 +807,10 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
                         <span>Gerador Normativo Oficial MEC / CNE</span>
                       </div>
                       <p className="text-[11px] text-slate-600 leading-relaxed">
-                        O sistema gerará um PDF autêntico e diagramado no padrão oficial da República Federativa do Brasil, com artigos pedagógicos, indissociabilidade de extensão (10%) e competências CHA para <strong>{courseName}</strong>.
+                        O sistema gerará um PDF autêntico e diagramado no padrão oficial da República
+                        Federativa do Brasil, com artigos pedagógicos, indissociabilidade de extensão
+                        (10%) e competências CHA para <strong>{courseName}</strong>.
                       </p>
-                    </div>
-                  )}
-
-                  {uploadMode === 'url' && (
-                    <div>
-                      <label className="block font-bold text-slate-700 mb-1">
-                        URL Pública do PDF
-                      </label>
-                      <input
-                        type="url"
-                        placeholder="https://portal.mec.gov.br/cne/arquivos/pdf/..."
-                        value={newPdfUrl}
-                        onChange={(e) => setNewPdfUrl(e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-[#002B49]"
-                      />
                     </div>
                   )}
 

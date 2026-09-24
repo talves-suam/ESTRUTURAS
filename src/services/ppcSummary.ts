@@ -8,6 +8,8 @@ import {
   ASPECT_BADGE_COLORS,
 } from '../types/curriculum';
 import { formatModuleName } from '../utils/roman';
+import { formatDcnsDisplayLabel } from '../utils/courseBatch';
+import { getActiveAuthorizationActLabel } from '../utils/authorizationActs';
 
 export const PPC_SUMMARY_PAGE_TITLE = 'Perfil do Egresso';
 
@@ -223,12 +225,14 @@ export function renderPpcSummaryPageHtml(
       <div style="flex:1 1 160px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Ato Autorizativo:</span>
         <span style="font-weight:600;color:#1e293b;">${escapeHtml(
-          structure.authorizationAct || structure.recognitionPortaria || '—'
+          getActiveAuthorizationActLabel(structure)
         )}</span>
       </div>
       <div style="flex:1 1 160px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">DCN do Curso:</span>
-        <span style="font-weight:600;color:#1e293b;">${escapeHtml(structure.dcnRef || '—')}</span>
+        <span style="font-weight:600;color:#1e293b;">${escapeHtml(
+          formatDcnsDisplayLabel(structure.dcns, structure.dcnRef)
+        )}</span>
       </div>
       <div style="flex:1 1 160px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Código da Estrutura:</span>

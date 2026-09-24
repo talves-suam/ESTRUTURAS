@@ -17,6 +17,9 @@ node_modules/
 firebase-adminsdk*.json
 firebase-applet-config.json
 
+# Senha/host MySQL — use config.example.php no repositório
+public/api/config.php
+
 # Artefatos locais
 .vscode/
 .idea/

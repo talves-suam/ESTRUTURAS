@@ -1,0 +1,13 @@
+# API PHP — não listar pasta; bloquear config
+Options -Indexes
+
+<IfModule mod_authz_core.c>
+    <FilesMatch "^(config\.php|config\.example\.php|bootstrap\.php|auth_lib\.php|schema\.sql)$">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(config|bootstrap|auth_lib)\.php$ - [F,L]
+</IfModule>

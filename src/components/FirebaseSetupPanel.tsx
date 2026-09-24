@@ -80,10 +80,13 @@ export const FirebaseSetupPanel: React.FC<FirebaseSetupPanelProps> = ({
         <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900 space-y-1">
           <p className="font-bold flex items-center gap-1.5">
             <CheckCircle2 className="w-4 h-4" />
-            Conectado ao servidor
+            Conectado ao Firebase
             {projectId ? ` (${projectId})` : ''}
           </p>
-          <p>Pode cadastrar estruturas normalmente — tudo já é compartilhado.</p>
+          <p>
+            Auth Google (@unisuam.edu.br) + Firestore no plano Spark. Sync enxuto (só o que mudou;
+            PDFs embutidos não sobem para a nuvem).
+          </p>
         </div>
       ) : (
         <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-950 flex items-start gap-2">

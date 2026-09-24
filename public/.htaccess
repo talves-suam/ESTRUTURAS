@@ -18,8 +18,9 @@ DirectoryIndex index.php index.html
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # Bloqueia arquivos de ambiente
+    # Bloqueia arquivos de ambiente e config MySQL se expostos na raiz
     RewriteRule (^|/)\.env - [F,L]
+    RewriteRule (^|/)api/config\.php$ - [F,L]
 
     # Arquivo ou pasta existente: servir direto (assets/*.js, *.css, imagens)
     RewriteCond %{REQUEST_FILENAME} -f [OR]

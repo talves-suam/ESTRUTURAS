@@ -1,5 +1,6 @@
 import { initializeApp, getApps, deleteApp, type FirebaseOptions } from 'firebase/app';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getAuth, type Auth } from 'firebase/auth';
 import { getBuiltInFirebaseConfig, hasBuiltInFirebaseConfig } from './projectConfig';
 
 /**
@@ -20,12 +21,17 @@ export type FirebaseClientConfig = {
   firestoreDatabaseId?: string;
 };
 
-/** Regras abertas para o time interno. Publique isto no Console do Firebase. */
+/** Regras: só @unisuam.edu.br autenticado. Publique no Console (troca o allow if true). */
 export const FIRESTORE_TEST_RULES = `rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isUnisuam() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.matches('.*@unisuam\\\\.edu\\\\.br$');
+    }
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if isUnisuam();
     }
   }
 }`;
@@ -194,25 +200,31 @@ function toFirebaseOptions(config: FirebaseClientConfig): FirebaseOptions {
   };
 }
 
-function bootFirebase(config: FirebaseClientConfig | null): { db: Firestore | null; configured: boolean } {
+function bootFirebase(config: FirebaseClientConfig | null): {
+  db: Firestore | null;
+  auth: Auth | null;
+  configured: boolean;
+} {
   if (!config) {
-    return { db: null, configured: false };
+    return { db: null, auth: null, configured: false };
   }
   try {
     const app = getApps().find((item) => item.name === '[DEFAULT]') ?? initializeApp(toFirebaseOptions(config));
     const instance = config.firestoreDatabaseId
       ? getFirestore(app, config.firestoreDatabaseId)
       : getFirestore(app);
-    return { db: instance, configured: true };
+    const authInstance = getAuth(app);
+    return { db: instance, auth: authInstance, configured: true };
   } catch (err) {
     console.error('[Firebase] falha ao iniciar', err);
-    return { db: null, configured: false };
+    return { db: null, auth: null, configured: false };
   }
 }
 
 const initialBoot = bootFirebase(getFirebaseClientConfig());
 
 export let db: Firestore | null = initialBoot.db;
+export let auth: Auth | null = initialBoot.auth;
 export let isFirebaseConfigured = initialBoot.configured;
 
 function emitFirebaseChanged() {
@@ -227,6 +239,7 @@ async function resetFirebaseApp(): Promise<void> {
     await deleteApp(existing);
   }
   db = null;
+  auth = null;
   isFirebaseConfigured = false;
 }
 
@@ -235,6 +248,7 @@ export async function applyRuntimeFirebaseConfig(config: FirebaseClientConfig): 
   await resetFirebaseApp();
   const next = bootFirebase(config);
   db = next.db;
+  auth = next.auth;
   isFirebaseConfigured = next.configured;
   if (!isFirebaseConfigured) {
     throw new Error('Não foi possível ligar o Firebase com esses dados. Confira o que foi colado.');
@@ -250,6 +264,7 @@ export async function clearRuntimeFirebaseConfig(): Promise<void> {
   await resetFirebaseApp();
   const next = bootFirebase(getBuiltInFirebaseConfig() || configFromEnv());
   db = next.db;
+  auth = next.auth;
   isFirebaseConfigured = next.configured;
   emitFirebaseChanged();
 }

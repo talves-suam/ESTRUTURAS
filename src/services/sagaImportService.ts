@@ -11,6 +11,12 @@ import {
   KnowledgeItem,
 } from '../types/curriculum';
 import { syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
+import { normalizeModuleTitle, formatBranchLabel } from '../utils/roman';
+import {
+  parseEnfaseOrTrilhaHeader,
+  parseModuleHeaderLine,
+  linkModularParents,
+} from '../utils/modularBranches';
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -66,6 +72,197 @@ export async function extractTextFromPdf(data: ArrayBuffer): Promise<string> {
   return pages.join('\n');
 }
 
+/**
+ * Extrai o PDF como matriz (linhas × células) usando posição X/Y dos glyphs.
+ * Melhora a leitura de tabelas de CH presencial / a distância.
+ */
+export async function extractPdfMatrix(data: ArrayBuffer): Promise<string[][]> {
+  const pdf = await getDocument({ data: new Uint8Array(data) }).promise;
+  const matrix: string[][] = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const content = await page.getTextContent();
+    matrix.push(...itemsToMatrixRows(content.items as TextContentItem[]));
+  }
+
+  return matrix;
+}
+
+/** Texto + matriz (tabelas) a partir de .docx / .doc. */
+export async function extractFromWord(
+  data: ArrayBuffer,
+  fileName: string
+): Promise<{ text: string; rows: string[][]; warnings: string[] }> {
+  const lower = fileName.toLowerCase();
+  const warnings: string[] = [];
+
+  if (lower.endsWith('.docx') || isZipDocx(data)) {
+    const mammoth = await import('mammoth');
+    const [raw, html] = await Promise.all([
+      mammoth.extractRawText({ arrayBuffer: data }),
+      mammoth.convertToHtml({ arrayBuffer: data }),
+    ]);
+    const rows = htmlTablesToMatrix(html.value);
+    // Inclui parágrafos de módulo fora de tabela
+    const extra = textLinesToPseudoMatrix(raw.value || '');
+    const merged = mergeModuleHeadersIntoRows(extra, rows);
+    return {
+      text: raw.value || '',
+      rows: merged.length > rows.length ? merged : rows.length ? rows : extra,
+      warnings,
+    };
+  }
+
+  if (lower.endsWith('.doc')) {
+    warnings.push(
+      'Arquivo .doc (formato antigo): extração limitada. Se faltar componente, salve como .docx ou use o Excel.'
+    );
+    const text = extractLooseTextFromDocBinary(data);
+    return { text, rows: textLinesToPseudoMatrix(text), warnings };
+  }
+
+  throw new Error('Formato Word não suportado. Use .docx, .doc, Excel ou PDF.');
+}
+
+function isZipDocx(data: ArrayBuffer): boolean {
+  const u8 = new Uint8Array(data);
+  return u8.length >= 4 && u8[0] === 0x50 && u8[1] === 0x4b;
+}
+
+/** Extrai strings legíveis de .doc binário (UTF-16LE / ASCII). */
+function extractLooseTextFromDocBinary(data: ArrayBuffer): string {
+  const u8 = new Uint8Array(data);
+  const chunks: string[] = [];
+
+  let utf16 = '';
+  for (let i = 0; i + 1 < u8.length; i += 2) {
+    const code = u8[i] | (u8[i + 1] << 8);
+    if (code >= 0x20 && code < 0xfffe && code !== 0xad) {
+      utf16 += String.fromCharCode(code);
+    } else if (utf16.length >= 5) {
+      chunks.push(utf16.replace(/\s+/g, ' ').trim());
+      utf16 = '';
+    } else {
+      utf16 = '';
+    }
+  }
+  if (utf16.length >= 5) chunks.push(utf16.replace(/\s+/g, ' ').trim());
+
+  let ascii = '';
+  for (let i = 0; i < u8.length; i++) {
+    const c = u8[i];
+    if (c >= 0x20 && c < 0x7f) ascii += String.fromCharCode(c);
+    else if (ascii.length >= 5) {
+      chunks.push(ascii.trim());
+      ascii = '';
+    } else ascii = '';
+  }
+
+  const interesting = chunks.filter(
+    (c) =>
+      /m[oó]dulo|conhecimento|extens|est[aá]gio|estrutura|biolog|sa[uú]de|\d{2,4}/i.test(
+        c
+      ) && c.length < 300
+  );
+  return (interesting.length > 20 ? interesting : chunks)
+    .filter((c) => c.length >= 3)
+    .join('\n');
+}
+
+function htmlTablesToMatrix(html: string): string[][] {
+  if (!html || typeof DOMParser === 'undefined') return [];
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const rows: string[][] = [];
+
+  doc.querySelectorAll('p, h1, h2, h3, h4').forEach((el) => {
+    const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/^m[oó]dulo\s+/i.test(t) || /^estrutura\s+curricular/i.test(t)) {
+      rows.push([t]);
+    }
+  });
+
+  doc.querySelectorAll('table').forEach((table) => {
+    table.querySelectorAll('tr').forEach((tr) => {
+      const cells = Array.from(tr.querySelectorAll('th, td')).map((c) =>
+        (c.textContent || '').replace(/\s+/g, ' ').trim()
+      );
+      if (cells.some((c) => c)) rows.push(cells);
+    });
+  });
+
+  return rows;
+}
+
+function mergeModuleHeadersIntoRows(fromText: string[][], fromTables: string[][]): string[][] {
+  if (!fromTables.length) return fromText;
+  if (!fromText.length) return fromTables;
+  // Se as tabelas já têm módulos, preferir tabelas; senão intercalamos cabeçalhos do texto
+  const tablesHaveModules = fromTables.some((r) => /^m[oó]dulo\s+/i.test(r[0] || ''));
+  if (tablesHaveModules) return fromTables;
+  return [...fromText.filter((r) => /^m[oó]dulo\s+/i.test(r[0] || '')), ...fromTables];
+}
+
+/** Converte texto corrido em matriz nome + colunas de CH. */
+export function textLinesToPseudoMatrix(text: string): string[][] {
+  const rawLines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const lines = coalesceMatrixLines(rawLines);
+  return lines.map((line) => nameAndNumbersToRow(line));
+}
+
+function nameAndNumbersToRow(line: string): string[] {
+  const split = splitNameAndNumbers(line);
+  if (!split) return [line];
+  const { name, nums } = split;
+  const cells = [name, '', '', '', '', '', '', ''];
+  const mapNums = (values: number[], indexes: number[]) => {
+    indexes.forEach((col, i) => {
+      if (values[i] != null) cells[col] = String(values[i]);
+    });
+  };
+
+  if (nums.length >= 7) {
+    mapNums(nums.slice(-7), [1, 2, 3, 4, 5, 6, 7]);
+  } else if (nums.length === 6) {
+    mapNums(nums, [1, 2, 3, 4, 5, 6]);
+  } else if (nums.length === 4) {
+    // Padrão comum no PDF (células vazias omitidas): P.Téo P.Prá Dist.Téo Total
+    mapNums(nums, [1, 2, 4, 7]);
+  } else if (nums.length === 3) {
+    mapNums(nums, [1, 4, 7]);
+  } else if (nums.length === 2) {
+    mapNums(nums, [1, 4]);
+    cells[7] = String(nums[0] + nums[1]);
+  } else if (nums.length === 1) {
+    cells[7] = String(nums[0]);
+  }
+  return cells;
+}
+
+function splitNameAndNumbers(
+  line: string
+): { name: string; nums: number[] } | null {
+  const m = line.match(
+    /^(.+?)\s+((?:\d+(?:[.,]\d+)?\s+)*\d+(?:[.,]\d+)?)(?:\s*h)?\s*$/i
+  );
+  if (!m) return null;
+  const name = m[1].replace(/\s+/g, ' ').trim();
+  if (!name || name.length < 2) return null;
+  if (/^(subtotal|total|presencial|conhecimento|te[oó]rico|pr[aá]tico)/i.test(name)) {
+    return null;
+  }
+  const nums = m[2]
+    .trim()
+    .split(/\s+/)
+    .map((s) => Number(String(s).replace(',', '.')))
+    .filter((n) => Number.isFinite(n));
+  if (!nums.length) return null;
+  return { name, nums };
+}
+
 export async function extractTextFromSpreadsheet(data: ArrayBuffer): Promise<string> {
   const rows = extractSpreadsheetMatrix(data);
   return rows
@@ -74,63 +271,166 @@ export async function extractTextFromSpreadsheet(data: ArrayBuffer): Promise<str
     .join('\n');
 }
 
+function sheetRowsFromWorkbook(
+  workbook: XLSX.WorkBook,
+  sheetName: string
+): string[][] {
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
+    header: 1,
+    raw: true,
+    defval: '',
+  });
+  return rows.map((row) =>
+    (row || []).map((cell) => (cell == null ? '' : String(cell).trim()))
+  );
+}
+
 /** Matriz crua da planilha (preserva colunas — necessário para estrutura curricular). */
 export function extractSpreadsheetMatrix(data: ArrayBuffer): string[][] {
   const workbook = XLSX.read(data, { type: 'array' });
   const out: string[][] = [];
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
-      header: 1,
-      raw: true,
-      defval: '',
-    });
-    for (const row of rows) {
-      out.push((row || []).map((cell) => (cell == null ? '' : String(cell).trim())));
+
+  // Preferir a aba de estrutura curricular (evita Legenda/Encontros/etc.).
+  let sheetNames = workbook.SheetNames;
+  const preferredName = workbook.SheetNames.find((n) =>
+    /^estrutura$/i.test(String(n || '').trim())
+  );
+  const candidates = preferredName
+    ? [preferredName, ...workbook.SheetNames.filter((n) => n !== preferredName)]
+    : workbook.SheetNames;
+
+  for (const sheetName of candidates) {
+    const probeRows = sheetRowsFromWorkbook(workbook, sheetName);
+    if (looksLikeEstruturaCurricularSheet(probeRows)) {
+      sheetNames = [sheetName];
+      break;
+    }
+  }
+
+  for (const sheetName of sheetNames) {
+    for (const row of sheetRowsFromWorkbook(workbook, sheetName)) {
+      out.push(row);
     }
   }
   return out;
 }
 
+/** Código de UC no padrão UNISUAM (ex.: GPSA0003, GPFT0066). */
+function isUnidadeCurricularCode(value: string): boolean {
+  return /^[A-Z]{2,8}\d{3,5}[A-Z]?$/i.test(String(value || '').trim());
+}
+
+/**
+ * Cabeçalho temático (sem “MÓDULO N”): "HUMANIZAÇÃO E SAÚDE | Compartilhado …"
+ */
+function parseThematicModuleHeader(line: string): string | null {
+  const raw = String(line || '').trim();
+  if (!raw || raw.length < 3) return null;
+  if (/^m[oó]dulo\b/i.test(raw)) return null;
+  if (/^(c[oó]digo|unidade\s+curricular|identifica)/i.test(raw)) return null;
+  if (isUnidadeCurricularCode(raw)) return null;
+
+  const withFlag = raw.match(/^(.+?)\s*\|\s*Compartilh/i);
+  if (withFlag) {
+    const title = withFlag[1].replace(/\s+/g, ' ').trim().replace(/[:.\-–—]+$/, '').trim();
+    if (title.length >= 3 && !/^(subtotal|total|resumo)$/i.test(title)) return title;
+  }
+  return null;
+}
+
 /** Detecta planilha no layout “ESTRUTURA CURRICULAR” (módulos + conhecimentos com CH presencial/distância). */
 export function looksLikeEstruturaCurricularSheet(rows: string[][]): boolean {
-  const head = rows
-    .slice(0, 12)
+  const flat = rows
+    .slice(0, 50)
     .map((r) => r.join(' '))
     .join('\n');
-  const hasTitle = /estrutura\s+curricular/i.test(head);
-  const hasModule = rows.some((r) => /^m[oó]dulo\s+([ivxlcdm]+|\d+)/i.test(r[0] || ''));
-  const hasKnowledgeHeader = rows.some((r) => /^conhecimento$/i.test((r[0] || '').trim()));
-  return (hasTitle || hasKnowledgeHeader) && hasModule;
+  const hasTitle = /estrutura\s+curricular/i.test(flat);
+  const hasModule = rows.some((r) =>
+    r.some((c) => /^m[oó]dulo\s+([ivxlcdm]+|\d+)/i.test((c || '').trim()))
+  );
+  const hasKnowledgeHeader = rows.some((r) =>
+    r.some((c) => /^conhecimentos?$/i.test((c || '').trim()))
+  );
+  const hasUnidadeCurricular = /unidade\s+curricular/i.test(flat);
+  const hasUcCodes = rows.some((r) => isUnidadeCurricularCode(r[0] || ''));
+  const hasThematicModule = rows.some((r) => Boolean(parseThematicModuleHeader(r[0] || '')));
+  const hasPresDist =
+    /presencial/i.test(flat) && /a\s+dist[aâ]ncia|ass[ií]ncrono|\bead\b/i.test(flat);
+
+  if (hasModule && (hasTitle || hasKnowledgeHeader || hasPresDist)) return true;
+  // Layout temático UNISUAM (Terapia Ocupacional etc.): sem “MÓDULO N”, com UC + CH.
+  if (
+    hasTitle &&
+    hasPresDist &&
+    (hasUnidadeCurricular || hasUcCodes || hasThematicModule)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** Reconstrói linhas a partir dos itens de texto do PDF (agrupa pelo eixo Y). */
 function rebuildPageLines(items: TextContentItem[]): string {
-  const rows = new Map<number, { x: number; str: string }[]>();
+  return itemsToMatrixRows(items)
+    .map((row) => row.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Agrupa glyphs do PDF em linhas e células pela posição. */
+function itemsToMatrixRows(items: TextContentItem[]): string[][] {
+  type Cell = { x: number; str: string };
+  const rowMap = new Map<number, Cell[]>();
 
   for (const item of items) {
     const str = (item.str || '').replace(/\s+/g, ' ');
     if (!str.trim() || !item.transform) continue;
     const x = item.transform[4] ?? 0;
     const y = item.transform[5] ?? 0;
-    const bucket = Math.round(y / 3) * 3;
-    const row = rows.get(bucket) || [];
+    const bucket = Math.round(y / 4) * 4;
+    const row = rowMap.get(bucket) || [];
     row.push({ x, str });
-    rows.set(bucket, row);
+    rowMap.set(bucket, row);
   }
 
-  return [...rows.keys()]
-    .sort((a, b) => b - a)
-    .map((y) =>
-      (rows.get(y) || [])
-        .sort((a, b) => a.x - b.x)
-        .map((c) => c.str)
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    )
-    .filter(Boolean)
-    .join('\n');
+  const sortedYs = [...rowMap.keys()].sort((a, b) => b - a);
+  const rows: string[][] = [];
+
+  for (const y of sortedYs) {
+    const cells = (rowMap.get(y) || []).sort((a, b) => a.x - b.x);
+    if (!cells.length) continue;
+
+    // Une tokens próximos; quebra célula quando o gap horizontal é grande
+    const gaps: number[] = [];
+    for (let i = 1; i < cells.length; i++) {
+      gaps.push(cells[i].x - cells[i - 1].x);
+    }
+    const medianGap =
+      gaps.length === 0
+        ? 20
+        : [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)] || 20;
+    const splitGap = Math.max(18, medianGap * 2.2);
+
+    const out: string[] = [];
+    let cur = cells[0].str;
+    let lastX = cells[0].x;
+    for (let i = 1; i < cells.length; i++) {
+      const c = cells[i];
+      if (c.x - lastX > splitGap) {
+        out.push(cur.replace(/\s+/g, ' ').trim());
+        cur = c.str;
+      } else {
+        cur += (/^\s|\s$/.test(cur) || /^\s/.test(c.str) ? '' : ' ') + c.str;
+      }
+      lastX = c.x;
+    }
+    out.push(cur.replace(/\s+/g, ' ').trim());
+
+    if (out.some((c) => c)) rows.push(out);
+  }
+
+  return rows;
 }
 
 export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
@@ -177,12 +477,34 @@ export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
 
   if (!hints.courseName) {
     const lines = head.split(/\n/).map((l) => l.trim()).filter(Boolean);
-    for (let i = 0; i < Math.min(lines.length, 6); i++) {
+    const isPlausibleCourseLine = (line: string): boolean => {
+      const t = line.replace(/\s+/g, ' ').trim();
+      if (t.length < 3 || t.length > 80) return false;
+      if (/\d{3,}/.test(t)) return false;
+      if (/estrutura\s+curricular/i.test(t)) return false;
+      if (/^(atividade|tipo|modalidade|defini[cç][aã]o|c[oó]digo|legenda|encontros?)\b/i.test(t)) {
+        return false;
+      }
+      if (/\b(tipo|modalidade|defini[cç][aã]o)\b/i.test(t)) return false;
+      if (/\|/.test(t) || /compartilh/i.test(t)) return false;
+      if (/conhecimento|carga\s+hor|unidade\s+curricular/i.test(t)) return false;
+      // Preferir título de curso (ex.: "TERAPIA OCUPACIONAL") — maiúsculas ou Title Case curto.
+      const allCaps =
+        /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{2,60}$/.test(t) &&
+        /[A-ZÁÉÍÓÚÂÊÔÃÕÇ]{3,}/.test(t);
+      const titleCase =
+        /^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç\s]{2,60}$/.test(t) &&
+        t.split(/\s+/).length <= 6;
+      return allCaps || titleCase;
+    };
+
+    // 1ª linha da matriz costuma ser o nome do curso (layout UNISUAM).
+    for (let i = 0; i < Math.min(lines.length, 8); i++) {
       const line = lines[i];
       if (/estrutura\s+curricular/i.test(line)) continue;
       if (/^m[oó]dulo\b/i.test(line)) break;
-      if (/conhecimento|carga\s+hor/i.test(line)) break;
-      if (/^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç\s]{2,60}$/.test(line) && !/\d{3,}/.test(line)) {
+      if (/conhecimento|carga\s+hor|unidade\s+curricular/i.test(line)) break;
+      if (isPlausibleCourseLine(line)) {
         hints.courseName = line.replace(/\s+/g, ' ').trim();
         break;
       }
@@ -194,12 +516,30 @@ export function extractSagaHeaderHints(rawText: string): SagaHeaderHints {
     hints.semester = semMatch[1].replace(/\s+/g, '').replace('/', '.');
   }
 
-  if (/\b(semipresencial|semi[\s-]?presencial|h[ií]brido)\b/i.test(head)) {
-    hints.modality = 'Semipresencial';
-  } else if (/\b(ead|a dist[aâ]ncia|educa[cç][aã]o a dist[aâ]ncia)\b/i.test(head)) {
+  // Modalidade do CURSO — não confundir com colunas da matriz ("Presencial" / "A Distância").
+  const modalityField = head.match(
+    /modalidade(?:\s+do\s+curso)?\s*[:\-]\s*([^\n,;]{3,40})/i
+  );
+  if (modalityField) {
+    const raw = modalityField[1];
+    if (/semi|h[ií]brido/i.test(raw)) hints.modality = 'Semipresencial';
+    else if (/\bead\b|a\s*dist|dist[aâ]ncia/i.test(raw)) hints.modality = 'EAD';
+    else if (/presencial/i.test(raw)) hints.modality = 'Presencial';
+  } else if (/\beduca[cç][aã]o\s+a\s+dist[aâ]ncia\b/i.test(head)) {
     hints.modality = 'EAD';
-  } else if (/\bpresencial\b/i.test(head)) {
-    hints.modality = 'Presencial';
+  } else {
+    // Ex.: "BIOMEDICINA (Presencial)" / "Administração — EAD" no título
+    const titled = head.match(
+      /\(([^\)]{0,30})\b(semipresencial|ead|a\s*dist[aâ]ncia|presencial)\b([^\)]{0,30})\)/i
+    ) || head.match(
+      /(?:curso|bacharelado|licenciatura|tecn[oó]logo)[^\n]{0,50}?[—\-–]\s*(semipresencial|ead|presencial)\b/i
+    );
+    if (titled) {
+      const raw = (titled[2] || titled[1] || '').toString();
+      if (/semi/i.test(raw)) hints.modality = 'Semipresencial';
+      else if (/\bead\b|dist/i.test(raw)) hints.modality = 'EAD';
+      else if (/presencial/i.test(raw)) hints.modality = 'Presencial';
+    }
   }
 
   const modularSignals =
@@ -241,9 +581,9 @@ function detectDelivery(text: string, fallbackModality: ModalityType): DeliveryM
 /** Junta nomes quebrados em linhas com a linha de horas da matriz modular. */
 function coalesceMatrixLines(lines: string[]): string[] {
   const hoursOnly =
-    /^(\d+(?:[.,]\d+)?\s+){5}\d+(?:[.,]\d+)?\s+\d+(?:[.,]\d+)?\s*h?$/i;
+    /^(?:\d+(?:[.,]\d+)?\s+){0,7}\d+(?:[.,]\d+)?\s*h?$/i;
   const isNoise = (l: string) =>
-    /^(subtotal|total|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]\.|pr[aá]t\.|t-p|consolida|legendas|carga hor[aá]ria|p[aá]gina\s+\d)/i.test(
+    /^(subtotal|total|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]\.|pr[aá]t\.|t-p|consolida|legendas|carga hor[aá]ria|p[aá]gina\s+\d|te[oó]rico|pr[aá]tico)/i.test(
       l
     ) || /^m[oó]dulo\s/i.test(l);
 
@@ -261,8 +601,8 @@ function coalesceMatrixLines(lines: string[]): string[] {
         i + 1 < lines.length &&
         !hoursOnly.test(lines[i + 1]) &&
         !isNoise(lines[i + 1]) &&
-        !/\d+\s*h\s*$/i.test(lines[i + 1]) &&
-        lines[i + 1].length < 80
+        !/\d+(?:[.,]\d+)?(?:\s+\d+(?:[.,]\d+)?){0,7}\s*h?\s*$/i.test(lines[i + 1]) &&
+        lines[i + 1].length < 90
       ) {
         name = `${name} ${lines[++i]}`.replace(/\s+/g, ' ').trim();
       }
@@ -275,54 +615,33 @@ function coalesceMatrixLines(lines: string[]): string[] {
 }
 
 /**
- * Linha de matriz modular:
- * Nome  TEÓ PRÁT T-P  TEÓ PRÁT T-P  TOTALh
- * (presencial)         (a distância)
+ * Linha de matriz modular (PDF/texto): aceita 1–7 números no fim
+ * (células vazias do Excel costumam sumir no PDF).
+ * Só presencial vs assíncrono — ignora teórico/prático/T-P.
  */
 function parseMatrixComponentLine(line: string): Discipline | null {
   const skipped =
     /^(subtotal|total|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome|estrutura|relat[oó]rio|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]|pr[aá]t|consolida|legendas)/i;
   if (skipped.test(line)) return null;
 
-  const match = line.match(
-    /^(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*h?\s*$/i
-  );
-  if (!match) return null;
+  const split = splitNameAndNumbers(line);
+  if (!split) return null;
 
-  const name = match[1].replace(/\s+/g, ' ').trim();
-  if (!name || name.length < 2) return null;
+  const { name, nums } = split;
   if (/^m[oó]dulo\b/i.test(name)) return null;
 
-  const pTheo = Number(match[2]) || 0;
-  const pPrat = Number(match[3]) || 0;
-  const pTp = Number(match[4]) || 0;
-  const dTheo = Number(match[5]) || 0;
-  const dPrat = Number(match[6]) || 0;
-  const dTp = Number(match[7]) || 0;
-  const total = Number(match[8]) || 0;
+  const mapped = mapTrailingHours(nums);
+  if (mapped.hours <= 0) return null;
 
-  const presential = pTheo + pPrat + pTp;
-  const ead = dTheo + dPrat + dTp;
-  const hours = total || presential + ead;
-  if (hours <= 0) return null;
-
+  const { presential, asyncH, hours } = mapped;
   const isExt = /extens[aã]o/i.test(name);
   const isIntern = /est[aá]gio|pr[aá]tica supervisionada/i.test(name);
 
   let modalityDelivery: DeliveryModalityFlag = 'presencial';
-  if (presential > 0 && ead > 0) modalityDelivery = 'presencial';
-  else if (ead > 0) modalityDelivery = 'assincrono';
-  else modalityDelivery = 'presencial';
-
-  let pedagogicalNature: Discipline['pedagogicalNature'];
-  const prat = pPrat + dPrat;
-  const theo = pTheo + dTheo;
-  const tp = pTp + dTp;
-  if (tp > 0 && prat === 0 && theo === 0) pedagogicalNature = 'teorico-pratica';
-  else if (prat > 0 && theo === 0 && tp === 0) pedagogicalNature = 'pratica';
-  else if (theo > 0 && prat === 0 && tp === 0) pedagogicalNature = 'teorica';
-  else if (prat > 0 || tp > 0) pedagogicalNature = 'teorico-pratica';
-  else pedagogicalNature = 'teorica';
+  if (presential > 0 && asyncH === 0) modalityDelivery = 'presencial';
+  else if (asyncH > 0 && presential === 0) modalityDelivery = 'assincrono';
+  else if (presential > 0) modalityDelivery = 'presencial';
+  else modalityDelivery = 'assincrono';
 
   return {
     id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -332,15 +651,50 @@ function parseMatrixComponentLine(line: string): Discipline | null {
     credits: 0,
     hours,
     modalityDelivery,
-    pedagogicalNature,
     chPresential: presential || undefined,
-    chTheoretical: presential > 0 ? pTheo + pTp : undefined,
-    chLaboratory: presential > 0 && pPrat > 0 ? pPrat : undefined,
-    hasLaboratory: pPrat > 0 || undefined,
-    chAsync: ead || undefined,
+    chAsync: asyncH || undefined,
     isExtension: isExt || undefined,
     isInternship: isIntern || undefined,
   };
+}
+
+function mapTrailingHours(nums: number[]): {
+  presential: number;
+  asyncH: number;
+  hours: number;
+} {
+  if (nums.length >= 7) {
+    const [a, b, c, d, e, f, g] = nums.slice(-7);
+    const presential = a + b + c;
+    const asyncH = d + e + f;
+    return { presential, asyncH, hours: g || presential + asyncH };
+  }
+  if (nums.length === 6) {
+    const presential = nums[0] + nums[1] + nums[2];
+    const asyncH = nums[3] + nums[4] + nums[5];
+    return { presential, asyncH, hours: presential + asyncH };
+  }
+  if (nums.length === 4) {
+    return {
+      presential: nums[0] + nums[1],
+      asyncH: nums[2],
+      hours: nums[3],
+    };
+  }
+  if (nums.length === 3) {
+    return { presential: nums[0], asyncH: nums[1], hours: nums[2] };
+  }
+  if (nums.length === 2) {
+    return {
+      presential: nums[0],
+      asyncH: nums[1],
+      hours: nums[0] + nums[1],
+    };
+  }
+  if (nums.length === 1) {
+    return { presential: 0, asyncH: 0, hours: nums[0] };
+  }
+  return { presential: 0, asyncH: 0, hours: 0 };
 }
 
 function parseDisciplineLine(
@@ -421,7 +775,10 @@ function romanOrDigitToNumber(token: string): number {
 
 function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules?: ModuleData[]): CurriculumStructure {
   const safePeriods = periods || [];
-  const safeModules = modules || [];
+  const safeModules = (modules || []).map((m) => ({
+    ...m,
+    title: normalizeModuleTitle(m.title),
+  }));
   const totalHours =
     params.structureType === 'modular'
       ? safeModules.reduce((acc, m) => acc + (m.hours || 0), 0)
@@ -587,19 +944,52 @@ function parseModular(
   warnings: string[],
   textChars: number
 ): SagaParseResult {
+  // Reusa o parser de planilha (dedupe + presencial/assíncrono) via matriz sintética
+  const rows = lines.map((line) => nameAndNumbersToRow(line));
+  if (looksLikeEstruturaCurricularSheet(rows) || rows.some((r) => /^m[oó]dulo\s+/i.test(r[0] || ''))) {
+    const sheetResult = parseEstruturaCurricularSheet(rows, {
+      ...params,
+      structureType: 'modular',
+    });
+    sheetResult.stats.textChars = textChars;
+    if (hints.courseName && !sheetResult.hints.courseName) {
+      sheetResult.hints.courseName = hints.courseName;
+    }
+    sheetResult.hints = { ...hints, ...sheetResult.hints };
+    sheetResult.warnings = [...warnings, ...sheetResult.warnings];
+    return sheetResult;
+  }
+
   const modules: ModuleData[] = [];
   let current: ModuleData | null = null;
   let withoutHours = 0;
   let withoutCredits = 0;
-
-  const moduleHeader =
-    /^m[oó]dulo\s+([ivxlcdm]+|\d+)\s*[—–:\-.]?\s*(.*)$/i;
+  const seenModuleKeys = new Set<string>();
+  let activeBranch: string | undefined;
+  let activeBranchName: string | undefined;
 
   for (const line of lines) {
-    const modMatch = line.match(moduleHeader);
-    if (modMatch) {
-      const num = romanOrDigitToNumber(modMatch[1]) || modules.length + 1;
-      let title = (modMatch[2] || '')
+    const enfase = parseEnfaseOrTrilhaHeader(line);
+    if (enfase) {
+      activeBranch = enfase.branch;
+      activeBranchName = normalizeModuleTitle(enfase.branchName);
+      continue;
+    }
+
+    const modHeader = parseModuleHeaderLine(line);
+    if (modHeader) {
+      const num = modHeader.number || modules.length + 1;
+      const branch = modHeader.branchSuffix || activeBranch;
+      const seenKey = `${branch || 'trunk'}:${num}`;
+      if (seenModuleKeys.has(seenKey)) {
+        warnings.push(
+          `Módulo ${num}${branch ? branch : ''} repetido na mesma trilha — ignoramos a segunda cópia.`
+        );
+        if (!branch) break;
+        continue;
+      }
+      seenModuleKeys.add(seenKey);
+      let title = (modHeader.title || '')
         .replace(/\s*Presencial\s*:.*/i, '')
         .replace(/\s*EaD\s*:.*/i, '')
         .replace(/\s*Total\s*:.*/i, '')
@@ -608,14 +998,18 @@ function parseModular(
       if (!title) title = '';
 
       current = {
-        id: `mod-${num}-${Date.now()}`,
+        id: `mod-${num}${branch || ''}-${Date.now()}`,
         number: num,
-        code: '',
+        code: branch ? `MOD-${String(num).padStart(2, '0')}${branch}` : '',
         title,
+        branch: branch || undefined,
+        branchName: branch ? activeBranchName : undefined,
         hours: 0,
+        meetings: 0,
         disciplines: [],
         competencies: [],
         knowledges: [],
+        competences: [],
       };
       modules.push(current);
       continue;
@@ -628,9 +1022,11 @@ function parseModular(
         code: '',
         title: line.replace(/^conhecimentos[:.\-]?\s*/i, '').trim() || '',
         hours: 0,
+        meetings: 0,
         disciplines: [],
         competencies: [],
         knowledges: [],
+        competences: [],
       };
       modules.push(current);
       continue;
@@ -640,7 +1036,7 @@ function parseModular(
     if (disc && current) {
       if (!disc.hours) withoutHours++;
       if (!disc.credits) withoutCredits++;
-      current.disciplines.push(disc);
+      const flags = classifyKnowledgeFlags(disc.name);
       current.knowledges = current.knowledges || [];
       current.knowledges.push({
         id: `know-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -649,29 +1045,36 @@ function parseModular(
         hours: disc.hours,
         modalityDelivery: disc.modalityDelivery,
         chPresential: disc.chPresential,
-        chTheoretical: disc.chTheoretical,
-        chLaboratory: disc.chLaboratory,
         chAsync: disc.chAsync,
-        hasLaboratory: disc.hasLaboratory,
+        type: flags.type,
       });
       current.hours += disc.hours || 0;
     }
   }
 
-  modules.sort((a, b) => a.number - b.number);
+  modules.forEach((m, i) => {
+    const synced = syncModuleKnowledgesToDisciplines(m);
+    modules[i] = synced;
+  });
+  modules.sort((a, b) => {
+    const byNum = a.number - b.number;
+    if (byNum !== 0) return byNum;
+    return (a.branch || '').localeCompare(b.branch || '', 'pt-BR');
+  });
+  linkModularParents(modules);
 
-  const disciplines = modules.reduce((acc, m) => acc + m.disciplines.length, 0);
+  const disciplines = modules.reduce(
+    (acc, m) => acc + (m.knowledges?.length || m.disciplines.length),
+    0
+  );
   if (modules.length === 0) {
-    warnings.push('Nenhum módulo foi identificado no PDF. O coordenador deve preencher a estrutura.');
+    warnings.push('Nenhum módulo foi identificado no arquivo. Complete a estrutura manualmente.');
   }
   if (disciplines === 0) {
     warnings.push('Nenhum componente curricular foi identificado nos módulos.');
   }
   if (withoutHours > 0) {
     warnings.push(`${withoutHours} componente(s) sem carga horária — preencha no editor.`);
-  }
-  if (hints.complementaryHours && hints.complementaryHours > 0) {
-    // aplicado no modal via hints; aviso informativo
   }
 
   const structure = emptyStructure(params, [], modules);
@@ -704,15 +1107,79 @@ function sheetCellNumber(raw: string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Normaliza linhas curtas do PDF/Word para o layout 8 colunas da planilha. */
+function splitCellLines(value: string): string[] {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function normalizeImportedMatrix(rows: string[][]): string[][] {
+  // Planilhas UNISUAM: ênfase + módulo na mesma célula com quebra de linha
+  const expanded: string[][] = [];
+  for (const row of rows) {
+    const cells = row.map((c) => String(c ?? '').trim());
+    const parts = splitCellLines(cells[0] || '');
+    const hasEnfase = parts.some((p) => Boolean(parseEnfaseOrTrilhaHeader(p)));
+    const hasModulo = parts.some((p) => Boolean(parseModuleHeaderLine(p)));
+    if (parts.length > 1 && (hasEnfase || hasModulo)) {
+      for (const part of parts) {
+        expanded.push([part, ...cells.slice(1)]);
+      }
+      continue;
+    }
+    expanded.push(cells);
+  }
+
+  return expanded.map((cells) => {
+    if (!cells.some(Boolean)) return cells;
+    const c0 = cells[0] || '';
+    if (
+      /^m[oó]dulo\s+/i.test(c0) ||
+      /^estrutura\s+curricular/i.test(c0) ||
+      /^identifica[cç][aã]o\s+da\s+estrutura/i.test(c0) ||
+      /^[eê]nfases?\s+/i.test(c0) ||
+      /^trilhas?\s+/i.test(c0)
+    ) {
+      return [c0];
+    }
+    // Código | Unidade Curricular | CH… (9 colunas: 6 partes + total)
+    if (isUnidadeCurricularCode(c0) && cells[1]) {
+      return cells.slice(0, 9);
+    }
+    // Nome em col1 (ex.: EXTENSÃO) com CH a partir da col2
+    if (!c0 && cells[1] && cells.length >= 8) {
+      return cells.slice(0, 9);
+    }
+    if (parseThematicModuleHeader(c0)) {
+      return [c0];
+    }
+    if (cells.length >= 8) return cells.slice(0, 9);
+    const name = c0;
+    const numericCells = cells
+      .slice(1)
+      .filter((c) => c !== '' && Number.isFinite(Number(String(c).replace(',', '.'))));
+    if (name && numericCells.length > 0) {
+      return nameAndNumbersToRow(`${name} ${numericCells.join(' ')}`);
+    }
+    if (cells.length === 1) {
+      return nameAndNumbersToRow(cells[0]);
+    }
+    return cells;
+  });
+}
+
 function isSheetSkipRow(name: string): boolean {
   const n = name.trim();
   if (!n) return true;
-  if (/^(conhecimento|conhecimentos|carga\s+hor[aá]ria|presencial|a\s+dist[aâ]ncia|te[oó]rico|pr[aá]tico|te[oó]rico-pr[aá]tico|total|subtotal|resumo)$/i.test(n)) {
+  if (/^(conhecimento|conhecimentos|carga\s+hor[aá]ria|presencial|a\s+dist[aâ]ncia|te[oó]rico|pr[aá]tico|te[oó]rico-pr[aá]tico|total|subtotal|resumo|c[oó]digo|unidade\s+curricular)$/i.test(n)) {
     return true;
   }
   if (/^componentes$/i.test(n)) return true;
   if (/^hora-?rel[oó]gio$/i.test(n)) return true;
   if (/^percentual$/i.test(n)) return true;
+  if (/^identifica[cç][aã]o\s+da\s+estrutura/i.test(n)) return true;
   return false;
 }
 
@@ -741,25 +1208,30 @@ function classifyKnowledgeFlags(name: string): {
 /**
  * Pré-preenche estrutura modular a partir da planilha “ESTRUTURA CURRICULAR”
  * (módulos romanos + conhecimentos com CH presencial/distância em colunas).
+ *
+ * Colunas teórico/prático/T-P são somadas: Presencial → chPresential,
+ * A Distância → chAsync (assíncrono). Não importa a natureza pedagógica.
+ * Se a planilha repetir a matriz (módulos duplicados), usa só a 1ª ocorrência.
  */
 export function parseEstruturaCurricularSheet(
   rows: string[][],
   params: SagaParseParams
 ): SagaParseResult {
+  rows = normalizeImportedMatrix(rows);
   const flatText = rows.map((r) => r.join(' ')).join('\n');
   const hints = extractSagaHeaderHints(flatText);
   const warnings: string[] = [];
   const modules: ModuleData[] = [];
   let current: ModuleData | null = null;
   let withoutHours = 0;
-  let hasLaboratory = false;
   let stamp = Date.now();
+  const seenModuleKeys = new Set<string>();
+  let activeBranch: string | undefined;
+  let activeBranchName: string | undefined;
   const specialFlags = new Map<
     string,
     { isExtension?: boolean; isInternship?: boolean; isFinalPaper?: boolean }
   >();
-
-  const moduleHeader = /^m[oó]dulo\s+([ivxlcdm]+|\d+)\s*[—–:\-.]?\s*(.*)$/i;
 
   const pushCurrent = () => {
     if (!current) return;
@@ -779,20 +1251,87 @@ export function parseEstruturaCurricularSheet(
 
   for (const row of rows) {
     const cells = row.map((c) => String(c ?? '').trim());
-    const name = cells[0] || '';
-    if (!name) continue;
+    let name = cells[0] || '';
+    let hourOffset = 1;
 
-    const modMatch = name.match(moduleHeader);
-    if (modMatch) {
+    // Layout UC: Código | Nome | CH…  (ou nome só na col1, ex. EXTENSÃO)
+    if (isUnidadeCurricularCode(cells[0] || '') && cells[1]) {
+      name = cells[1];
+      hourOffset = 2;
+    } else if (!cells[0] && cells[1]) {
+      name = cells[1];
+      hourOffset = 2;
+    }
+
+    if (!name && !cells.some(Boolean)) continue;
+
+    // Segundo cabeçalho de título = cópia da matriz na mesma aba
+    if (/^estrutura\s+curricular\b/i.test(name) && modules.length > 0) {
       pushCurrent();
+      warnings.push(
+        'A planilha parece conter a matriz em duplicata. Importamos apenas a primeira ocorrência.'
+      );
+      break;
+    }
+
+    const enfase = parseEnfaseOrTrilhaHeader(name);
+    if (enfase) {
+      pushCurrent();
+      activeBranch = enfase.branch;
+      activeBranchName = normalizeModuleTitle(enfase.branchName);
+      continue;
+    }
+
+    const thematicTitle = parseThematicModuleHeader(cells[0] || name);
+    if (thematicTitle) {
+      pushCurrent();
+      const num = modules.length + 1;
+      const seenKey = `thematic:${thematicTitle.toLowerCase()}`;
+      if (seenModuleKeys.has(seenKey)) {
+        continue;
+      }
+      seenModuleKeys.add(seenKey);
       stamp += 1;
-      const num = romanOrDigitToNumber(modMatch[1]) || modules.length + 1;
-      const title = (modMatch[2] || '').replace(/\s+/g, ' ').trim();
       current = {
         id: `mod-${num}-${stamp}`,
         number: num,
         code: `MOD-${String(num).padStart(2, '0')}`,
-        title: title || `Módulo ${modMatch[1].toUpperCase()}`,
+        title: normalizeModuleTitle(thematicTitle),
+        hours: 0,
+        meetings: 0,
+        disciplines: [],
+        competencies: [],
+        knowledges: [],
+        competences: [],
+      };
+      continue;
+    }
+
+    const modHeader = parseModuleHeaderLine(name);
+    if (modHeader) {
+      const num = modHeader.number || modules.length + 1;
+      const branch = modHeader.branchSuffix || activeBranch;
+      const seenKey = `${branch || 'trunk'}:${num}`;
+      if (seenModuleKeys.has(seenKey)) {
+        pushCurrent();
+        warnings.push(
+          `Módulo ${num}${branch ? branch : ''} repetido na mesma trilha — ignoramos a segunda cópia.`
+        );
+        // Sem trilha ativa: comportamento antigo (matriz duplicada na aba)
+        if (!branch && !activeBranch) break;
+        continue;
+      }
+      seenModuleKeys.add(seenKey);
+      pushCurrent();
+      stamp += 1;
+      const title = (modHeader.title || '').replace(/\s+/g, ' ').trim();
+      current = {
+        id: `mod-${num}${branch || ''}-${stamp}`,
+        number: num,
+        code: `MOD-${String(num).padStart(2, '0')}${branch || ''}`,
+        title: title || `Módulo ${num}`,
+        branch: branch || undefined,
+        branchName: branch ? activeBranchName : undefined,
         hours: 0,
         meetings: 0,
         disciplines: [],
@@ -808,14 +1347,35 @@ export function parseEstruturaCurricularSheet(
       pushCurrent();
       continue;
     }
+    // Bloco final “Carga Horária / Componentes / Ideal 60-40” — não é UC
+    if (
+      (modules.length > 0 || current) &&
+      (/^carga\s+hor[aá]ria$/i.test(name) ||
+        /^componentes$/i.test(name) ||
+        /^atividades\s+presenciais$/i.test(name) ||
+        /^total\s+de\s+atividades/i.test(name) ||
+        /\bideal\s*\d+\s*[/]\s*\d+/i.test(cells.join(' ')) ||
+        /hora-?rel[oó]gio/i.test(cells.join(' ')))
+    ) {
+      pushCurrent();
+      break;
+    }
     if (/^atividades\s+complementares$/i.test(name)) {
       pushCurrent();
-      const h = sheetCellNumber(cells[1]);
+      const h =
+        sheetCellNumber(cells[hourOffset]) ||
+        sheetCellNumber(cells[hourOffset + 6]) ||
+        sheetCellNumber(cells[1]) ||
+        sheetCellNumber(cells[7]);
       if (h > 0) hints.complementaryHours = h;
       continue;
     }
     if (/^total$/i.test(name) && !current) {
-      const h = sheetCellNumber(cells[1]);
+      const h =
+        sheetCellNumber(cells[hourOffset + 6]) ||
+        sheetCellNumber(cells[hourOffset]) ||
+        sheetCellNumber(cells[7]) ||
+        sheetCellNumber(cells[1]);
       if (h > 0) hints.totalHours = h;
       continue;
     }
@@ -823,27 +1383,46 @@ export function parseEstruturaCurricularSheet(
     if (!current) continue;
     if (isSheetSkipRow(name)) continue;
     if (/^subtotal$/i.test(name) || /^total$/i.test(name)) continue;
+    // Cabeçalho "Código | Unidade Curricular" no meio da matriz
+    if (/^c[oó]digo$/i.test(cells[0] || '') || /^unidade\s+curricular$/i.test(name)) continue;
+    // Linhas de resumo que vazaram sem o cabeçalho “Carga Horária”
+    if (
+      /^(encontros|ead|a\s+dist[aâ]ncia)$/i.test(name) ||
+      (/^est[aá]gio\s+supervisionado$/i.test(name) &&
+        sheetCellNumber(cells[hourOffset + 1]) > 0 &&
+        sheetCellNumber(cells[hourOffset + 1]) < 1)
+    ) {
+      pushCurrent();
+      break;
+    }
 
-    const presTheo = sheetCellNumber(cells[1]);
-    const presPrac = sheetCellNumber(cells[2]);
-    const presTheoPrac = sheetCellNumber(cells[3]);
-    const distTheo = sheetCellNumber(cells[4]);
-    const distPrac = sheetCellNumber(cells[5]);
-    const distTheoPrac = sheetCellNumber(cells[6]);
-    const totalCol = sheetCellNumber(cells[7]);
+    // Colunas: Presencial (T/P/TP) | A Distância (T/P/TP) | Total
+    const presential =
+      sheetCellNumber(cells[hourOffset]) +
+      sheetCellNumber(cells[hourOffset + 1]) +
+      sheetCellNumber(cells[hourOffset + 2]);
+    const asyncH =
+      sheetCellNumber(cells[hourOffset + 3]) +
+      sheetCellNumber(cells[hourOffset + 4]) +
+      sheetCellNumber(cells[hourOffset + 5]);
+    const totalCol = sheetCellNumber(cells[hourOffset + 6]);
+    // CH do componente = soma das modalidades (Presencial + A Distância).
+    // Não preferir a coluna Total se ela divergir (causa CH do módulo errada).
+    const partsSum = presential + asyncH;
+    const hours = partsSum > 0 ? partsSum : totalCol;
 
-    const presential = presTheo + presPrac + presTheoPrac;
-    const distance = distTheo + distPrac + distTheoPrac;
-    const hours = totalCol > 0 ? totalCol : presential + distance;
+    // Percentuais do resumo (0.2, 0.28125…) não são CH de UC
+    if (hours > 0 && hours < 1) continue;
 
-    if (hours <= 0 && presential <= 0 && distance <= 0) continue;
-
-    if (presPrac > 0 || distPrac > 0) hasLaboratory = true;
+    if (hours <= 0 && presential <= 0 && asyncH <= 0) continue;
 
     const flags = classifyKnowledgeFlags(name);
-    const chTheoretical = (presTheo || 0) + (presTheoPrac || 0);
-    const chLaboratory = presPrac || 0;
-    const chAsync = distance;
+
+    let modalityDelivery: DeliveryModalityFlag = 'presencial';
+    if (presential > 0 && asyncH === 0) modalityDelivery = 'presencial';
+    else if (asyncH > 0 && presential === 0) modalityDelivery = 'assincrono';
+    else if (presential > 0) modalityDelivery = 'presencial';
+    else modalityDelivery = 'assincrono';
 
     stamp += 1;
     const knowId = `know-${stamp}`;
@@ -851,18 +1430,10 @@ export function parseEstruturaCurricularSheet(
       id: knowId,
       name,
       category: 'conhecimento',
-      hours: hours || presential + distance,
-      modalityDelivery:
-        distance > 0 && presential === 0
-          ? 'assincrono'
-          : presential > 0 && distance === 0
-            ? 'presencial'
-            : 'assincrono',
-      hasLaboratory: chLaboratory > 0,
-      chTheoretical: chTheoretical || undefined,
-      chLaboratory: chLaboratory || undefined,
+      hours: hours || presential + asyncH,
+      modalityDelivery,
       chPresential: presential || undefined,
-      chAsync: chAsync || undefined,
+      chAsync: asyncH || undefined,
       type: flags.type,
     };
 
@@ -879,29 +1450,35 @@ export function parseEstruturaCurricularSheet(
 
   pushCurrent();
 
-  modules.sort((a, b) => a.number - b.number);
-  modules.forEach((m, i) => {
-    m.parentModuleId = i > 0 ? modules[i - 1].id : undefined;
+  modules.sort((a, b) => {
+    const byNum = a.number - b.number;
+    if (byNum !== 0) return byNum;
+    return (a.branch || '').localeCompare(b.branch || '', 'pt-BR');
+  });
+  modules.forEach((m) => {
     m.hours = (m.knowledges || []).reduce((a, k) => a + (k.hours || 0), 0);
   });
+  linkModularParents(modules);
 
+  if (activeBranch || modules.some((m) => m.branch)) {
+    const keys = [...new Set(modules.map((m) => m.branch).filter(Boolean))];
+    warnings.push(
+      `Ênfases detectadas (${keys.map((k) => formatBranchLabel(String(k))).join(', ') || 'I/II'}): módulos sob Ênfase foram marcados como ramificação (CH conta só uma ênfase).`
+    );
+  }
+
+  // CH presencial + a distância na matriz ≠ modalidade do curso (ex.: presencial com até 40% EAD).
   const resolvedParams: SagaParseParams = {
     ...params,
     code: params.code || hints.structureCode || '',
     activeYearSemester: params.activeYearSemester || hints.semester || '',
-    modality:
-      hints.modality ||
-      params.modality ||
-      (hasLaboratory ? 'Semipresencial' : 'Presencial'),
+    modality: hints.modality || params.modality || 'Presencial',
     courseName: params.courseName || hints.courseName || '',
     structureType: 'modular',
-    requiredTotalHours: params.requiredTotalHours || hints.totalHours,
+    requiredTotalHours: params.requiredTotalHours || hints.totalHours || 0,
   };
 
   hints.structureType = 'modular';
-  if (!hints.modality && flatText.match(/a\s+dist[aâ]ncia/i)) {
-    hints.modality = 'Semipresencial';
-  }
 
   const disciplines = modules.reduce(
     (acc, m) => acc + (m.knowledges?.length || m.disciplines?.length || 0),
@@ -916,7 +1493,6 @@ export function parseEstruturaCurricularSheet(
   }
 
   const structure = emptyStructure(resolvedParams, [], modules);
-  structure.hasLaboratory = hasLaboratory;
   if (hints.complementaryHours) {
     structure.complementaryTotalHours = hints.complementaryHours;
   }

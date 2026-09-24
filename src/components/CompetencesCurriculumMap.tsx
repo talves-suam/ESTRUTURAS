@@ -8,7 +8,7 @@ import {
   normalizeModuleCompetences,
   aspectShortLabel,
 } from '../types/curriculum';
-import { formatModuleName } from '../utils/roman';
+import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { showsModuleMeetings } from '../services/workloadSummary';
 
 function sortModuleChain(list: ModuleData[]): ModuleData[] {
@@ -281,7 +281,7 @@ function ModuleBox({
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00]" />
       {mod.branch && (
         <span className="inline-block mb-1 text-[10px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 rounded-full">
-          Trilha {mod.branch}
+          {formatBranchLabel(mod.branch)}
         </span>
       )}
       <MapLabel className="text-[13px] text-white">
@@ -511,7 +511,7 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
           aspects={aspects}
           aspectIndex={aspectIndex}
           hideMeetings={hideMeetings}
-          label={`Trilha ${b.key}`}
+          label={formatBranchLabel(b.key)}
         />
       ))}
     </div>

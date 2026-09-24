@@ -12,6 +12,8 @@ import { CurriculumStructure, Course, AppSettings, ReportNoteBlock, getDisciplin
 import { initialSettings } from '../data/initialData';
 import { normalizeReportNotesTitle } from './reportNotes';
 import { getModularComponents, syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
+import { moduleCountsTowardStructureTotals } from '../utils/modularBranches';
+import { trackFirestoreOp } from './firestoreUsage';
 
 const STRUCTURES_COLLECTION = 'curriculum_structures';
 const COURSES_COLLECTION = 'curriculum_courses';
@@ -25,8 +27,29 @@ function canUseFirestore(): boolean {
   return isFirebaseConfigured && db !== null;
 }
 
+/**
+ * Remove PDFs/base64 embutidos (data:) para caber no Spark e evitar docs gigantes.
+ * O arquivo original continua só no navegador/localStorage se existir.
+ */
+function stripHeavyFields(value: unknown): unknown {
+  if (typeof value === 'string') {
+    if (value.startsWith('data:') && value.length > 4096) return '';
+    if (value.length > 900_000) return value.slice(0, 900_000);
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(stripHeavyFields);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = stripHeavyFields(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 function toFirestorePayload(item: object): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(item)) as Record<string, unknown>;
+  return stripHeavyFields(JSON.parse(JSON.stringify(item))) as Record<string, unknown>;
 }
 
 export function firestoreErrorMessage(err: unknown): string {
@@ -37,6 +60,9 @@ export function firestoreErrorMessage(err: unknown): string {
   }
   if (code.includes('not-found') || /not found|404/i.test(message)) {
     return 'O Firestore ainda não existe. No Console do Firebase: Build → Firestore Database → Criar banco (modo de teste).';
+  }
+  if (code.includes('resource-exhausted') || /resource.?exhausted|quota/i.test(message)) {
+    return 'Cota do plano Spark esgotada por hoje. Evite reenviar toda a base; tente amanhã ou ative o Blaze com alerta de R$ 0,01.';
   }
   return message || 'Falha ao falar com o servidor.';
 }
@@ -148,6 +174,7 @@ async function fetchFirestoreList<T extends { id?: string }>(
   if (!canUseFirestore()) return null;
   try {
     const snapshot = await getDocs(collection(db!, collectionName));
+    trackFirestoreOp('read', Math.max(snapshot.size, 1));
     const items: T[] = [];
     snapshot.forEach((d) => {
       const data = d.data() as T;
@@ -168,6 +195,7 @@ async function upsertFirestoreDocs<T extends { id: string }>(
   try {
     for (const item of items) {
       await setDoc(doc(db!, collectionName, item.id), toFirestorePayload(item));
+      trackFirestoreOp('write', 1);
     }
   } catch (err) {
     console.error(`Erro ao gravar ${collectionName} no Firestore`, err);
@@ -183,17 +211,15 @@ function cacheList<T>(key: string, items: T[]): void {
   }
 }
 
+/** Teste só com leitura — não gasta escrita no Spark. */
 export async function testFirestoreConnection(): Promise<void> {
   if (!canUseFirestore()) {
     throw new Error('O Firebase não inicializou. Confira o firebaseConfig colado.');
   }
   try {
-    const ref = doc(db!, '_health', 'ping');
-    await setDoc(ref, { ok: true, at: new Date().toISOString() });
-    const snap = await getDoc(ref);
-    if (!snap.exists()) {
-      throw new Error('O servidor não confirmou o teste de escrita.');
-    }
+    const snap = await getDoc(doc(db!, 'settings', SETTINGS_DOC));
+    trackFirestoreOp('read', 1);
+    void snap;
   } catch (err) {
     throw new Error(firestoreErrorMessage(err));
   }
@@ -205,11 +231,16 @@ export async function pushLocalCacheToServer(): Promise<void> {
   }
   const structures = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
   const courses = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
-  await upsertFirestoreDocs(STRUCTURES_COLLECTION, structures);
-  await upsertFirestoreDocs(COURSES_COLLECTION, courses);
+  const remoteStructures =
+    (await fetchFirestoreList<CurriculumStructure>(STRUCTURES_COLLECTION)) || [];
+  const remoteCourses = (await fetchFirestoreList<Course>(COURSES_COLLECTION)) || [];
+  // Sobe só o que falta ou está mais novo — evita reescrever a coleção inteira.
+  await syncMissingOrNewerToFirestore(STRUCTURES_COLLECTION, remoteStructures, structures);
+  await syncMissingOrNewerToFirestore(COURSES_COLLECTION, remoteCourses, courses);
   const settings = getCachedSettings();
   if (settings) {
     await setDoc(doc(db!, 'settings', SETTINGS_DOC), toFirestorePayload(settings), { merge: true });
+    trackFirestoreOp('write', 1);
   }
 }
 
@@ -235,6 +266,7 @@ export function subscribeCurriculumData(handlers: {
         const data = d.data() as CurriculumStructure;
         items.push({ ...data, id: data.id || d.id });
       });
+      trackFirestoreOp('read', Math.max(snapshot.docChanges().length, 1));
       const local = readLocalList<CurriculumStructure>(LOCAL_STORAGE_STRUCTURES_KEY);
 
       // Remoto vazio + local com dados → sobe o local (uma vez) e não apaga o cache
@@ -269,6 +301,7 @@ export function subscribeCurriculumData(handlers: {
         const data = d.data() as Course;
         items.push({ ...data, id: data.id || d.id });
       });
+      trackFirestoreOp('read', Math.max(snapshot.docChanges().length, 1));
       const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
 
       // Remoto vazio + local com dados → sobe o local; NUNCA sobrescreve o cache com []
@@ -345,16 +378,22 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
       period.totalHours = pHours;
     });
   } else if (structure.structureType === 'modular' && structure.modules) {
+    const allModules = structure.modules;
     // Preferir knowledges (formulário) e espelhar em disciplines para não perder itens manuais
-    syncedModules = structure.modules.map((mod) => {
+    syncedModules = allModules.map((mod) => {
       const synced = syncModuleKnowledgesToDisciplines(mod);
       let modHours = 0;
+      const countsTowardCourse = moduleCountsTowardStructureTotals(synced, allModules);
 
       getModularComponents(synced).forEach((disc) => {
         const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
         const hours = bd.total;
         const credits = Number(disc.credits) || 0;
         modHours += hours;
+
+        // CH do módulo (mapa/UI) sempre; totais do curso só tronco + uma ênfase.
+        if (!countsTowardCourse) return;
+
         totalCredits += credits;
 
         const isOptional = disc.type === 'Optativa';
@@ -375,13 +414,17 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
 
       if (modHours <= 0 && !(synced.knowledges?.length || synced.disciplines?.length)) {
         modHours = Number(synced.hours) || 0;
-        presentialHours += modHours * 0.8;
-        eadHours += modHours * 0.2;
-        coreHours += modHours;
+        if (countsTowardCourse) {
+          presentialHours += modHours * 0.8;
+          eadHours += modHours * 0.2;
+          coreHours += modHours;
+        }
       }
 
       const hours = modHours > 0 ? modHours : Number(synced.hours) || 0;
-      totalHours += hours;
+      if (countsTowardCourse) {
+        totalHours += hours;
+      }
       return { ...synced, hours };
     });
   }
@@ -725,7 +768,7 @@ export type SaveAllCoursesOptions = {
 export const saveAllCoursesToFirestore = async (
   courses: Course[],
   options: SaveAllCoursesOptions = {}
-): Promise<void> => {
+): Promise<Course[]> => {
   const { allowEmptyWipe = false } = options;
 
   if (courses.length === 0 && !allowEmptyWipe) {
@@ -733,6 +776,7 @@ export const saveAllCoursesToFirestore = async (
     if (canUseFirestore()) {
       try {
         const existing = await getDocs(collection(db!, COURSES_COLLECTION));
+        trackFirestoreOp('read', Math.max(existing.size, 1));
         if (!existing.empty) {
           throw new Error(
             'Lista de cursos vazia — nada foi enviado ao servidor para não apagar os cadastros. Se quiser apagar todos, use “Apagar todos” e confirme ao salvar.'
@@ -750,27 +794,31 @@ export const saveAllCoursesToFirestore = async (
       );
     }
     localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify([]));
-    return;
+    return [];
   }
 
   localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(courses));
   if (canUseFirestore()) {
     try {
       const existing = await getDocs(collection(db!, COURSES_COLLECTION));
+      trackFirestoreOp('read', Math.max(existing.size, 1));
       const keepIds = new Set(courses.map((c) => c.id));
       for (const snap of existing.docs) {
         if (!keepIds.has(snap.id)) {
           await deleteDoc(snap.ref);
+          trackFirestoreOp('write', 1);
         }
       }
       for (const c of courses) {
         await setDoc(doc(db!, COURSES_COLLECTION, c.id), toFirestorePayload(c), { merge: true });
+        trackFirestoreOp('write', 1);
       }
     } catch (e) {
       console.warn('Error saving all courses to firestore', e);
       throw new Error(firestoreErrorMessage(e));
     }
   }
+  return courses;
 };
 export const getSettingsFromFirestore = getAppSettings;
 export const saveSettingsToFirestore = saveAppSettings;

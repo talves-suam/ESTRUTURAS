@@ -1,10 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Time interno UNISUAM: qualquer pessoa com o app lê e grava o mesmo banco.
-    // Troque por autenticação (request.auth != null) quando o acesso precisar ser restrito.
+    // Qualquer conta Google @unisuam.edu.br autenticada pode ler/gravar dados do app.
+    // Perfil admin (alerta de faturamento) é só no front — não precisa de regra extra aqui.
+    function isUnisuam() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.matches('.*@unisuam\\.edu\\.br$');
+    }
+
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if isUnisuam();
     }
   }
 }

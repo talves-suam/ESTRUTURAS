@@ -134,12 +134,14 @@ function applyCourseToStructure(
     degrees: course.degrees,
     coordinatorName: course.coordinatorName,
     coordinatorEmail: course.coordinatorEmail,
-    hasLaboratory: course.hasLaboratory,
+    hasLaboratory: course.hasLaboratory ?? structure.hasLaboratory,
     hasClinical: course.hasClinical,
     dcnRef: course.activeDcn,
     dcns: course.dcns,
     cineBrasilRef: formatCineBrasilLabel(course.cineBrasilCode, course.cineBrasilArea),
     authorizationAct: course.authorizationAct,
+    authorizationActs: course.authorizationActs,
+    activeAuthorizationActId: course.activeAuthorizationActId,
   });
 }
 

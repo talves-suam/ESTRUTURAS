@@ -42,7 +42,7 @@ import { StructureOfficialHeader } from './StructureOfficialHeader';
 import { PpcSummaryPreview } from './PpcSummaryPreview';
 import { ModuleCompetencesTableCards } from './ModuleCompetencesTableCards';
 import { getSaberesLabels, matchesSaberesColumn } from '../utils/nomenclature';
-import { formatModuleName } from '../utils/roman';
+import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { getModularComponents } from '../utils/modularComponents';
 import {
   showsModuleMeetings,
@@ -93,6 +93,9 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
   const [hideWorkloadSummaryInReport, setHideWorkloadSummaryInReport] = useState(
     structure.hideWorkloadSummaryInReport ?? false
   );
+  /** Páginas extras na geração de documentos — padrão: incluídas. */
+  const [includePpcSummaryPage, setIncludePpcSummaryPage] = useState(true);
+  const [includeReportNotesPage, setIncludeReportNotesPage] = useState(true);
   const splitFlags = getPresentialSplitFlags(structure);
   const usePresentialSplit = splitFlags.enabled;
   const showCodeCol = showsComponentCodeColumn(structure);
@@ -105,6 +108,8 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
     setHideKnowledgesInReport(structure.hideKnowledgesInReport ?? false);
     setHideModuleCompetencesInReport(structure.hideModuleCompetencesInReport ?? false);
     setHideWorkloadSummaryInReport(structure.hideWorkloadSummaryInReport ?? false);
+    setIncludePpcSummaryPage(true);
+    setIncludeReportNotesPage(true);
   }, [
     structure.id,
     structure.hideCompetenciesInReport,
@@ -112,6 +117,11 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
     structure.hideModuleCompetencesInReport,
     structure.hideWorkloadSummaryInReport,
   ]);
+
+  const documentPageOptions = {
+    includePpcSummary: includePpcSummaryPage,
+    includeReportNotes: includeReportNotesPage,
+  };
 
   const structureForExport: CurriculumStructure = {
     ...structure,
@@ -156,6 +166,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
       await exportToPNG('curriculum-print-area', `${structure.code}_Estrutura_Curricular_UNISUAM`, {
         structure: structureForExport,
         settings,
+        ...documentPageOptions,
       });
       showExportToast('Imagem PNG gerada com sucesso e download iniciado!', 'success');
     } catch (err: any) {
@@ -174,7 +185,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
       await exportElementToPDF(
         'curriculum-print-area',
         `${structure.code}_Estrutura_Curricular_UNISUAM`,
-        { structure: structureForExport, settings }
+        { structure: structureForExport, settings, ...documentPageOptions }
       );
       showExportToast('PDF gerado com sucesso e download iniciado!', 'success');
     } catch (err: any) {
@@ -343,6 +354,44 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                   Resumo de Carga Horária
                 </span>
               </label>
+              <label
+                className="flex items-center gap-1.5 cursor-pointer select-none"
+                title="Inclui a página Perfil do Egresso no PDF, PNG e HTML"
+              >
+                <input
+                  type="checkbox"
+                  checked={includePpcSummaryPage}
+                  onChange={(e) => setIncludePpcSummaryPage(e.target.checked)}
+                  className="rounded text-[#002B49]"
+                />
+                <span className="flex items-center gap-1">
+                  {includePpcSummaryPage ? (
+                    <Eye className="w-3 h-3 text-emerald-600" />
+                  ) : (
+                    <EyeOff className="w-3 h-3 text-slate-400" />
+                  )}
+                  Página Perfil do Egresso
+                </span>
+              </label>
+              <label
+                className="flex items-center gap-1.5 cursor-pointer select-none"
+                title="Inclui a página de Observações no PDF, PNG e HTML"
+              >
+                <input
+                  type="checkbox"
+                  checked={includeReportNotesPage}
+                  onChange={(e) => setIncludeReportNotesPage(e.target.checked)}
+                  className="rounded text-[#002B49]"
+                />
+                <span className="flex items-center gap-1">
+                  {includeReportNotesPage ? (
+                    <Eye className="w-3 h-3 text-emerald-600" />
+                  ) : (
+                    <EyeOff className="w-3 h-3 text-slate-400" />
+                  )}
+                  Página de Observações
+                </span>
+              </label>
             </div>
             <div className="flex items-center gap-1">
             <button
@@ -375,7 +424,9 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
             </button>
 
             <button
-              onClick={() => exportToInteractiveHTML(structureForExport, settings)}
+              onClick={() =>
+                exportToInteractiveHTML(structureForExport, settings, documentPageOptions)
+              }
               title="Exportar HTML Navegável Autônomo"
               className="px-3 py-2 rounded-lg bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-bold transition flex items-center gap-1 shadow-xs"
             >
@@ -433,10 +484,10 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
               onChange={(e) => setSelectedBranchFilter(e.target.value)}
               className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold bg-white text-slate-700 focus:ring-2 focus:ring-[#002B49]"
             >
-              <option value="all">Todas as Trilhas / Ramificações</option>
+              <option value="all">Todas as Ênfases / Ramificações</option>
               {availableBranches.map((b) => (
                 <option key={b} value={b}>
-                  Trilha {b}
+                  {formatBranchLabel(b)}
                 </option>
               ))}
             </select>
@@ -454,7 +505,9 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
 
       {/* Main Printable / Capture Area */}
       <div id="curriculum-print-area" className="space-y-4 bg-slate-50/50 p-2 sm:p-4 rounded-xl border border-slate-100">
-        {hasPpcSummary(structure) && <PpcSummaryPreview structure={structure} />}
+        {includePpcSummaryPage && hasPpcSummary(structure) && (
+          <PpcSummaryPreview structure={structure} />
+        )}
 
         <div data-ppc-header>
           <StructureOfficialHeader structure={structure} />
@@ -718,7 +771,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                           {mod.branch && (
                             <span className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-400/40 text-[15px] font-bold flex items-center gap-1 shrink-0">
                               <GitBranch className="w-3.5 h-3.5" />
-                              Trilha {mod.branch}
+                              {formatBranchLabel(mod.branch)}
                             </span>
                           )}
                         </div>

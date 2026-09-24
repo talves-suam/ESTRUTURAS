@@ -2,7 +2,7 @@ import {
   CurriculumStructure,
 } from '../types/curriculum';
 import { captureElementAsPngDataUrl } from './exportService';
-import { formatModuleName, toRoman } from '../utils/roman';
+import { formatModuleName, toRoman, formatBranchLabel } from '../utils/roman';
 
 export interface PpcSection {
   id: string;
@@ -36,7 +36,7 @@ export function listPpcSections(structure: CurriculumStructure): PpcSection[] {
     });
   } else {
     (structure.modules || []).forEach((mod) => {
-      const branch = mod.branch ? ` · Trilha ${mod.branch}` : '';
+      const branch = mod.branch ? ` · ${formatBranchLabel(mod.branch)}` : '';
       sections.push({
         id: mod.id,
         slug: `Modulo_${toRoman(mod.number)}${mod.branch || ''}_${slugPart(mod.title)}`,

@@ -41,9 +41,11 @@ import {
   showsModuleMeetings,
   buildModuleMeetingsSummary,
   summaryPairGridClass,
+  LIBRAS_OPTATIVA_HOURS,
+  LIBRAS_OPTATIVA_LABEL,
 } from '../services/workloadSummary';
 import { labelForCategory } from '../utils/nomenclature';
-import { formatModuleName } from '../utils/roman';
+import { formatModuleName, formatBranchLabel } from '../utils/roman';
 
 type GraphMapMode = 'pedagogical' | 'competences';
 
@@ -144,7 +146,7 @@ function partitionModules(modules: ModuleData[]): {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, list]) => ({
       key,
-      name: list.find((m) => m.branchName)?.branchName || `Trilha ${key}`,
+      name: list.find((m) => m.branchName)?.branchName || formatBranchLabel(key),
       modules: sortModuleChain(list),
     }));
 
@@ -222,6 +224,36 @@ function ItemNode({
   );
 }
 
+/** Card de Libras no estilo de conhecimento (fundo azul claro). */
+function LibrasOptativaNode() {
+  return (
+    <div
+      className="w-[168px] min-w-[150px] max-w-[180px] rounded-xl px-2.5 py-2 border border-sky-300/80 bg-sky-100 shadow-sm shadow-sky-200/50"
+      data-map-libras="true"
+      title="Disciplina Optativa — não contabiliza na CH total do curso"
+    >
+      <div className="flex items-start gap-2">
+        <div className="mt-0.5 w-6 h-6 rounded-md flex items-center justify-center shrink-0 bg-sky-200/80 text-sky-900">
+          <BookOpen className="w-3 h-3" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-1.5">
+            <p className="text-[9px] font-semibold uppercase tracking-wide break-words text-sky-800/80">
+              Disciplina Optativa
+            </p>
+            <span className="text-[9px] font-bold tabular-nums shrink-0 whitespace-nowrap text-sky-900">
+              {LIBRAS_OPTATIVA_HOURS}h
+            </span>
+          </div>
+          <p className="text-[11px] text-sky-950 leading-snug mt-0.5 font-medium break-words whitespace-normal">
+            {LIBRAS_OPTATIVA_LABEL}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Stem({ direction }: { direction: 'up' | 'down' }) {
   return (
     <div className="flex flex-col items-center py-1">
@@ -253,7 +285,9 @@ function ModuleNode({
   onToggleConhecimentos?: () => void;
   onToggleSaberes?: () => void;
 }) {
-  const anyCollapsed = !!collapsedConhecimentos || !!collapsedSaberes;
+  const anyCollapsed =
+    (!!onToggleConhecimentos && !!collapsedConhecimentos) ||
+    (!!onToggleSaberes && !!collapsedSaberes);
 
   return (
     <div
@@ -265,53 +299,57 @@ function ModuleNode({
       }`}
     >
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00] pointer-events-none z-30" />
-      {collapsedConhecimentos && (
+      {onToggleConhecimentos && collapsedConhecimentos && (
         <div
           className="absolute inset-x-1 top-1 h-0.5 rounded-full bg-[#FF6B00]/80 pointer-events-none z-30"
           aria-hidden
         />
       )}
-      {collapsedSaberes && (
+      {onToggleSaberes && collapsedSaberes && (
         <div
           className="absolute inset-x-1 bottom-1 h-0.5 rounded-full bg-[#FF6B00]/80 pointer-events-none z-30"
           aria-hidden
         />
       )}
 
-      <button
-        type="button"
-        data-map-toggle="trilha-module-conhecimentos"
-        data-module-id={mod.id}
-        data-no-pan
-        aria-pressed={!collapsedConhecimentos}
-        title={
-          collapsedConhecimentos
-            ? 'Mostrar conhecimentos deste módulo'
-            : 'Ocultar conhecimentos deste módulo'
-        }
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleConhecimentos?.();
-        }}
-        className="absolute inset-x-0 top-0 h-1/2 z-20 rounded-t-xl cursor-pointer hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#FF6B00]/60"
-      />
-      <button
-        type="button"
-        data-map-toggle="trilha-module-saberes"
-        data-module-id={mod.id}
-        data-no-pan
-        aria-pressed={!collapsedSaberes}
-        title={
-          collapsedSaberes
-            ? 'Mostrar saberes deste módulo'
-            : 'Ocultar saberes deste módulo'
-        }
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleSaberes?.();
-        }}
-        className="absolute inset-x-0 bottom-0 h-1/2 z-20 rounded-b-xl cursor-pointer hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#FF6B00]/60"
-      />
+      {onToggleConhecimentos && (
+        <button
+          type="button"
+          data-map-toggle="trilha-module-conhecimentos"
+          data-module-id={mod.id}
+          data-no-pan
+          aria-pressed={!collapsedConhecimentos}
+          title={
+            collapsedConhecimentos
+              ? 'Mostrar conhecimentos deste módulo'
+              : 'Ocultar conhecimentos deste módulo'
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleConhecimentos();
+          }}
+          className="absolute inset-x-0 top-0 h-1/2 z-20 rounded-t-xl cursor-pointer hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#FF6B00]/60"
+        />
+      )}
+      {onToggleSaberes && (
+        <button
+          type="button"
+          data-map-toggle="trilha-module-saberes"
+          data-module-id={mod.id}
+          data-no-pan
+          aria-pressed={!collapsedSaberes}
+          title={
+            collapsedSaberes
+              ? 'Mostrar saberes deste módulo'
+              : 'Ocultar saberes deste módulo'
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSaberes();
+          }}
+          className="absolute inset-x-0 bottom-0 h-1/2 z-20 rounded-b-xl cursor-pointer hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#FF6B00]/60"
+        />
+      )}
 
       <div className="relative z-10 pointer-events-none px-3 py-2.5">
         <p className="text-[12px] font-bold text-white leading-snug">
@@ -349,6 +387,7 @@ function ModuleChain({
   lastModuleRef,
   nomenclature = 'cha',
   hideMeetings = false,
+  showLibrasOptativa = false,
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
@@ -357,6 +396,8 @@ function ModuleChain({
   lastModuleRef?: React.Ref<HTMLDivElement>;
   nomenclature?: AppSettings['pedagogicalNomenclature'];
   hideMeetings?: boolean;
+  /** Exibe Libras (Optativa) à esquerda do 1º módulo, sem conector. */
+  showLibrasOptativa?: boolean;
 }) {
   const [collapsedByModule, setCollapsedByModule] = useState<
     Record<string, { conhecimentos?: boolean; saberes?: boolean }>
@@ -364,9 +405,24 @@ function ModuleChain({
 
   if (modules.length === 0) return null;
 
-  const colTemplate = modules
-    .map((_, i) => (i < modules.length - 1 ? '188px auto' : '188px'))
+  const showTop = showConhecimentos;
+  const showBottom = showSaberes;
+  const moduleRow = showTop ? 2 : 1;
+  const saberesRow = showTop ? 3 : 2;
+  const rowTemplate = [showTop ? 'auto' : null, 'auto', showBottom ? 'auto' : null]
+    .filter(Boolean)
     .join(' ');
+
+  const showLibrasLead = !!showLibrasOptativa;
+  const leadCols = showLibrasLead ? 2 : 0; // card + folga (sem seta)
+
+  const colTemplate = [
+    ...(showLibrasLead ? (['188px', '12px'] as string[]) : []),
+    ...modules.map((_, i) => (i < modules.length - 1 ? '188px auto' : '188px')),
+  ].join(' ');
+
+  const moduleCol = (idx: number) => leadCols + idx * 2 + 1;
+  const connectorCol = (idx: number) => leadCols + idx * 2 + 2;
 
   const softLayer = (visible: boolean) =>
     `transition-[opacity,filter,transform] duration-300 ease-out ${
@@ -387,20 +443,20 @@ function ModuleChain({
       className="inline-grid items-stretch"
       style={{
         gridTemplateColumns: colTemplate,
-        gridTemplateRows: 'auto auto auto',
+        gridTemplateRows: rowTemplate,
       }}
       data-map-canvas="trilha"
     >
-      {/* Linha 1 — conhecimentos */}
-      {modules.map((mod, idx) => {
+      {/* Linha 1 — conhecimentos (omitida se a camada global estiver desligada) */}
+      {showTop &&
+        modules.map((mod, idx) => {
         const items = getModuleConhecimentos(mod);
-        const visible =
-          showConhecimentos && !collapsedByModule[mod.id]?.conhecimentos;
+        const visible = !collapsedByModule[mod.id]?.conhecimentos;
         return (
           <React.Fragment key={`k-${mod.id}`}>
             <div
               className={`flex flex-col items-center justify-end gap-2 px-1 pb-0 self-end ${softLayer(visible)}`}
-              style={{ gridColumn: idx * 2 + 1, gridRow: 1 }}
+              style={{ gridColumn: moduleCol(idx), gridRow: 1 }}
               data-map-layer="conhecimentos"
               data-map-module={mod.id}
               aria-hidden={!visible}
@@ -425,7 +481,7 @@ function ModuleChain({
             {idx < modules.length - 1 && (
               <div
                 className={softLayer(visible)}
-                style={{ gridColumn: idx * 2 + 2, gridRow: 1 }}
+                style={{ gridColumn: connectorCol(idx), gridRow: 1 }}
                 data-map-layer="conhecimentos"
                 data-map-module={mod.id}
                 aria-hidden={!visible}
@@ -435,7 +491,18 @@ function ModuleChain({
         );
       })}
 
-      {/* Linha 2 — módulos alinhados + conectores */}
+      {/* Libras — início do mapa, à esquerda do 1º módulo, sem seta */}
+      {showLibrasLead && (
+        <div
+          className="flex items-center justify-center px-1"
+          style={{ gridColumn: 1, gridRow: moduleRow }}
+          data-map-layer="libras"
+        >
+          <LibrasOptativaNode />
+        </div>
+      )}
+
+      {/* Linha — módulos alinhados + conectores */}
       {modules.map((mod, idx) => {
         const isFirst = idx === 0;
         const isLast = idx === modules.length - 1;
@@ -459,7 +526,7 @@ function ModuleChain({
           <React.Fragment key={`m-${mod.id}`}>
             <div
               className="flex items-center justify-center px-1"
-              style={{ gridColumn: idx * 2 + 1, gridRow: 2 }}
+              style={{ gridColumn: moduleCol(idx), gridRow: moduleRow }}
               data-map-layer="modulos"
             >
               <ModuleNode
@@ -468,14 +535,18 @@ function ModuleChain({
                 hideMeetings={hideMeetings}
                 collapsedConhecimentos={!!collapsedByModule[mod.id]?.conhecimentos}
                 collapsedSaberes={!!collapsedByModule[mod.id]?.saberes}
-                onToggleConhecimentos={() => toggleLayer(mod.id, 'conhecimentos')}
-                onToggleSaberes={() => toggleLayer(mod.id, 'saberes')}
+                onToggleConhecimentos={
+                  showTop ? () => toggleLayer(mod.id, 'conhecimentos') : undefined
+                }
+                onToggleSaberes={
+                  showBottom ? () => toggleLayer(mod.id, 'saberes') : undefined
+                }
               />
             </div>
             {idx < modules.length - 1 && (
               <div
                 className="flex items-center justify-center"
-                style={{ gridColumn: idx * 2 + 2, gridRow: 2 }}
+                style={{ gridColumn: connectorCol(idx), gridRow: moduleRow }}
                 data-map-layer="modulos"
               >
                 <ModuleConnector />
@@ -485,15 +556,16 @@ function ModuleChain({
         );
       })}
 
-      {/* Linha 3 — saberes */}
-      {modules.map((mod, idx) => {
+      {/* Linha — saberes (omitida se a camada global estiver desligada) */}
+      {showBottom &&
+        modules.map((mod, idx) => {
         const saberes = mod.competencies || [];
-        const visible = showSaberes && !collapsedByModule[mod.id]?.saberes;
+        const visible = !collapsedByModule[mod.id]?.saberes;
         return (
           <React.Fragment key={`s-${mod.id}`}>
             <div
               className={`flex flex-col items-center justify-start gap-2 px-1 self-start ${softLayer(visible)}`}
-              style={{ gridColumn: idx * 2 + 1, gridRow: 3 }}
+              style={{ gridColumn: moduleCol(idx), gridRow: saberesRow }}
               data-map-layer="saberes"
               data-map-module={mod.id}
               aria-hidden={!visible}
@@ -517,7 +589,7 @@ function ModuleChain({
             {idx < modules.length - 1 && (
               <div
                 className={softLayer(visible)}
-                style={{ gridColumn: idx * 2 + 2, gridRow: 3 }}
+                style={{ gridColumn: connectorCol(idx), gridRow: saberesRow }}
                 data-map-layer="saberes"
                 data-map-module={mod.id}
                 aria-hidden={!visible}
@@ -787,14 +859,17 @@ function TrilhaFormativaLegend({
     label: string;
     active?: boolean;
     onClick?: () => void;
+    /** Se false, some da legenda (export e tela) — camada desligada. */
+    include: boolean;
   }> = [
-    { key: 'modulos', color: 'bg-[#002B49]', label: 'Módulos' },
+    { key: 'modulos', color: 'bg-[#002B49]', label: 'Módulos', include: true },
     {
       key: 'conhecimentos',
       color: 'bg-slate-400',
       label: 'Conhecimentos',
       active: showConhecimentos,
       onClick: onToggleConhecimentos,
+      include: showConhecimentos,
     },
     {
       key: 'saberes',
@@ -802,17 +877,28 @@ function TrilhaFormativaLegend({
       label: 'Saberes',
       active: showSaberes,
       onClick: onToggleSaberes,
+      include: showSaberes,
     },
   ];
 
+  const hint =
+    showConhecimentos && showSaberes
+      ? 'Topo do módulo: conhecimentos · Base: saberes'
+      : showConhecimentos
+        ? 'Topo do módulo: conhecimentos'
+        : showSaberes
+          ? 'Base do módulo: saberes'
+          : '';
+
   return (
     <div
-      className="absolute bottom-3 left-3 z-30 flex flex-row flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-[#002B49]/10 bg-white/95 backdrop-blur-sm px-2.5 py-1.5 shadow-sm pointer-events-auto max-w-[calc(100%-1.5rem)]"
+      className="absolute bottom-2 left-3 z-30 flex flex-row flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-[#002B49]/10 bg-white/95 backdrop-blur-sm px-2.5 py-1.5 shadow-sm pointer-events-auto max-w-[calc(100%-1.5rem)]"
       data-map-legend="trilha"
     >
-      {items.map((item) => {
+      {items
+        .filter((item) => item.include)
+        .map((item) => {
         const clickable = !!item.onClick;
-        const dimmed = clickable && item.active === false;
         if (!clickable) {
           return (
             <div key={item.key} className="flex items-center gap-1.5">
@@ -829,18 +915,12 @@ function TrilhaFormativaLegend({
             type="button"
             data-map-toggle={item.key}
             aria-pressed={item.active}
-            title={
-              item.active
-                ? `Ocultar ${item.label.toLowerCase()}`
-                : `Mostrar ${item.label.toLowerCase()}`
-            }
+            title={`Ocultar ${item.label.toLowerCase()}`}
             onClick={(e) => {
               e.stopPropagation();
               item.onClick?.();
             }}
-            className={`flex items-center gap-1.5 text-left cursor-pointer rounded-md px-0.5 py-0.5 hover:bg-slate-50 transition ${
-              dimmed ? 'opacity-40' : ''
-            }`}
+            className="flex items-center gap-1.5 text-left cursor-pointer rounded-md px-0.5 py-0.5 hover:bg-slate-50 transition"
           >
             <span className={`w-2.5 h-2.5 rounded-sm shrink-0 ${item.color}`} aria-hidden />
             <span className="text-[10px] font-semibold text-slate-600 whitespace-nowrap">
@@ -849,9 +929,11 @@ function TrilhaFormativaLegend({
           </button>
         );
       })}
-      <span className="text-[9px] text-slate-400 leading-snug whitespace-nowrap border-l border-slate-200 pl-3">
-        Topo do módulo: conhecimentos · Base: saberes
-      </span>
+      {hint ? (
+        <span className="text-[9px] text-slate-400 leading-snug whitespace-nowrap border-l border-slate-200 pl-3">
+          {hint}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -865,6 +947,7 @@ function ModularCurriculumMap({
   onToggleSaberes,
   nomenclature = 'cha',
   hideMeetings = false,
+  showLibrasOptativa = false,
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
@@ -873,6 +956,7 @@ function ModularCurriculumMap({
   onToggleSaberes?: () => void;
   nomenclature?: AppSettings['pedagogicalNomenclature'];
   hideMeetings?: boolean;
+  showLibrasOptativa?: boolean;
 }) {
   const { trunk, branches } = useMemo(() => partitionModules(modules), [modules]);
 
@@ -959,9 +1043,9 @@ function ModularCurriculumMap({
         </span>
       </div>
 
-      <div className="relative">
+      <div className="relative pb-12">
       <PanViewport className="max-h-[min(75vh,820px)] rounded-2xl border border-[#002B49]/8 bg-white/40 p-4">
-        <div ref={canvasRef} className="relative inline-block min-w-full pr-4 pb-4">
+        <div ref={canvasRef} className="relative inline-block min-w-full pr-4 pb-2">
           {/* SVG das setas da bifurcação — do módulo 8 até 9A/9B */}
           {hasFork && (forkPaths.upper || forkPaths.lower) && (
             <svg
@@ -1012,6 +1096,7 @@ function ModularCurriculumMap({
               showSaberes={showSaberes}
               nomenclature={nomenclature}
               hideMeetings={hideMeetings}
+              showLibrasOptativa={showLibrasOptativa}
             />
           ) : (
             <div
@@ -1029,6 +1114,7 @@ function ModularCurriculumMap({
                   showSaberes={showSaberes}
                   nomenclature={nomenclature}
                   hideMeetings={hideMeetings}
+                  showLibrasOptativa={showLibrasOptativa}
                   lastModuleRef={trunkEndRef}
                 />
               </div>
@@ -1047,7 +1133,7 @@ function ModularCurriculumMap({
                     />
                     <BranchLaneLabel
                       lane="cima"
-                      name={`Trilha ${upperBranch.key} — ${upperBranch.name}`}
+                      name={`${formatBranchLabel(upperBranch.key)} — ${upperBranch.name}`}
                     />
                   </>
                 )}
@@ -1055,13 +1141,13 @@ function ModularCurriculumMap({
 
               <div className="row-start-2 col-start-2 h-4" />
 
-              {/* Trilha B — direita / baixo; título ACIMA do conteúdo (perto da bifurcação) */}
+              {/* Ênfase inferior — direita / baixo; título ACIMA do conteúdo (perto da bifurcação) */}
               <div className="row-start-3 col-start-2 flex flex-col items-center">
                 {lowerBranch && (
                   <>
                     <BranchLaneLabel
                       lane="baixo"
-                      name={`Trilha ${lowerBranch.key} — ${lowerBranch.name}`}
+                      name={`${formatBranchLabel(lowerBranch.key)} — ${lowerBranch.name}`}
                     />
                     <ModuleChain
                       modules={lowerBranch.modules}
@@ -1075,7 +1161,10 @@ function ModularCurriculumMap({
                 )}
                 {extraBranches.map((br) => (
                   <div key={br.key} className="mt-6 flex flex-col items-center">
-                    <BranchLaneLabel lane="baixo" name={`Trilha ${br.key} — ${br.name}`} />
+                    <BranchLaneLabel
+                      lane="baixo"
+                      name={`${formatBranchLabel(br.key)} — ${br.name}`}
+                    />
                     <ModuleChain
                       modules={br.modules}
                       showConhecimentos={showConhecimentos}
@@ -1114,6 +1203,8 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
   const [isExporting, setIsExporting] = useState(false);
   const [exportToast, setExportToast] = useState<string | null>(null);
   const [mapMode, setMapMode] = useState<GraphMapMode>('pedagogical');
+  /** HTML modular: padrão = os dois mapas; desmarcar = só o mapa da aba atual. */
+  const [htmlIncludeBothMaps, setHtmlIncludeBothMaps] = useState(true);
   const [showConhecimentosOnMap, setShowConhecimentosOnMap] = useState(true);
   const [showSaberesOnMap, setShowSaberesOnMap] = useState(true);
   const [showWorkloadSummaryOnMap, setShowWorkloadSummaryOnMap] = useState(
@@ -1126,6 +1217,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
     setShowSaberesOnMap(true);
     setShowWorkloadSummaryOnMap(!(structure.hideWorkloadSummaryInReport ?? false));
     setMapMode('pedagogical');
+    setHtmlIncludeBothMaps(true);
   }, [structure.id, structure.hideWorkloadSummaryInReport]);
 
   const mapExportBase =
@@ -1175,11 +1267,20 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
 
   const handleExportMapHTML = async () => {
     try {
-      await exportMapToHTML('graph-export-container', structure, undefined, settings);
+      const mode =
+        isModular && htmlIncludeBothMaps ? 'both' : 'current';
+      await exportMapToHTML('graph-export-container', structure, undefined, settings, {
+        mode,
+        activeMap: mapMode,
+      });
       setExportToast(
-        isModular
+        isModular && mode === 'both'
           ? 'HTML gerado com seletor dos dois mapas.'
-          : 'HTML do mapa gerado e download iniciado.'
+          : isModular
+            ? `HTML gerado só com o ${
+                mapMode === 'competences' ? 'Mapa de Competências' : 'Mapa da Trilha Formativa'
+              }.`
+            : 'HTML do mapa gerado e download iniciado.'
       );
       setTimeout(() => setExportToast(null), 3000);
     } catch (e) {
@@ -1214,7 +1315,14 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
               {mapMode === 'competences'
                 ? ' · Aspectos do perfil · Competências por módulo · Selos de vínculo'
                 : isModular
-                  ? ' · Conhecimentos acima · Módulo · Saberes abaixo'
+                  ? [
+                      showConhecimentosOnMap ? 'Conhecimentos acima' : null,
+                      'Módulo',
+                      showSaberesOnMap ? 'Saberes abaixo' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                      .replace(/^/, ' · ')
                   : ' · Períodos em duas linhas · Disciplinas optativas centralizadas'}
             </p>
           </div>
@@ -1257,7 +1365,11 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
               onClick={handleExportMapHTML}
               title={
                 isModular
-                  ? 'Baixar HTML com seletor dos dois mapas'
+                  ? htmlIncludeBothMaps
+                    ? 'Baixar HTML com seletor dos dois mapas'
+                    : mapMode === 'competences'
+                      ? 'Baixar HTML só do Mapa de Competências'
+                      : 'Baixar HTML só do Mapa da Trilha Formativa'
                   : 'Baixar HTML do Mapa Curricular'
               }
               className="px-3.5 py-2 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-bold transition flex items-center gap-1.5"
@@ -1303,8 +1415,31 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
           )}
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
             <Layers3 className="w-3.5 h-3.5 text-[#002B49]" />
-            Exibição no mapa (PDF / PNG · HTML traz os dois)
+            Exibição / exportação
           </span>
+          {isModular && (
+            <label
+              className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none"
+              title="Desmarque para o HTML sair só com o mapa da aba selecionada (Trilha ou Competências). PDF e PNG já usam só o mapa atual."
+            >
+              <input
+                type="checkbox"
+                checked={htmlIncludeBothMaps}
+                onChange={(e) => setHtmlIncludeBothMaps(e.target.checked)}
+                className="rounded text-[#002B49]"
+              />
+              <span>
+                HTML com os <strong>dois</strong> mapas
+                {!htmlIncludeBothMaps && (
+                  <span className="text-slate-500">
+                    {' '}
+                    (só{' '}
+                    {mapMode === 'competences' ? 'Competências' : 'Trilha Formativa'})
+                  </span>
+                )}
+              </span>
+            </label>
+          )}
           {isModular && mapMode === 'pedagogical' && (
             <>
               <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
@@ -1400,6 +1535,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
                     onToggleSaberes={() => setShowSaberesOnMap((v) => !v)}
                     nomenclature={settings.pedagogicalNomenclature}
                     hideMeetings={!!structure.hideMeetings}
+                    showLibrasOptativa={!!structure.hasLibrasOptativa}
                   />
                 </div>
                 <div

@@ -26,8 +26,11 @@ import {
   ArrowUp,
   ArrowDown,
   NotebookPen,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { DcnViewerModal } from './DcnViewerModal';
+import { AuthorizationActsEditor } from './AuthorizationActsEditor';
 import { exportCourseBatchTemplate, readCourseBatchFile } from '../services/exportService';
 import { DEFAULT_REPORT_NOTES_TITLE, createReportNoteBlock, normalizeReportNotesTitle } from '../services/reportNotes';
 import {
@@ -35,22 +38,37 @@ import {
   applyCourseBatchRows,
   parseCourseBatchText,
   summarizeCourseDcns,
+  dcnsToRefString,
 } from '../utils/courseBatch';
+import {
+  normalizeAuthorizationActs,
+  summarizeAuthorizationActs,
+  getActiveAuthorizationActLabel,
+} from '../utils/authorizationActs';
 import { exportLocalAppBackup } from '../services/curriculumService';
 import { FirebaseSetupPanel } from './FirebaseSetupPanel';
+import { useAuth } from '../auth/AuthProvider';
+import {
+  billingBudgetsUrl,
+  getFirestoreDayUsage,
+  SPARK_DAILY_READS,
+  SPARK_DAILY_WRITES,
+} from '../services/firestoreUsage';
+import { getFirebaseClientConfig } from '../firebase/config';
 
 interface SettingsModalProps {
   settings: AppSettings;
   courses: Course[];
-  firebaseOnline?: boolean;
+  serverOnline?: boolean;
   connectingServer?: boolean;
   onConnectFirebase?: (paste: string) => Promise<void>;
-  onSaveSettings: (settings: AppSettings) => Promise<void>;
+  onSaveSettings: (settings: AppSettings, opts?: { silent?: boolean }) => Promise<void>;
   onBatchUpdateCourses: (
     courses: Course[],
     options?: { allowEmptyWipe?: boolean }
   ) => Promise<void>;
   onRestoreLocalBackup?: (raw: string) => void;
+  onNotify?: (text: string, type?: 'success' | 'error' | 'warning') => void;
   onClose: () => void;
 }
 
@@ -59,14 +77,16 @@ const REQUIREMENT_OPTIONS: RequirementLevel[] = ['Obrigatório', 'Opcional', 'N�
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   settings,
   courses,
-  firebaseOnline = false,
+  serverOnline = false,
   connectingServer = false,
   onConnectFirebase,
   onSaveSettings,
   onBatchUpdateCourses,
   onRestoreLocalBackup,
+  onNotify,
   onClose,
 }) => {
+  const { isAdmin } = useAuth();
   const [nomenclature, setNomenclature] = useState<'cha' | 'zabala'>(
     settings.pedagogicalNomenclature
   );
@@ -92,8 +112,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [editableCourses, setEditableCourses] = useState<Course[]>(courses);
   const [coursesCleared, setCoursesCleared] = useState(false);
   const [selectedDcnCourse, setSelectedDcnCourse] = useState<Course | null>(null);
+  const [selectedActsCourse, setSelectedActsCourse] = useState<Course | null>(null);
   const [csvText, setCsvText] = useState('');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [saveMsgType, setSaveMsgType] = useState<'ok' | 'err'>('ok');
+  const [saving, setSaving] = useState(false);
+  const topSaveRef = useRef<HTMLDivElement>(null);
   const [backupText, setBackupText] = useState('');
   const batchFileInputRef = useRef<HTMLInputElement>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
@@ -112,12 +136,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
   }, [settings]);
 
+  // Sincroniza lista editável com o App (load inicial / após Salvar).
+  // Não sobrescreve se o usuário ainda tem edição local mais rica sem salvar.
   useEffect(() => {
     if (coursesCleared) return;
     setEditableCourses((prev) => {
-      // Hidrata quando o App carrega os cursos; não sobrescreve edições em andamento
-      if (prev.length === 0 && courses.length > 0) return courses;
-      return prev.length > 0 ? prev : courses;
+      if (courses.length === 0) return prev;
+      if (prev.length === 0) return courses;
+
+      const sumCh = (list: Course[]) =>
+        list.reduce((s, c) => s + (Number(c.minTotalHours) || 0), 0);
+      const prevCh = sumCh(prev);
+      const nextCh = sumCh(courses);
+
+      // App trouxe lista salva (mesmo tamanho ou CH maior) → usa a do App
+      if (nextCh > prevCh) return courses;
+      if (nextCh === prevCh && courses.length !== prev.length) return courses;
+      // Remount após navegar: se for a mesma “geração” de dados, ok manter prev;
+      // se App tem menos itens (replace) com CH ok, troca
+      if (courses.length < prev.length && nextCh > 0 && nextCh >= prevCh * 0.5) {
+        return courses;
+      }
+      return prev;
     });
   }, [courses, coursesCleared]);
 
@@ -182,11 +222,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const rows = await readCourseBatchFile(file);
       if (rows.length === 0) {
-        setSaveSuccessMsg('Nenhuma linha de curso encontrada no arquivo.');
-        setTimeout(() => setSaveSuccessMsg(null), 4000);
+        setSaveSuccessMsg(
+          'Nenhuma linha de curso encontrada. Use a planilha “Dados para o Gestor” (coluna CURSO / CH Mínima) — não a matriz de estrutura curricular.'
+        );
+        setTimeout(() => setSaveSuccessMsg(null), 7000);
         return;
       }
-      applyBatchResult(applyCourseBatchRows(editableCourses, rows));
+
+      const replace =
+        editableCourses.length === 0 ||
+        window.confirm(
+          `Importar ${rows.length} linha(s) do arquivo e SUBSTITUIR a lista atual (${editableCourses.length} curso(s))? ` +
+            'Isso remove nomes errados (ex.: módulos/disciplinas) e aplica CH, coordenação e demais campos do Excel.'
+        );
+
+      if (!replace && editableCourses.length > 0) {
+        applyBatchResult(applyCourseBatchRows(editableCourses, rows, { replace: false }));
+      } else {
+        applyBatchResult(applyCourseBatchRows([], rows, { replace: true }));
+      }
     } catch (err) {
       console.error(err);
       setSaveSuccessMsg('Falha ao ler o arquivo. Use .xlsx, .xls ou .csv.');
@@ -202,6 +256,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (!window.confirm(`Remover o curso "${course.name}" da lista cadastrada?`)) return;
     setEditableCourses((prev) => prev.filter((c) => c.id !== courseId));
     if (selectedDcnCourse?.id === courseId) setSelectedDcnCourse(null);
+    if (selectedActsCourse?.id === courseId) setSelectedActsCourse(null);
     setSaveSuccessMsg(`Curso "${course.name}" removido. Clique em Salvar para confirmar.`);
     setTimeout(() => setSaveSuccessMsg(null), 5000);
   };
@@ -250,8 +305,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSaveAll = async () => {
+    setSaving(true);
     try {
-      await onSaveSettings(buildSettingsDraft());
+      await onSaveSettings(buildSettingsDraft(), { silent: true });
+      let savedCount = editableCourses.length;
       if (editableCourses.length === 0 && courses.length > 0) {
         if (
           !window.confirm(
@@ -260,26 +317,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         ) {
           setCoursesCleared(false);
           setEditableCourses(courses);
+          setSaveMsgType('err');
           setSaveSuccessMsg('Salvamento cancelado — cursos no servidor preservados.');
           setTimeout(() => setSaveSuccessMsg(null), 4000);
           return;
         }
         await onBatchUpdateCourses([], { allowEmptyWipe: true });
+        setEditableCourses([]);
+        savedCount = 0;
       } else {
         await onBatchUpdateCourses(editableCourses);
       }
       setCoursesCleared(false);
-      setSaveSuccessMsg('Configurações e carga em lote salvas!');
-      setTimeout(() => setSaveSuccessMsg(null), 3000);
+      const msg =
+        savedCount === 0
+          ? 'Salvo: lista de cursos vazia no servidor.'
+          : `Salvo com sucesso: ${savedCount} curso(s) no navegador e no servidor.`;
+      setSaveMsgType('ok');
+      setSaveSuccessMsg(msg);
+      onNotify?.(msg, 'success');
+      topSaveRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(() => setSaveSuccessMsg(null), 6000);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao salvar.';
+      setSaveMsgType('err');
       setSaveSuccessMsg(message);
-      setTimeout(() => setSaveSuccessMsg(null), 6000);
+      onNotify?.(message, 'error');
+      setTimeout(() => setSaveSuccessMsg(null), 8000);
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" ref={topSaveRef}>
+      {/* Toast fixo — visível mesmo se o scroll estiver no fim da página */}
+      {saveSuccessMsg && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-lg w-[calc(100%-2rem)] pointer-events-none">
+          <div
+            className={`px-4 py-3 rounded-xl shadow-2xl border text-xs font-bold flex items-center gap-2 ${
+              saveMsgType === 'ok'
+                ? 'bg-[#002B49] text-white border-[#FF6B00]'
+                : 'bg-rose-900 text-white border-rose-400'
+            }`}
+          >
+            {saveMsgType === 'ok' ? (
+              <CheckCircle2 className="w-4 h-4 text-[#FF7A00] shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-200 shrink-0" />
+            )}
+            <span>{saveSuccessMsg}</span>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
         <div className="flex flex-wrap items-center justify-between border-b border-slate-200 pb-4 gap-4">
           <div className="flex items-center gap-3">
@@ -296,37 +387,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={onClose}
               className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold hover:bg-slate-100"
             >
               Voltar
             </button>
             <button
-              onClick={handleSaveAll}
-              className="px-5 py-2 rounded-lg bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-black transition flex items-center gap-1.5 shadow-md"
+              type="button"
+              onClick={() => void handleSaveAll()}
+              disabled={saving}
+              className="px-5 py-2 rounded-lg bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-black transition flex items-center gap-1.5 shadow-md disabled:opacity-60"
             >
-              <Save className="w-4 h-4" />
-              Salvar Alterações
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'Salvando…' : 'Salvar Alterações'}
             </button>
           </div>
         </div>
 
         {saveSuccessMsg && (
-          <div className="mt-4 p-3 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-bold flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          <div
+            className={`mt-4 p-3 rounded-lg border text-xs font-bold flex items-center gap-2 ${
+              saveMsgType === 'ok'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                : 'bg-rose-50 border-rose-300 text-rose-800'
+            }`}
+          >
+            {saveMsgType === 'ok' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-600" />
+            )}
             {saveSuccessMsg}
           </div>
         )}
 
-        {onConnectFirebase && (
-          <div className="mt-6">
-            <FirebaseSetupPanel
-              firebaseOnline={firebaseOnline}
-              busy={connectingServer}
-              onConnect={onConnectFirebase}
-            />
-          </div>
-        )}
+        <div className="mt-6 space-y-4">
+          <FirebaseSetupPanel
+            firebaseOnline={serverOnline}
+            busy={connectingServer}
+            onConnect={onConnectFirebase}
+          />
+          {isAdmin && (
+            <div className="p-4 rounded-xl border border-amber-200 bg-amber-50/80 space-y-2">
+              <h3 className="text-sm font-bold text-amber-950">Admin · Spark + alerta de R$ 0,01</h3>
+              <p className="text-xs text-amber-900/90 leading-relaxed">
+                Visível só para administradores. O app evita regravar a base inteira e remove PDFs
+                embutidos do sync. Crie um orçamento no Google Cloud Billing com alerta em R$ 0,01.
+              </p>
+              {(() => {
+                const usage = getFirestoreDayUsage();
+                const projectId = getFirebaseClientConfig()?.projectId;
+                return (
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <span className="text-[11px] text-amber-950/80 tabular-nums">
+                      Hoje (estimado): {usage.reads}/{SPARK_DAILY_READS} leituras · {usage.writes}/
+                      {SPARK_DAILY_WRITES} escritas
+                    </span>
+                    <a
+                      href={billingBudgetsUrl(projectId)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] font-bold text-[#002B49] underline"
+                    >
+                      Abrir orçamentos no Google Cloud
+                    </a>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
 
         <div className="mt-6 p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
           <h3 className="text-sm font-bold text-[#002B49] uppercase tracking-wider flex items-center gap-2">
@@ -334,9 +465,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             Backup dos cadastros neste navegador
           </h3>
           <p className="text-xs text-slate-500">
-            {firebaseOnline
-              ? 'O servidor está ligado. Ainda assim, baixe um backup JSON para segurança.'
-              : 'Backup de segurança dos dados deste navegador. Com o servidor embutido no projeto, os cadastros já ficam na nuvem automaticamente.'}
+            {serverOnline
+              ? 'O Firebase está ligado. Ainda assim, baixe um backup JSON para segurança.'
+              : 'Backup de segurança dos dados deste navegador. Com o Firebase no ar, os cadastros sincronizam na nuvem.'}
           </p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -524,10 +655,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               3. Página de Observações, Regras e Explicações da Estrutura
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-4xl">
-              Este conteúdo é gerado como 3ª página nas exportações em PDF, PNG e HTML (após o
-              Resumo do PPC e a matriz curricular), com o mesmo cabeçalho institucional. Cadastre
-              quantos títulos e textos precisar; o conteúdo é separado por tipo de estrutura. Linhas
-              iniciadas por “-” viram lista.
+              Este conteúdo pode ser incluído como página de Observações nas exportações em PDF, PNG e
+              HTML (após o Perfil do Egresso e a matriz). Na tela da estrutura, a opção fica marcada por
+              padrão e pode ser desmarcada se não quiser gerar essa página. Cadastre quantos títulos e
+              textos precisar; o conteúdo é separado por tipo de estrutura. Linhas iniciadas por “-”
+              viram lista.
             </p>
           </div>
 
@@ -949,14 +1081,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       />
                     </td>
                     <td className="px-2.5 py-1.5">
-                      <input
-                        type="text"
-                        value={c.authorizationAct || ''}
-                        onChange={(e) =>
-                          handleCourseFieldChange(c.id, 'authorizationAct', e.target.value)
-                        }
-                        className="w-44 px-1.5 py-1 border rounded bg-slate-50"
-                      />
+                      <button
+                        type="button"
+                        onClick={() => setSelectedActsCourse(c)}
+                        className="px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 text-[#002B49] text-[10px] font-bold border border-amber-200 flex flex-col items-start gap-0.5 max-w-[220px]"
+                        title={getActiveAuthorizationActLabel(c)}
+                      >
+                        <span>{summarizeAuthorizationActs(c)}</span>
+                        <span className="text-[9px] font-medium text-slate-600 normal-case whitespace-normal text-left line-clamp-2">
+                          {getActiveAuthorizationActLabel(c)}
+                        </span>
+                      </button>
                     </td>
                     <td className="px-2.5 py-1.5">
                       <button
@@ -1000,19 +1135,85 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Footer save */}
         <div className="pt-4 border-t border-slate-200 flex justify-end gap-2">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 rounded-lg border text-slate-600 text-xs font-semibold"
           >
             Fechar
           </button>
           <button
-            onClick={handleSaveAll}
-            className="px-6 py-2 rounded-lg bg-[#FF6B00] text-white text-xs font-black shadow-md"
+            type="button"
+            onClick={() => void handleSaveAll()}
+            disabled={saving}
+            className="px-6 py-2 rounded-lg bg-[#FF6B00] text-white text-xs font-black shadow-md disabled:opacity-60 flex items-center gap-1.5"
           >
-            Salvar Todas as Configurações
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {saving ? 'Salvando…' : 'Salvar Todas as Configurações'}
           </button>
         </div>
       </div>
+
+      {/* Modal atos autorizativos por unidade */}
+      {selectedActsCourse && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5 space-y-4">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-black text-[#002B49]">
+                  Atos autorizativos por unidade
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Curso: <strong>{selectedActsCourse.name}</strong> ({selectedActsCourse.modality})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedActsCourse(null)}
+                className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100"
+              >
+                Fechar
+              </button>
+            </div>
+            <AuthorizationActsEditor
+              acts={normalizeAuthorizationActs(selectedActsCourse).authorizationActs}
+              activeId={normalizeAuthorizationActs(selectedActsCourse).activeAuthorizationActId}
+              datalistId={`campus-units-${selectedActsCourse.id}`}
+              onChange={(acts, activeId) => {
+                const normalized = normalizeAuthorizationActs({
+                  authorizationActs: acts,
+                  activeAuthorizationActId: activeId,
+                });
+                setEditableCourses((prev) =>
+                  prev.map((c) =>
+                    c.id === selectedActsCourse.id
+                      ? {
+                          ...c,
+                          authorizationActs: normalized.authorizationActs,
+                          activeAuthorizationActId: normalized.activeAuthorizationActId,
+                          authorizationAct: normalized.authorizationAct,
+                        }
+                      : c
+                  )
+                );
+                setSelectedActsCourse((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        authorizationActs: normalized.authorizationActs,
+                        activeAuthorizationActId: normalized.activeAuthorizationActId,
+                        authorizationAct: normalized.authorizationAct,
+                      }
+                    : null
+                );
+              }}
+            />
+            <p className="text-[10px] text-slate-500">
+              Ao salvar as configurações, estes atos ficam no cadastro do curso e podem ser
+              copiados para a estrutura ao selecionar o curso.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Modal para Visualizar / Cadastrar PDFs das DCNs deste Curso */}
       {selectedDcnCourse && (
@@ -1026,12 +1227,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 ? {
                     ...c,
                     dcns: updatedDcns,
-                    activeDcn: updatedDcns.length > 0 ? (updatedDcns[0].resolutionNumber || updatedDcns[0].title) : c.activeDcn,
+                    activeDcn:
+                      updatedDcns.length > 0
+                        ? dcnsToRefString(updatedDcns)
+                        : c.activeDcn,
                   }
                 : c
             );
             setEditableCourses(updated);
-            setSelectedDcnCourse((prev) => prev ? { ...prev, dcns: updatedDcns } : null);
+            setSelectedDcnCourse((prev) =>
+              prev ? { ...prev, dcns: updatedDcns, activeDcn: dcnsToRefString(updatedDcns) || prev.activeDcn } : null
+            );
             await onBatchUpdateCourses(updated);
           }}
         />

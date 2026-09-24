@@ -17,48 +17,56 @@ import {
   Clock, 
   CheckCircle2, 
   AlertTriangle,
-  UploadCloud,
   ChevronRight,
   BookOpen
 } from 'lucide-react';
 import { exportToPDF, exportToXLSX, exportToInteractiveHTML, exportToPNG } from '../services/exportService';
 import { DcnViewerModal } from './DcnViewerModal';
+import { compareStructureStatus, structureCalendarYear } from '../utils/structureList';
 
 interface StructuresListProps {
   structures: CurriculumStructure[];
   settings: AppSettings;
-  firebaseOnline?: boolean;
+  serverOnline?: boolean;
   onSelectStructure: (structure: CurriculumStructure, view: 'table' | 'graph') => void;
   onEditStructure: (structure: CurriculumStructure) => void;
   onDeleteStructure: (id: string) => Promise<void>;
   onDuplicateStructure: (structure: CurriculumStructure) => Promise<void>;
   onCreateNew: () => void;
-  onOpenSagaImport: () => void;
   onOpenSettings?: () => void;
 }
 
-type StructureSortMode = 'name' | 'date';
+type StructureSortMode = 'name' | 'ch' | 'year' | 'ativa' | 'desativacao' | 'date';
 
 export const StructuresList: React.FC<StructuresListProps> = ({
   structures,
   settings,
-  firebaseOnline = false,
+  serverOnline = false,
   onSelectStructure,
   onEditStructure,
   onDeleteStructure,
   onDuplicateStructure,
   onCreateNew,
-  onOpenSagaImport,
   onOpenSettings,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedModality, setSelectedModality] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [yearFilter, setYearFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<StructureSortMode>('name');
   const [dcnModalStructure, setDcnModalStructure] = useState<CurriculumStructure | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<CurriculumStructure | null>(null);
   const [duplicating, setDuplicating] = useState(false);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    for (const s of structures) {
+      const y = structureCalendarYear(s);
+      if (y != null) years.add(y);
+    }
+    return [...years].sort((a, b) => b - a);
+  }, [structures]);
 
   const confirmDuplicate = async () => {
     if (!pendingDuplicate || duplicating) return;
@@ -72,10 +80,15 @@ export const StructuresList: React.FC<StructuresListProps> = ({
   };
 
   const filteredStructures = useMemo(() => {
+    const yearNum = yearFilter === 'all' ? null : Number(yearFilter);
     const filtered = structures.filter((s) => {
       if (selectedModality !== 'all' && s.modality !== selectedModality) return false;
       if (selectedType !== 'all' && s.structureType !== selectedType) return false;
       if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+      if (yearNum != null) {
+        const y = structureCalendarYear(s);
+        if (y !== yearNum) return false;
+      }
 
       if (!searchTerm) return true;
       const term = searchTerm.toLowerCase();
@@ -87,19 +100,45 @@ export const StructuresList: React.FC<StructuresListProps> = ({
       );
     });
 
-    return [...filtered].sort((a, b) => {
-      if (sortBy === 'date') {
-        const ta = Date.parse(a.updatedAt || a.createdAt || '') || 0;
-        const tb = Date.parse(b.updatedAt || b.createdAt || '') || 0;
-        if (tb !== ta) return tb - ta;
-      }
+    const byNameCode = (a: CurriculumStructure, b: CurriculumStructure) => {
       const byName = (a.courseName || '').localeCompare(b.courseName || '', 'pt-BR', {
         sensitivity: 'base',
       });
       if (byName !== 0) return byName;
       return (a.code || '').localeCompare(b.code || '', 'pt-BR');
+    };
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'ch') {
+        const diff = (b.calculatedTotalHours || 0) - (a.calculatedTotalHours || 0);
+        if (diff !== 0) return diff;
+        return byNameCode(a, b);
+      }
+      if (sortBy === 'year') {
+        const ya = structureCalendarYear(a) ?? 0;
+        const yb = structureCalendarYear(b) ?? 0;
+        if (yb !== ya) return yb - ya;
+        return byNameCode(a, b);
+      }
+      if (sortBy === 'ativa') {
+        const byStatus = compareStructureStatus(a.status, b.status);
+        if (byStatus !== 0) return byStatus;
+        return byNameCode(a, b);
+      }
+      if (sortBy === 'desativacao') {
+        const rankA = a.status === 'Em Desativação' ? 0 : a.status === 'Ativa' ? 1 : 2;
+        const rankB = b.status === 'Em Desativação' ? 0 : b.status === 'Ativa' ? 1 : 2;
+        if (rankA !== rankB) return rankA - rankB;
+        return byNameCode(a, b);
+      }
+      if (sortBy === 'date') {
+        const ta = Date.parse(a.updatedAt || a.createdAt || '') || 0;
+        const tb = Date.parse(b.updatedAt || b.createdAt || '') || 0;
+        if (tb !== ta) return tb - ta;
+      }
+      return byNameCode(a, b);
     });
-  }, [structures, selectedModality, selectedType, statusFilter, searchTerm, sortBy]);
+  }, [structures, selectedModality, selectedType, statusFilter, yearFilter, searchTerm, sortBy]);
 
   return (
     <div className="space-y-6">
@@ -114,7 +153,7 @@ export const StructuresList: React.FC<StructuresListProps> = ({
                 UNISUAM • Sistema Oficial
               </span>
               <span className="text-xs text-blue-200">
-                {firebaseOnline
+                {serverOnline
                   ? 'Lista ao vivo no servidor — o que uma pessoa salva as outras veem'
                   : 'Cadastros só neste navegador (não estão no servidor)'}
               </span>
@@ -135,14 +174,6 @@ export const StructuresList: React.FC<StructuresListProps> = ({
             >
               <Plus className="w-4 h-4" />
               Nova Estrutura
-            </button>
-
-            <button
-              onClick={onOpenSagaImport}
-              className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition flex items-center gap-2 border border-white/20"
-            >
-              <UploadCloud className="w-4 h-4 text-emerald-300" />
-              Importar do SAGA
             </button>
           </div>
         </div>
@@ -224,6 +255,20 @@ export const StructuresList: React.FC<StructuresListProps> = ({
           </select>
 
           <select
+            value={yearFilter}
+            onChange={(e) => setYearFilter(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-700 font-semibold"
+            title="Filtrar pelo ano do semestre (ex.: 2023.1 → 2023)"
+          >
+            <option value="all">Todos os Anos</option>
+            {availableYears.map((y) => (
+              <option key={y} value={String(y)}>
+                Ano {y}
+              </option>
+            ))}
+          </select>
+
+          <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-700 font-semibold"
@@ -241,7 +286,11 @@ export const StructuresList: React.FC<StructuresListProps> = ({
             title="Ordenar listagem"
           >
             <option value="name">Ordenar: Nome</option>
-            <option value="date">Ordenar: Data</option>
+            <option value="ch">Ordenar: Carga horária</option>
+            <option value="year">Ordenar: Ano</option>
+            <option value="ativa">Ordenar: Ativa</option>
+            <option value="desativacao">Ordenar: Em Desativação</option>
+            <option value="date">Ordenar: Data de alteração</option>
           </select>
         </div>
       </div>
@@ -252,7 +301,7 @@ export const StructuresList: React.FC<StructuresListProps> = ({
           <Layers className="w-10 h-10 text-slate-300 mx-auto" />
           <h3 className="font-bold text-slate-800 text-sm">Nenhuma estrutura curricular encontrada</h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto">
-            {firebaseOnline
+            {serverOnline
               ? 'Ajuste os filtros ou crie uma nova estrutura curricular usando o importador SAGA.'
               : 'Nenhuma estrutura neste navegador. Com o servidor embutido no projeto, a lista da nuvem aparece automaticamente.'}
           </p>
@@ -263,7 +312,7 @@ export const StructuresList: React.FC<StructuresListProps> = ({
             >
               Cadastrar Estrutura Agora
             </button>
-            {!firebaseOnline && onOpenSettings && (
+            {!serverOnline && onOpenSettings && (
               <button
                 onClick={onOpenSettings}
                 className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold"

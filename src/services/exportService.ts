@@ -14,6 +14,8 @@ import {
   structureHasPresentialSplit,
   showsComponentCodeColumn,
 } from '../types/curriculum';
+import { formatDcnsDisplayLabel } from '../utils/courseBatch';
+import { getActiveAuthorizationActLabel } from '../utils/authorizationActs';
 import {
   buildWorkloadSummary,
   buildModuleMeetingsSummary,
@@ -25,7 +27,7 @@ import {
   WorkloadSummaryRow,
 } from './workloadSummary';
 import { getSaberesLabels, labelForCategory, matchesSaberesColumn } from '../utils/nomenclature';
-import { formatModuleName } from '../utils/roman';
+import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { getModularComponents } from '../utils/modularComponents';
 import { getReportNotes, renderReportNotesPageHtml } from './reportNotes';
 import {
@@ -209,9 +211,13 @@ function renderWorkloadSummaryHtml(structure: CurriculumStructure): string {
               ${componentRows
                 .map(
                   (row) =>
-                    `<td class="${chDensity.cellPad} text-center tabular-nums text-slate-600">${formatWorkloadPercent(
-                      row.percent
-                    )}</td>`
+                    `<td class="${chDensity.cellPad} text-center tabular-nums text-slate-600"${
+                      row.excludeFromTotal
+                        ? ' title="Não contabiliza na CH total do curso"'
+                        : ''
+                    }>${
+                      row.excludeFromTotal ? '—' : formatWorkloadPercent(row.percent)
+                    }</td>`
                 )
                 .join('')}
             </tr>
@@ -535,20 +541,24 @@ async function rasterizeElementToPng(
   }
 }
 
-/** Opções de exportação por captura de tela (páginas extras: resumo PPC + observações). */
-export interface ElementExportOptions {
-  structure?: CurriculumStructure;
-  settings?: AppSettings;
+/** Opções de páginas extras (perfil do egresso + observações) na geração de documentos. */
+export interface DocumentPageExportOptions {
   /**
-   * Inclui a 1ª página “Resumo do PPC” (perfil + competências).
-   * Padrão: true. Nos mapas, passar false — o PPC só vai na impressão da estrutura.
+   * Inclui a página “Perfil do Egresso”.
+   * Padrão: true. Nos mapas, passar false.
    */
   includePpcSummary?: boolean;
   /**
    * Inclui a página de observações.
-   * Padrão: true. Nos mapas, passar false — observações só na impressão da estrutura.
+   * Padrão: true. Nos mapas, passar false.
    */
   includeReportNotes?: boolean;
+}
+
+/** Opções de exportação por captura de tela (páginas extras: resumo PPC + observações). */
+export interface ElementExportOptions extends DocumentPageExportOptions {
+  structure?: CurriculumStructure;
+  settings?: AppSettings;
 }
 
 function triggerDownload(dataUrl: string, filename: string): void {
@@ -980,7 +990,11 @@ export async function exportToXLSX(
   await exportCurriculumToXlsx(structure, settings);
 }
 
-export function exportToPDF(structure: CurriculumStructure, settings?: AppSettings): void {
+export function exportToPDF(
+  structure: CurriculumStructure,
+  settings?: AppSettings,
+  options: DocumentPageExportOptions = {}
+): void {
   // Use landscape A4 (297 x 210 mm) for academic matrixes with granular CH columns
   const doc = new jsPDF('l', 'mm', 'a4');
   const usePresentialSplit = structureHasPresentialSplit(structure);
@@ -988,9 +1002,11 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   const saberes = getSaberesLabels(settings?.pedagogicalNomenclature);
   const chaTitle =
     settings?.pedagogicalNomenclature === 'zabala' ? saberes.full : saberes.sectionTitle;
+  const includePpc = options.includePpcSummary !== false;
+  const includeNotes = options.includeReportNotes !== false;
 
-  // 1ª página: Resumo do Projeto Pedagógico do Curso
-  if (hasPpcSummary(structure)) {
+  // 1ª página: Perfil do Egresso
+  if (includePpc && hasPpcSummary(structure)) {
     appendPpcSummaryVectorPages(doc, structure, settings);
     doc.addPage();
   }
@@ -1025,11 +1041,11 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
 
   doc.text(`Curso e Modalidade: ${structure.courseName} (${structure.modality})`, margin + 3, y + 5);
   doc.text(
-    `Ato Autorizativo: ${structure.authorizationAct || structure.recognitionPortaria || '-'}`,
+    `Ato Autorizativo: ${getActiveAuthorizationActLabel(structure)}`,
     margin + 3,
     y + 10
   );
-  doc.text(`DCN do Curso: ${structure.dcnRef || '—'}`, margin + 3, y + 15);
+  doc.text(`DCN do Curso: ${formatDcnsDisplayLabel(structure.dcns, structure.dcnRef)}`, margin + 3, y + 15);
   
   doc.text(`Estrutura: ${structure.code} (${structure.status})`, margin + 110, y + 5);
   if (!structure.hideValidity && structure.validityStart) {
@@ -1220,8 +1236,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10.5);
       doc.setTextColor(255, 255, 255);
-      const branchIndicator = mod.branch ? ` [Trilha ${mod.branch}]` : '';
-      const modTitle = `${formatModuleName(mod.number, mod.title)}${branchIndicator} (${
+      const modTitle = `${formatModuleName(mod.number, mod.title, mod.branch)} (${
         structure.hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`
       })`;
       doc.text(modTitle, margin + contentWidth / 2, y + 4.2, { align: 'center' });
@@ -1407,7 +1422,11 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
     };
 
     drawValueRow('Hora-relógio', (row) => formatWorkloadHours(row.hours), true);
-    drawValueRow('Percentual', (row) => formatWorkloadPercent(row.percent), false);
+    drawValueRow(
+      'Percentual',
+      (row) => (row.excludeFromTotal ? '—' : formatWorkloadPercent(row.percent)),
+      false
+    );
 
     if (totalRow) {
       doc.setFillColor(255, 240, 230);
@@ -1523,6 +1542,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
   doc.text(`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}`, margin + 180, y + 4);
 
   // Última página: observações, regras e explicações da estrutura
+  if (includeNotes) {
   const notes = getReportNotes(structure.structureType, settings);
   if (notes.blocks.length > 0) {
     doc.addPage();
@@ -1555,7 +1575,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       ny + 5
     );
     doc.text(
-      `Ato Autorizativo: ${structure.authorizationAct || structure.recognitionPortaria || '—'}`,
+      `Ato Autorizativo: ${getActiveAuthorizationActLabel(structure)}`,
       margin + 110,
       ny + 5
     );
@@ -1565,7 +1585,7 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       margin + 3,
       ny + 9.5
     );
-    doc.text(`DCN do Curso: ${structure.dcnRef || '—'}`, margin + 110, ny + 9.5);
+    doc.text(`DCN do Curso: ${formatDcnsDisplayLabel(structure.dcns, structure.dcnRef)}`, margin + 110, ny + 9.5);
     doc.text(`Semestre Ativo: ${structure.activeYearSemester}`, margin + 200, ny + 9.5);
     ny += 22;
 
@@ -1611,13 +1631,15 @@ export function exportToPDF(structure: CurriculumStructure, settings?: AppSettin
       ny += 4;
     });
   }
+  }
 
   doc.save(`${structure.code}_${structure.courseName.replace(/\s+/g, '_')}_Oficial_UNISUAM.pdf`);
 }
 
 export async function generateInteractiveHtml(
   structure: CurriculumStructure,
-  settings?: AppSettings
+  settings?: AppSettings,
+  options: DocumentPageExportOptions = {}
 ): Promise<string> {
   const saberes = getSaberesLabels(settings?.pedagogicalNomenclature);
   const chaTitle =
@@ -1627,6 +1649,8 @@ export async function generateInteractiveHtml(
   const usePresentialSplit = structureHasPresentialSplit(structure);
   const showCodeCol = showsComponentCodeColumn(structure);
   const logoDataUrl = await getLogoDataUrl().catch(() => '');
+  const includePpc = options.includePpcSummary !== false;
+  const includeNotes = options.includeReportNotes !== false;
 
   const dataJson = JSON.stringify(structure);
 
@@ -1671,6 +1695,7 @@ export async function generateInteractiveHtml(
 
   <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
     ${(() => {
+      if (!includePpc) return '';
       const summaryHtml = renderPpcSummaryPageHtml(structure, settings, { logoDataUrl });
       return summaryHtml
         ? `<div class="ppc-summary-page rounded-xl overflow-hidden border border-slate-200 bg-white">${summaryHtml}</div>`
@@ -1690,8 +1715,8 @@ export async function generateInteractiveHtml(
           <p class="text-[17px] text-slate-600">Estrutura: <span class="font-semibold text-[#002B49]">${
             structure.structureType === 'modular' ? 'Modular' : 'Disciplinar'
           }</span></p>
-          <p class="text-[15px] text-slate-500">Ato Autorizativo: ${structure.authorizationAct || structure.recognitionPortaria || '—'}</p>
-          <p class="text-[15px] text-slate-500">DCN do Curso: ${structure.dcnRef || '—'}</p>
+          <p class="text-[15px] text-slate-500">Ato Autorizativo: ${getActiveAuthorizationActLabel(structure)}</p>
+          <p class="text-[15px] text-slate-500">DCN do Curso: ${formatDcnsDisplayLabel(structure.dcns, structure.dcnRef)}</p>
         </div>
         <div class="space-y-1">
           <span class="text-[15px] font-semibold uppercase tracking-wider text-slate-400">Vigência & Diretriz</span>
@@ -1875,9 +1900,9 @@ export async function generateInteractiveHtml(
         <div class="module-card bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div class="bg-[#002B49] px-6 py-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-white">
             <div class="flex items-center gap-2 justify-self-start">
-              ${mod.branch ? `<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-[15px] font-semibold">Trilha ${mod.branch}</span>` : ''}
+              ${mod.branch ? `<span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30 text-[15px] font-semibold">${formatBranchLabel(mod.branch)}</span>` : ''}
             </div>
-            <h3 class="font-bold text-[19px] text-white text-center">${formatModuleName(mod.number, mod.title)}</h3>
+            <h3 class="font-bold text-[19px] text-white text-center">${formatModuleName(mod.number, mod.title, mod.branch)}</h3>
             <div class="flex items-center gap-3 justify-self-end">
               <span class="text-[17px] font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${mod.hours}h</span>
               ${
@@ -2090,6 +2115,7 @@ export async function generateInteractiveHtml(
     ${renderWorkloadSummaryHtml(structure)}
 
     ${(() => {
+      if (!includeNotes) return '';
       const notesHtml = renderReportNotesPageHtml(structure, settings, { logoDataUrl });
       return notesHtml
         ? `<div class="report-notes-page mt-8 rounded-xl overflow-hidden border border-slate-200 bg-white">${notesHtml}</div>`
@@ -2154,9 +2180,10 @@ export async function generateInteractiveHtml(
 
 export async function exportToInteractiveHTML(
   structure: CurriculumStructure,
-  settings?: AppSettings
+  settings?: AppSettings,
+  options: DocumentPageExportOptions = {}
 ): Promise<void> {
-  const htmlContent = await generateInteractiveHtml(structure, settings);
+  const htmlContent = await generateInteractiveHtml(structure, settings, options);
   const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -2169,18 +2196,27 @@ export async function exportToInteractiveHTML(
 /**
  * Gera um HTML autônomo com o Mapa Curricular renderizado na tela
  * (inclui pan por arrastar, Tailwind via CDN e, em estruturas modulares,
- * o seletor Mapa da Trilha Formativa / Mapa de Competências).
+ * o seletor Mapa da Trilha Formativa / Mapa de Competências — ou só um mapa).
  */
+export type MapHtmlExportMode = 'both' | 'current';
+
 export async function exportMapToHTML(
   elementId: string,
   structure: CurriculumStructure,
   filename?: string,
-  settings?: AppSettings
+  settings?: AppSettings,
+  options?: { mode?: MapHtmlExportMode; activeMap?: string }
 ): Promise<void> {
   const element = document.getElementById(elementId);
   if (!element) {
     throw new Error('Elemento do mapa não encontrado para exportação HTML');
   }
+
+  const mode: MapHtmlExportMode = options?.mode === 'current' ? 'current' : 'both';
+  const preferredActive =
+    options?.activeMap ||
+    element.getAttribute('data-active-map') ||
+    '';
 
   const clone = element.cloneNode(true) as HTMLElement;
   clone.querySelectorAll('.no-export').forEach((n) => n.remove());
@@ -2202,25 +2238,40 @@ export async function exportMapToHTML(
     el.classList.remove('cursor-grab', 'cursor-grabbing');
   });
 
-  const mapPanels = Array.from(
+  let mapPanels = Array.from(
     clone.querySelectorAll<HTMLElement>('[data-map-view]')
   );
-  const hasMapSwitcher = mapPanels.length > 1;
   const initialMap =
-    element.getAttribute('data-active-map') ||
+    preferredActive ||
     mapPanels[0]?.getAttribute('data-map-view') ||
     'pedagogical';
 
+  // Só um mapa: remove o outro painel do HTML
+  if (mode === 'current' && mapPanels.length > 1) {
+    mapPanels.forEach((panel) => {
+      const key = panel.getAttribute('data-map-view') || '';
+      if (key !== initialMap) panel.remove();
+    });
+    mapPanels = Array.from(clone.querySelectorAll<HTMLElement>('[data-map-view]'));
+  }
+
+  const hasMapSwitcher = mode === 'both' && mapPanels.length > 1;
+
   mapPanels.forEach((panel) => {
     const key = panel.getAttribute('data-map-view') || '';
-    panel.style.display = key === initialMap ? 'block' : 'none';
+    panel.style.display = key === initialMap || mapPanels.length === 1 ? 'block' : 'none';
   });
 
   // Embute imagens (logo etc.) como data URL — HTML baixado não tem acesso aos assets do Vite
   await inlineImagesAsDataUrls(clone, element);
 
   const safeName = (structure.courseName || 'Curso').replace(/\s+/g, '_');
-  const title = `Mapa Curricular — ${structure.code} · ${structure.courseName}`;
+  const singleTitle =
+    mapPanels[0]?.getAttribute('data-map-title') ||
+    (initialMap === 'competences' ? 'Mapa de Competências' : 'Mapa da Trilha Formativa');
+  const title = hasMapSwitcher
+    ? `Mapa Curricular — ${structure.code} · ${structure.courseName}`
+    : `${singleTitle} — ${structure.code} · ${structure.courseName}`;
   // Mapas NÃO incluem Resumo do PPC nem observações — isso fica só na impressão da estrutura.
 
   const switcherHtml = hasMapSwitcher
@@ -2640,9 +2691,13 @@ export async function exportMapToHTML(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download =
-    filename ||
-    `${structure.code}_${safeName}_Mapa_Curricular.html`;
+  const mapSlug =
+    mode === 'current'
+      ? initialMap === 'competences'
+        ? 'Mapa_Competencias'
+        : 'Mapa_Trilha_Formativa'
+      : 'Mapa_Curricular';
+  link.download = filename || `${structure.code}_${safeName}_${mapSlug}.html`;
   link.click();
   URL.revokeObjectURL(url);
 }

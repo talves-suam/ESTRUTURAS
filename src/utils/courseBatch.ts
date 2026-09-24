@@ -1,4 +1,5 @@
 import { Course, DcnDocument, ModalityType, RequirementLevel, CurriculumStructure } from '../types/curriculum';
+import { normalizeAuthorizationActs } from './authorizationActs';
 
 export const COURSE_BATCH_HEADERS = [
   'Curso',
@@ -185,6 +186,10 @@ export function ensureCourseForStructure(
     activeDcn: structure.dcnRef || template?.activeDcn || '',
     dcnLink: template?.dcnLink,
     authorizationAct: structure.authorizationAct || template?.authorizationAct || '',
+    authorizationActs:
+      structure.authorizationActs || template?.authorizationActs,
+    activeAuthorizationActId:
+      structure.activeAuthorizationActId || template?.activeAuthorizationActId,
     dcns: structure.dcns || template?.dcns,
     minTotalHours:
       structure.requiredTotalHours || template?.minTotalHours || structure.calculatedTotalHours || 0,
@@ -238,11 +243,28 @@ export function generateCourseCodeFromName(name: string): string {
 }
 
 export function parseModality(raw: string): ModalityType | undefined {
-  const v = raw.trim().toLowerCase();
-  if (v === 'presencial') return 'Presencial';
-  if (v === 'semipresencial' || v === 'semi-presencial') return 'Semipresencial';
-  if (v === 'ead' || v === 'a distância' || v === 'a distancia' || v.includes('distancia')) return 'EAD';
-  return undefined;
+  const list = parseModalities(raw);
+  return list[0];
+}
+
+/**
+ * Aceita "EaD / Presencial", "Presencial e EAD", etc. — gera um cadastro por modalidade.
+ */
+export function parseModalities(raw: string): ModalityType[] {
+  const v = String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  if (!v) return [];
+  const hasSemi = /semipresencial|semi[\s-]?presencial|hibrido/.test(v);
+  const hasEad = /\bead\b|a\s*distancia|educacao a distancia/.test(v);
+  const hasPres = /\bpresencial\b/.test(v);
+  if (hasSemi) return ['Semipresencial'];
+  if (hasEad && hasPres) return ['Presencial', 'EAD'];
+  if (hasEad) return ['EAD'];
+  if (hasPres) return ['Presencial'];
+  return [];
 }
 
 export function parseDegree(raw: string): Course['degrees'] | undefined {
@@ -254,11 +276,22 @@ export function parseDegree(raw: string): Course['degrees'] | undefined {
 }
 
 export function parseRequirement(raw: string): RequirementLevel | undefined {
-  const v = raw.trim().toLowerCase();
+  const v = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
   if (!v) return undefined;
   if (v.startsWith('obrig')) return 'Obrigatório';
-  if (v.startsWith('opcion')) return 'Opcional';
-  if (v.includes('não inform') || v.includes('nao inform') || v === 'ni' || v === '-') {
+  if (v.startsWith('opcion') || v.startsWith('recomend')) return 'Opcional';
+  if (
+    v.includes('nao inform') ||
+    v.includes('nao defin') ||
+    v === 'ni' ||
+    v === '-' ||
+    v === 'n/a' ||
+    v === 'na'
+  ) {
     return 'Não Informado';
   }
   return undefined;
@@ -412,8 +445,8 @@ function buildDcnDoc(title: string, url: string, idx: number): DcnDocument {
 /** Normaliza links de compartilhamento do Google Drive para URL estável de visualização. */
 export function normalizeGoogleDriveUrl(url: string): string {
   try {
-    const u = new URL(url);
-    if (!/drive\.google\.com|docs\.google\.com/i.test(u.hostname)) return url;
+    const u = new URL(url.trim());
+    if (!/drive\.google\.com|docs\.google\.com/i.test(u.hostname)) return url.trim();
 
     const filePath = u.pathname.match(/\/file\/d\/([^/]+)/);
     if (filePath?.[1]) {
@@ -423,24 +456,62 @@ export function normalizeGoogleDriveUrl(url: string): string {
     if (openId) {
       return `https://drive.google.com/file/d/${openId}/view`;
     }
-    return url;
+    return url.trim();
   } catch {
-    return url;
+    return url.trim();
   }
 }
 
-/** URL adequada para embed/iframe do PDF no Google Drive. */
-export function googleDrivePreviewUrl(url: string): string | null {
+/** Extrai o ID do arquivo no Google Drive (se for link do Drive). */
+export function googleDriveFileId(url: string): string | null {
   try {
     const normalized = normalizeGoogleDriveUrl(url);
     const u = new URL(normalized);
-    if (!/drive\.google\.com/i.test(u.hostname)) return null;
-    const id = u.pathname.match(/\/file\/d\/([^/]+)/)?.[1] || u.searchParams.get('id');
-    if (!id) return null;
-    return `https://drive.google.com/file/d/${id}/preview`;
+    if (!/drive\.google\.com|docs\.google\.com/i.test(u.hostname)) return null;
+    return u.pathname.match(/\/file\/d\/([^/]+)/)?.[1] || u.searchParams.get('id');
   } catch {
     return null;
   }
+}
+
+/** URL adequada para embed/iframe do PDF no Google Drive (mostra o documento, não a página do Drive). */
+export function googleDrivePreviewUrl(url: string): string | null {
+  const id = googleDriveFileId(url);
+  if (!id) return null;
+  return `https://drive.google.com/file/d/${id}/preview`;
+}
+
+/** Download direto do arquivo no Drive (quando compartilhado). */
+export function googleDriveDownloadUrl(url: string): string | null {
+  const id = googleDriveFileId(url);
+  if (!id) return null;
+  return `https://drive.google.com/uc?export=download&id=${id}`;
+}
+
+/**
+ * Src do iframe na janela de DCN: preview do Drive, data:URL, ou PDF http direto.
+ * Nunca devolve a página /view do Drive (que só mostra “Abrir no Drive”).
+ */
+export function resolveDcnEmbedUrl(url: string | undefined | null): string {
+  const raw = (url || '').trim();
+  if (!raw) return '';
+  const drivePreview = googleDrivePreviewUrl(raw);
+  if (drivePreview) return drivePreview;
+  return raw;
+}
+
+/** Href para “abrir em nova aba” priorizando o preview embutível do Drive. */
+export function resolveDcnOpenUrl(url: string | undefined | null): string {
+  const raw = (url || '').trim();
+  if (!raw) return '';
+  return googleDrivePreviewUrl(raw) || normalizeGoogleDriveUrl(raw) || raw;
+}
+
+/** Href de download: uc?export=download no Drive; senão a própria URL. */
+export function resolveDcnDownloadUrl(url: string | undefined | null): string {
+  const raw = (url || '').trim();
+  if (!raw) return '';
+  return googleDriveDownloadUrl(raw) || raw;
 }
 
 function titleFromDcnUrl(url: string, idx: number): string {
@@ -511,6 +582,16 @@ export function mapBatchHeaderToField(header: string): CourseBatchField | null {
   if (h.includes('obrigatoriedade') && h.includes('estagio')) return 'estagioReq';
   if ((h.includes('ch') || h.includes('carga')) && h.includes('estagio')) return 'chEstagio';
   if (h.includes('estagio') && (h.includes('obrig') || h.includes('opcion'))) return 'estagioReq';
+  // Planilha do gestor: "ESTÁGIO SUPERVIOSIONADO" / "ESTÁGIO SUPERVISIONADO" (só o requisito)
+  if (
+    h.includes('estagio') &&
+    !h.includes('ch') &&
+    !h.includes('carga') &&
+    !h.includes('hora') &&
+    !h.includes('minima')
+  ) {
+    return 'estagioReq';
+  }
   if (h === 'extensao' || (h.includes('extensao') && !h.includes('ch'))) return 'extensao';
   if (h.includes('extensao') && (h.includes('ch') || h.includes('carga') || h.includes('hora'))) {
     return 'extensao';
@@ -572,28 +653,69 @@ export function mapBatchHeaderToField(header: string): CourseBatchField | null {
   ) {
     return 'dcnLink';
   }
-  // Coluna antiga só "DCN": trata como link (compatibilidade); se também houver Nome DCN, ok
-  if (h === 'dcn' || h.includes('diretriz curricular') || (h.includes('dcn') && h.includes('drive'))) {
+  // Coluna "DCN" do gestor costuma trazer nomes de PDF (não URL) → trata como nome
+  if (h === 'dcn' || h.includes('diretriz curricular')) {
+    return 'dcnNome';
+  }
+  if (h.includes('dcn') && h.includes('drive')) {
     return 'dcnLink';
   }
   if (h.includes('dcn')) return 'dcnNome';
   return null;
 }
 
+/** Planilha de matriz curricular (módulos/CH) — não é carga de cursos. */
+export function looksLikeEstruturaMatrixForCourses(matrix: string[][]): boolean {
+  if (matrix.length < 3) return false;
+  const head = matrix
+    .slice(0, 12)
+    .map((r) => r.map(cellToString).join(' '))
+    .join('\n')
+    .toLowerCase();
+  const hasModule = /m[oó]dulo\s+([ivxlcdm]+|\d+)/i.test(head);
+  const hasEstrutura = /estrutura\s+curricular/i.test(head);
+  const hasHourCols =
+    /a\s*dist[aâ]ncia/i.test(head) && /presencial/i.test(head) && /te[oó]rico|pr[aá]tico|total/i.test(head);
+  const courseHeader = findCourseBatchHeaderRowIndex(matrix) >= 0;
+  if (courseHeader) return false;
+  return hasModule || (hasEstrutura && hasHourCols) || (hasEstrutura && hasModule);
+}
+
+/** Nome que claramente não é curso de graduação. */
+export function isJunkCourseBatchName(name: string): boolean {
+  const n = String(name || '').trim();
+  if (!n) return true;
+  if (/^m[oó]dulo\s+/i.test(n)) return true;
+  if (/^estrutura\s+curricular/i.test(n)) return true;
+  if (/^(total|subtotal|resumo|conhecimento|conhecimentos|componentes?|percentual|hora-?rel[oó]gio)$/i.test(n)) {
+    return true;
+  }
+  if (/^(presencial|a\s*dist[aâ]ncia|te[oó]rico|pr[aá]tico|te[oó]rico-pr[aá]tico)$/i.test(n)) {
+    return true;
+  }
+  if (/^extens[aã]o\s+[ivxlcdm\d]/i.test(n)) return true;
+  return false;
+}
+
 /** Reordena colunas da planilha para a ordem canônica do lote. */
 export function normalizeCourseBatchMatrix(matrix: string[][]): string[][] {
   if (matrix.length === 0) return [];
 
+  if (looksLikeEstruturaMatrixForCourses(matrix)) {
+    return [];
+  }
+
   const headerIdx = findCourseBatchHeaderRowIndex(matrix);
+  // Sem cabeçalho de cursos: não trata nomes de disciplina/módulo como curso
   if (headerIdx < 0) {
-    return matrix.filter((row) => row.some((c) => cellToString(c)));
+    return [];
   }
 
   const headerRow = matrix[headerIdx].map(cellToString);
   const fieldByCol = headerRow.map((h) => mapBatchHeaderToField(h));
   const hasMapped = fieldByCol.some((f) => f !== null);
   if (!hasMapped) {
-    return matrix.slice(headerIdx + 1).filter((row) => row.some((c) => cellToString(c)));
+    return [];
   }
 
   const ordered: CourseBatchField[] = [
@@ -646,7 +768,7 @@ export function normalizeCourseBatchMatrix(matrix: string[][]): string[][] {
       return values[0] || '';
     });
 
-    if (canonical[0]) out.push(canonical);
+    if (canonical[0] && !isJunkCourseBatchName(canonical[0])) out.push(canonical);
   }
 
   return out;
@@ -668,6 +790,58 @@ export function summarizeCourseDcns(course: Course): string {
   if (course.activeDcn) return course.activeDcn;
   return 'Nenhuma DCN vinculada';
 }
+
+/** Texto de exibição das DCNs (títulos de apresentação; não usa nome de arquivo). */
+export function formatDcnsDisplayLabel(
+  dcns?: DcnDocument[] | null,
+  fallback?: string
+): string {
+  if (dcns && dcns.length > 0) {
+    const labels = dcns
+      .map((d) => {
+        const title = (d.title || '').trim();
+        const resolution = (d.resolutionNumber || '').trim();
+        // Prefere título; se título for só o .pdf, tenta resolução
+        if (title && !/\.pdf$/i.test(title)) return title;
+        if (resolution && !/\.pdf$/i.test(resolution)) return resolution;
+        if (title) return title.replace(/\.pdf$/i, '').trim();
+        return resolution.replace(/\.pdf$/i, '').trim();
+      })
+      .filter(Boolean);
+    if (labels.length > 0) return labels.join('; ');
+  }
+  const fb = (fallback || '').trim();
+  return fb || '—';
+}
+
+/** Atualiza o campo de referência a partir da lista de DCNs (nomes alterados). */
+export function dcnsToRefString(dcns: DcnDocument[]): string {
+  const label = formatDcnsDisplayLabel(dcns, '');
+  return label === '—' ? '' : label;
+}
+
+/** Preferência: DCNs (e nomes) do curso vinculado, para o cabeçalho oficial. */
+export function structureWithCourseDcns(
+  structure: CurriculumStructure,
+  courses: Course[]
+): CurriculumStructure {
+  if (!courses?.length) return structure;
+  const course =
+    (structure.courseId && courses.find((c) => c.id === structure.courseId)) ||
+    courses.find(
+      (c) =>
+        courseBaseName(c.name) === courseBaseName(structure.courseName) &&
+        c.modality === structure.modality
+    );
+  if (!course?.dcns?.length) return structure;
+  const nextRef = dcnsToRefString(course.dcns);
+  return {
+    ...structure,
+    dcns: course.dcns,
+    dcnRef: nextRef || structure.dcnRef,
+  };
+}
+
 
 export function courseDcnLinksCell(course: Course): string {
   if (course.dcns && course.dcns.length > 0) {
@@ -745,12 +919,37 @@ export interface CourseBatchApplyResult {
   createdCount: number;
 }
 
+function courseBatchMatchIndex(
+  list: Course[],
+  name: string,
+  modality: ModalityType,
+  degrees: Course['degrees']
+): number {
+  const key = normalizeCourseName(name);
+  return list.findIndex(
+    (c) =>
+      normalizeCourseName(c.name) === key &&
+      c.modality === modality &&
+      (c.degrees || 'Bacharelado') === (degrees || 'Bacharelado')
+  );
+}
+
+function stampCourseNow<T extends Course>(course: T): T {
+  const now = new Date().toISOString();
+  return {
+    ...course,
+    updatedAt: now,
+    createdAt: course.createdAt || now,
+  };
+}
+
 /** Aplica linhas do lote (já sem cabeçalho) sobre a lista de cursos. */
 export function applyCourseBatchRows(
   existing: Course[],
-  dataRows: string[][]
+  dataRows: string[][],
+  opts?: { replace?: boolean }
 ): CourseBatchApplyResult {
-  const updated = [...existing];
+  const updated: Course[] = opts?.replace ? [] : [...existing];
   let matchedCount = 0;
   let createdCount = 0;
 
@@ -777,28 +976,27 @@ export function applyCourseBatchRows(
       dcnLinksCell = '',
     ] = parts.map(cellToString);
 
-    if (!nameRaw) continue;
+    if (!nameRaw || isJunkCourseBatchName(nameRaw)) continue;
 
     let dcnNamesRaw = dcnNamesCell;
     let dcnLinksRaw = dcnLinksCell;
 
     // Compat: planilha antiga com só a coluna DCN (links) na posição de nomes
-    if (!dcnLinksRaw && dcnNamesRaw && (/https?:\/\//i.test(dcnNamesRaw) || /drive\.google\.com/i.test(dcnNamesRaw))) {
+    if (
+      !dcnLinksRaw &&
+      dcnNamesRaw &&
+      (/https?:\/\//i.test(dcnNamesRaw) || /drive\.google\.com/i.test(dcnNamesRaw))
+    ) {
       dcnLinksRaw = dcnNamesRaw;
       dcnNamesRaw = '';
     }
 
-    // CH mínima: se vier vazia, mantém a do curso existente ou 0 (não descarta a linha — DCNs ainda devem entrar)
-    let minTotalHours = parseInt(String(chTotalRaw).replace(/\D/g, ''), 10);
-    const courseIndex = updated.findIndex(
-      (c) => normalizeCourseName(c.name) === normalizeCourseName(nameRaw)
-    );
-    if (Number.isNaN(minTotalHours)) {
-      minTotalHours = courseIndex !== -1 ? updated[courseIndex].minTotalHours : 0;
-    }
-
-    const modality = parseModality(modalityRaw) || 'Presencial';
+    const parsedCh = parseInt(String(chTotalRaw).replace(/\D/g, ''), 10);
     const degrees = parseDegree(degreeRaw) || 'Bacharelado';
+    const modalities = parseModalities(modalityRaw);
+    const modalityList: ModalityType[] =
+      modalities.length > 0 ? modalities : ['Presencial'];
+
     const internshipRequirement = parseRequirement(internshipReqRaw) || 'Não Informado';
     const complementaryRequirement = parseRequirement(complementaryReqRaw) || 'Não Informado';
     const finalPaperRequirement = parseRequirement(finalPaperReqRaw) || 'Não Informado';
@@ -809,65 +1007,113 @@ export function applyCourseBatchRows(
     const hasClinical = parseYesNoFlag(clinicaRaw);
     const dcns = parseDcnsFromNameAndLinkCells(dcnNamesRaw, dcnLinksRaw);
 
-    if (courseIndex !== -1) {
-      const current = { ...updated[courseIndex] };
-      current.name = nameRaw;
-      if (modalityRaw) current.modality = modality;
-      if (degreeRaw) current.degrees = degrees;
-      if (!Number.isNaN(parseInt(String(chTotalRaw).replace(/\D/g, ''), 10))) {
-        current.minTotalHours = minTotalHours;
+    for (const modality of modalityList) {
+      const courseIndex = courseBatchMatchIndex(updated, nameRaw, modality, degrees);
+      let minTotalHours = parsedCh;
+      if (Number.isNaN(minTotalHours)) {
+        minTotalHours = courseIndex !== -1 ? updated[courseIndex].minTotalHours : 0;
       }
-      if (internshipReqRaw) current.internshipRequirement = internshipRequirement;
-      if (chInternshipRaw) current.minInternshipHours = minInternshipHours;
-      if (chExtensionRaw) current.extensionTotalHours = extensionTotalHours;
-      if (complementaryReqRaw) current.complementaryRequirement = complementaryRequirement;
-      if (chComplementaryRaw) current.complementaryTotalHours = complementaryTotalHours;
-      if (finalPaperReqRaw) current.finalPaperRequirement = finalPaperRequirement;
-      if (cineCodigoRaw) current.cineBrasilCode = cineCodigoRaw;
-      if (cineAreaRaw) current.cineBrasilArea = cineAreaRaw;
-      if (coordinatorNameRaw) current.coordinatorName = coordinatorNameRaw;
-      if (coordinatorEmailRaw) current.coordinatorEmail = coordinatorEmailRaw;
-      if (authorizationActRaw) current.authorizationAct = authorizationActRaw;
-      if (hasLaboratory !== undefined) current.hasLaboratory = hasLaboratory;
-      if (hasClinical !== undefined) current.hasClinical = hasClinical;
-      if (dcns.length > 0) {
-        current.dcns = dcns;
-        current.dcnLink = dcns.map((d) => d.pdfUrl).join(' | ');
-        current.activeDcn = dcns.map((d) => d.title).join('; ');
+
+      if (courseIndex !== -1) {
+        const current = { ...updated[courseIndex] };
+        current.name = nameRaw;
+        current.modality = modality;
+        if (degreeRaw) current.degrees = degrees;
+        if (!Number.isNaN(parsedCh)) current.minTotalHours = minTotalHours;
+        if (internshipReqRaw) current.internshipRequirement = internshipRequirement;
+        if (chInternshipRaw) current.minInternshipHours = minInternshipHours;
+        if (chExtensionRaw) current.extensionTotalHours = extensionTotalHours;
+        if (complementaryReqRaw) current.complementaryRequirement = complementaryRequirement;
+        if (chComplementaryRaw) current.complementaryTotalHours = complementaryTotalHours;
+        if (finalPaperReqRaw) current.finalPaperRequirement = finalPaperRequirement;
+        if (cineCodigoRaw) current.cineBrasilCode = cineCodigoRaw;
+        if (cineAreaRaw) current.cineBrasilArea = cineAreaRaw;
+        if (coordinatorNameRaw) current.coordinatorName = coordinatorNameRaw;
+        if (coordinatorEmailRaw) current.coordinatorEmail = coordinatorEmailRaw;
+        if (authorizationActRaw) {
+          current.authorizationAct = authorizationActRaw;
+          if (!(current.authorizationActs || []).length) {
+            const normalized = normalizeAuthorizationActs({
+              authorizationAct: authorizationActRaw,
+            });
+            current.authorizationActs = normalized.authorizationActs;
+            current.activeAuthorizationActId = normalized.activeAuthorizationActId;
+          }
+        }
+        if (hasLaboratory !== undefined) current.hasLaboratory = hasLaboratory;
+        if (hasClinical !== undefined) current.hasClinical = hasClinical;
+        if (dcns.length > 0) {
+          current.dcns = dcns;
+          current.dcnLink = dcns.map((d) => d.pdfUrl).filter(Boolean).join(' | ');
+          current.activeDcn = dcns.map((d) => d.title).filter(Boolean).join('; ');
+        } else if (dcnNamesRaw && !current.activeDcn) {
+          current.activeDcn = dcnNamesRaw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).join('; ');
+        }
+        // Percentuais padrão por modalidade
+        if (modality === 'EAD') {
+          current.minPresentialPercent = current.minPresentialPercent || 10;
+          current.maxEadPercent = current.maxEadPercent || 90;
+        } else if (!current.minPresentialPercent) {
+          current.minPresentialPercent = 60;
+          current.maxEadPercent = current.maxEadPercent || 40;
+        }
+        updated[courseIndex] = stampCourseNow(current);
+        matchedCount++;
+      } else {
+        const codeBase = generateCourseCodeFromName(nameRaw);
+        const suffix =
+          modality === 'EAD' ? '-EAD' : modality === 'Semipresencial' ? '-SEMI' : '';
+        const now = new Date().toISOString();
+        updated.push(
+          stampCourseNow({
+            id: `course-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            code: `${codeBase}${suffix}`,
+            name: nameRaw,
+            modality,
+            degrees,
+            minTotalHours: Number.isNaN(minTotalHours) ? 0 : minTotalHours,
+            internshipRequirement,
+            minInternshipHours,
+            extensionTotalHours,
+            complementaryRequirement,
+            complementaryTotalHours,
+            finalPaperRequirement,
+            coordinatorName: coordinatorNameRaw || '',
+            coordinatorEmail: coordinatorEmailRaw || '',
+            authorizationAct: authorizationActRaw || '',
+            authorizationActs: authorizationActRaw
+              ? normalizeAuthorizationActs({ authorizationAct: authorizationActRaw })
+                  .authorizationActs
+              : [],
+            activeAuthorizationActId: authorizationActRaw
+              ? normalizeAuthorizationActs({ authorizationAct: authorizationActRaw })
+                  .activeAuthorizationActId
+              : undefined,
+            hasLaboratory: hasLaboratory ?? false,
+            hasClinical: hasClinical ?? false,
+            activeDcn:
+              dcns.length > 0
+                ? dcns.map((d) => d.title).filter(Boolean).join('; ')
+                : dcnNamesRaw
+                  ? dcnNamesRaw
+                      .split(/\r?\n/)
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                      .join('; ')
+                  : '',
+            dcnLink: dcns.map((d) => d.pdfUrl).filter(Boolean).join(' | '),
+            dcns,
+            cineBrasilCode: cineCodigoRaw || '',
+            cineBrasilArea: cineAreaRaw || '',
+            minPresentialPercent: modality === 'EAD' ? 10 : 60,
+            maxEadPercent: modality === 'EAD' ? 90 : 40,
+            minExtensionPercent: 10,
+            totalSemesters: 8,
+            createdAt: now,
+          })
+        );
+        createdCount++;
       }
-      updated[courseIndex] = current;
-      matchedCount++;
-    } else {
-      const code = generateCourseCodeFromName(nameRaw);
-      updated.push({
-        id: `course-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        code,
-        name: nameRaw,
-        modality,
-        degrees,
-        minTotalHours,
-        internshipRequirement,
-        minInternshipHours,
-        extensionTotalHours,
-        complementaryRequirement,
-        complementaryTotalHours,
-        finalPaperRequirement,
-        coordinatorName: coordinatorNameRaw || '',
-        coordinatorEmail: coordinatorEmailRaw || '',
-        authorizationAct: authorizationActRaw || '',
-        hasLaboratory: hasLaboratory ?? false,
-        hasClinical: hasClinical ?? false,
-        activeDcn: dcns.length ? dcns.map((d) => d.title).join('; ') : '',
-        dcnLink: dcns.map((d) => d.pdfUrl).join(' | '),
-        dcns,
-        cineBrasilCode: cineCodigoRaw || '',
-        cineBrasilArea: cineAreaRaw || '',
-        minPresentialPercent: 60,
-        maxEadPercent: 40,
-        minExtensionPercent: 10,
-        totalSemesters: 8,
-      });
-      createdCount++;
     }
   }
 

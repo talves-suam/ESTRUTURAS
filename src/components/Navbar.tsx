@@ -3,21 +3,24 @@ import {
   Layers,
   Plus,
   Settings,
-  UploadCloud,
   Database,
+  LogOut,
 } from 'lucide-react';
 import logoUnisuam from '../assets/logo-unisuam.png';
+import { useAuth } from '../auth/AuthProvider';
 
-export type NavbarTab = 'structures' | 'new' | 'saga' | 'settings';
+export type NavbarTab = 'structures' | 'new' | 'settings';
 
 interface NavbarProps {
   activeTab: NavbarTab;
   setActiveTab: (tab: NavbarTab) => void;
   structuresCount: number;
-  firebaseOnline?: boolean;
+  serverOnline?: boolean;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structuresCount, firebaseOnline = false }) => {
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structuresCount, serverOnline = false }) => {
+  const { user, signOut, isAdmin } = useAuth();
+
   const navItem = (
     id: string,
     tab: NavbarTab,
@@ -111,12 +114,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structu
               { accent: true }
             )}
             {navItem(
-              'nav-saga-btn',
-              'saga',
-              'Importar SAGA',
-              <UploadCloud className={`w-4 h-4 ${activeTab === 'saga' ? 'text-emerald-300' : 'text-emerald-600'}`} />
-            )}
-            {navItem(
               'nav-settings-btn',
               'settings',
               'Configurações',
@@ -129,15 +126,48 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structu
               type="button"
               onClick={() => setActiveTab('settings')}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${
-              firebaseOnline
+              serverOnline
                 ? 'bg-emerald-50 border-emerald-200/80 text-emerald-800'
                 : 'bg-amber-50 border-amber-200 text-amber-900'
             }`}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${firebaseOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${serverOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
               <Database className="w-3.5 h-3.5 text-[#FF6B00]" />
-              <span className="hidden lg:inline">{firebaseOnline ? 'Servidor' : 'Só neste navegador'}</span>
+              <span className="hidden lg:inline">{serverOnline ? 'Servidor' : 'Só neste navegador'}</span>
             </button>
+
+            {user && (
+              <div className="hidden sm:flex items-center gap-2 pl-1 border-l border-slate-200 ml-1">
+                <div className="min-w-0 text-right">
+                  <p className="text-[11px] font-bold text-[#002B49] truncate max-w-[140px]">
+                    {user.displayName}
+                  </p>
+                  <p className="text-[10px] text-slate-500 truncate max-w-[140px]">
+                    {user.email}
+                    {isAdmin ? ' · admin' : ''}
+                    {user.isLocalBypass ? ' · local' : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  title="Sair"
+                  onClick={() => void signOut()}
+                  className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-[#002B49] transition"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            {user && (
+              <button
+                type="button"
+                title="Sair"
+                onClick={() => void signOut()}
+                className="sm:hidden p-2 rounded-lg border border-slate-200 text-slate-600"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -146,7 +176,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, structu
             [
               ['structures', `Estruturas (${structuresCount})`],
               ['new', '+ Nova'],
-              ['saga', 'SAGA'],
               ['settings', 'Config'],
             ] as const
           ).map(([tab, label]) => (

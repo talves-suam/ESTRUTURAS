@@ -35,9 +35,20 @@ npm run preview
 
 Abra http://localhost:3000 e valide a matriz / mapa / exportações.
 
-## Segurança
+# Segurança
 
 - Não versione `.env.local`
 - `GEMINI_API_KEY` sem prefixo `VITE_`
-- Firebase só com `VITE_FIREBASE_*` e restrição por domínio no Console
-- Firestore bloqueado por padrão nas rules até haver autenticação
+- Firebase: `VITE_FIREBASE_*` (opcional se `projectConfig.ts` já tiver o projeto)
+- Publique as regras de `firestore.rules` (só `@unisuam.edu.br` autenticado)
+- No Console: Authentication → Google ativo; domínio autorizado (localhost + site)
+- Crie alerta de orçamento de **R$ 0,01** no Google Cloud Billing (banner no app aponta o link)
+
+## Plano Spark (uso enxuto)
+
+- Cache em localStorage; sobe ao Firestore só docs novos/mais novos
+- Remove `data:` (PDF/base64) no payload da nuvem
+- Teste de conexão só com leitura (sem ping de escrita)
+- Contador estimado de leituras/escritas no dia + aviso perto da cota
+
+A pasta `public/api/` (MySQL) ficou de legado e **não é usada** pelo app atual.

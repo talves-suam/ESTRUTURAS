@@ -63,8 +63,16 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
               {componentRows.map((row) => (
                 <th
                   key={row.id}
-                  title={row.label}
-                  className={`${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wide text-[#002B49] leading-tight`}
+                  title={
+                    row.excludeFromTotal
+                      ? `${row.label} — não contabiliza na CH total`
+                      : row.label
+                  }
+                  className={`${density.cellPad} text-center ${density.headerText} font-bold uppercase tracking-wide leading-tight ${
+                    row.excludeFromTotal
+                      ? 'text-sky-800 bg-sky-50/80'
+                      : 'text-[#002B49]'
+                  }`}
                 >
                   {row.shortLabel || row.label}
                 </th>
@@ -82,7 +90,9 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
               {componentRows.map((row) => (
                 <td
                   key={row.id}
-                  className={`${density.cellPad} text-center tabular-nums font-bold text-slate-800`}
+                  className={`${density.cellPad} text-center tabular-nums font-bold ${
+                    row.excludeFromTotal ? 'text-sky-900 bg-sky-50/50' : 'text-slate-800'
+                  }`}
                 >
                   {formatWorkloadHours(row.hours)}
                 </td>
@@ -98,9 +108,16 @@ export const WorkloadSummaryCard: React.FC<WorkloadSummaryCardProps> = ({
               {componentRows.map((row) => (
                 <td
                   key={row.id}
-                  className={`${density.cellPad} text-center tabular-nums text-slate-600`}
+                  className={`${density.cellPad} text-center tabular-nums ${
+                    row.excludeFromTotal ? 'text-sky-700 bg-sky-50/50' : 'text-slate-600'
+                  }`}
+                  title={
+                    row.excludeFromTotal
+                      ? 'Não contabiliza na CH total do curso'
+                      : undefined
+                  }
                 >
-                  {formatWorkloadPercent(row.percent)}
+                  {row.excludeFromTotal ? '—' : formatWorkloadPercent(row.percent)}
                 </td>
               ))}
             </tr>

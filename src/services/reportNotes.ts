@@ -1,4 +1,6 @@
 import { AppSettings, CurriculumStructure, ReportNoteBlock } from '../types/curriculum';
+import { formatDcnsDisplayLabel } from '../utils/courseBatch';
+import { getActiveAuthorizationActLabel } from '../utils/authorizationActs';
 
 export const DEFAULT_REPORT_NOTES_TITLE = 'Observações, Regras e Explicações da Estrutura';
 
@@ -185,12 +187,14 @@ export function renderReportNotesPageHtml(
       <div style="flex:1 1 180px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Ato Autorizativo:</span>
         <span style="font-weight:600;color:#1e293b;">${escapeHtml(
-          structure.authorizationAct || structure.recognitionPortaria || '—'
+          getActiveAuthorizationActLabel(structure)
         )}</span>
       </div>
       <div style="flex:1 1 180px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">DCN do Curso:</span>
-        <span style="font-weight:600;color:#1e293b;">${escapeHtml(structure.dcnRef || '—')}</span>
+        <span style="font-weight:600;color:#1e293b;">${escapeHtml(
+          formatDcnsDisplayLabel(structure.dcns, structure.dcnRef)
+        )}</span>
       </div>
       <div style="flex:1 1 180px;">
         <span style="display:block;color:#94a3b8;font-weight:500;">Código da Estrutura:</span>

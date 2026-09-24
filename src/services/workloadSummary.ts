@@ -6,7 +6,8 @@ import {
   withStructurePresentialFlags,
 } from '../types/curriculum';
 import { getModularComponents } from '../utils/modularComponents';
-import { formatModuleName, toRoman } from '../utils/roman';
+import { moduleCountsTowardStructureTotals } from '../utils/modularBranches';
+import { formatModuleName, toRoman, formatBranchLabel } from '../utils/roman';
 
 export interface WorkloadSummaryRow {
   id: string;
@@ -16,7 +17,13 @@ export interface WorkloadSummaryRow {
   hours: number;
   percent: number;
   emphasize?: boolean;
+  /** Ex.: Libras — aparece no quadro mas não entra no total regulatório. */
+  excludeFromTotal?: boolean;
 }
+
+/** CH fixa de Libras (Optativa) quando o flag da estrutura está ativo. */
+export const LIBRAS_OPTATIVA_HOURS = 20;
+export const LIBRAS_OPTATIVA_LABEL = 'Libras (Optativa)';
 
 function collectDisciplines(structure: CurriculumStructure): Discipline[] {
   if (structure.structureType === 'disciplinar' && structure.periods) {
@@ -25,7 +32,9 @@ function collectDisciplines(structure: CurriculumStructure): Discipline[] {
       .map((d) => withStructurePresentialFlags(d, structure));
   }
   if (structure.structureType === 'modular' && structure.modules) {
-    return structure.modules
+    const modules = structure.modules;
+    return modules
+      .filter((m) => moduleCountsTowardStructureTotals(m, modules))
       .flatMap((m) => getModularComponents(m))
       .map((d) => withStructurePresentialFlags(d, structure));
   }
@@ -230,6 +239,18 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
       hours: complementary,
       percent: pct(complementary),
     },
+    ...(structure.hasLibrasOptativa
+      ? [
+          {
+            id: 'libras',
+            label: LIBRAS_OPTATIVA_LABEL,
+            shortLabel: LIBRAS_OPTATIVA_LABEL,
+            hours: LIBRAS_OPTATIVA_HOURS,
+            percent: 0,
+            excludeFromTotal: true,
+          } as WorkloadSummaryRow,
+        ]
+      : []),
     {
       id: 'total',
       label: 'Total',
@@ -281,7 +302,7 @@ export function buildModuleMeetingsSummary(structure: CurriculumStructure): {
   const raw = modules.map((mod) => ({
     id: mod.id,
     label: formatModuleName(mod.number, mod.title, mod.branch),
-    shortLabel: `${toRoman(mod.number) || String(mod.number)}${mod.branch ? ` ${mod.branch}` : ''}`.trim(),
+    shortLabel: `${mod.branch ? `${formatBranchLabel(mod.branch)} · ` : ''}${toRoman(mod.number) || String(mod.number)}`.trim(),
     meetings: Math.max(0, Number(mod.meetings) || 0),
   }));
 
