@@ -54,6 +54,8 @@ export const StructuresList: React.FC<StructuresListProps> = ({
   const [selectedType, setSelectedType] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [yearFilter, setYearFilter] = useState<string>('all');
+  /** Proporção presencial/EAD cadastrada (ex.: "60-40"). */
+  const [proportionFilter, setProportionFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<StructureSortMode>('name');
   const [dcnModalStructure, setDcnModalStructure] = useState<CurriculumStructure | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<CurriculumStructure | null>(null);
@@ -81,6 +83,9 @@ export const StructuresList: React.FC<StructuresListProps> = ({
 
   const filteredStructures = useMemo(() => {
     const yearNum = yearFilter === 'all' ? null : Number(yearFilter);
+    /** Faixa do % presencial calculado: 60 → [60,70), 70 → [70,80), …, 90 → [90,100]. */
+    const proportionMin =
+      proportionFilter === 'all' ? null : Number(proportionFilter.split('-')[0]);
     const filtered = structures.filter((s) => {
       if (selectedModality !== 'all' && s.modality !== selectedModality) return false;
       if (selectedType !== 'all' && s.structureType !== selectedType) return false;
@@ -88,6 +93,15 @@ export const StructuresList: React.FC<StructuresListProps> = ({
       if (yearNum != null) {
         const y = structureCalendarYear(s);
         if (y !== yearNum) return false;
+      }
+      if (proportionMin != null) {
+        const total = Number(s.calculatedTotalHours) || 0;
+        const presentialPct =
+          total > 0
+            ? Math.round((Number(s.calculatedPresentialHours) / total) * 100)
+            : 0;
+        const maxExclusive = proportionMin >= 90 ? 101 : proportionMin + 10;
+        if (presentialPct < proportionMin || presentialPct >= maxExclusive) return false;
       }
 
       if (!searchTerm) return true;
@@ -138,7 +152,16 @@ export const StructuresList: React.FC<StructuresListProps> = ({
       }
       return byNameCode(a, b);
     });
-  }, [structures, selectedModality, selectedType, statusFilter, yearFilter, searchTerm, sortBy]);
+  }, [
+    structures,
+    selectedModality,
+    selectedType,
+    statusFilter,
+    yearFilter,
+    proportionFilter,
+    searchTerm,
+    sortBy,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -252,6 +275,19 @@ export const StructuresList: React.FC<StructuresListProps> = ({
             <option value="Presencial">Presencial</option>
             <option value="Semipresencial">Semipresencial</option>
             <option value="EAD">EAD</option>
+          </select>
+
+          <select
+            value={proportionFilter}
+            onChange={(e) => setProportionFilter(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-700 font-semibold"
+            title="Filtrar pelo % presencial calculado da estrutura (faixas de 10 pontos)"
+          >
+            <option value="all">Todas as proporções</option>
+            <option value="60-40">60% Presencial / 40% EAD</option>
+            <option value="70-30">70% Presencial / 30% EAD</option>
+            <option value="80-20">80% Presencial / 20% EAD</option>
+            <option value="90-10">90% Presencial / 10% EAD</option>
           </select>
 
           <select
