@@ -306,6 +306,20 @@ export async function captureElementAsPngDataUrl(
   const actionButtons = element.querySelectorAll<HTMLElement>('.no-export');
   actionButtons.forEach((btn) => (btn.style.display = 'none'));
 
+  // Protótipos / mapas de teste (ex.: competences-thesis) nunca entram em PNG/PDF.
+  const excludedMapPanels = Array.from(
+    element.querySelectorAll<HTMLElement>('[data-map-export="exclude"]')
+  );
+  const inactiveParents: Array<{ parent: Node; next: ChildNode | null; panel: HTMLElement }> = [];
+  excludedMapPanels.forEach((panel) => {
+    inactiveParents.push({
+      parent: panel.parentNode as Node,
+      next: panel.nextSibling,
+      panel,
+    });
+    panel.remove();
+  });
+
   // Em mapas modulares há dois painéis (pedagógico / competências); PNG/PDF exportam só o ativo.
   const inactiveMapPanels = Array.from(
     element.querySelectorAll<HTMLElement>('[data-map-view]')
@@ -313,7 +327,6 @@ export async function captureElementAsPngDataUrl(
     const style = window.getComputedStyle(panel);
     return style.display === 'none' || style.visibility === 'hidden';
   });
-  const inactiveParents: Array<{ parent: Node; next: ChildNode | null; panel: HTMLElement }> = [];
   inactiveMapPanels.forEach((panel) => {
     inactiveParents.push({
       parent: panel.parentNode as Node,
@@ -2220,6 +2233,8 @@ export async function exportMapToHTML(
 
   const clone = element.cloneNode(true) as HTMLElement;
   clone.querySelectorAll('.no-export').forEach((n) => n.remove());
+  // Protótipos / mapas de teste nunca entram no HTML do relatório.
+  clone.querySelectorAll('[data-map-export="exclude"]').forEach((n) => n.remove());
 
   // Expande containers com scroll para o mapa aparecer completo
   clone.querySelectorAll<HTMLElement>('*').forEach((el) => {

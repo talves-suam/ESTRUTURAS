@@ -43,6 +43,7 @@ import {
   summaryPairGridClass,
   LIBRAS_OPTATIVA_HOURS,
   LIBRAS_OPTATIVA_LABEL,
+  librasOptativaKindLabel,
 } from '../services/workloadSummary';
 import { labelForCategory } from '../utils/nomenclature';
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
@@ -224,13 +225,13 @@ function ItemNode({
   );
 }
 
-/** Card de Libras no estilo de conhecimento (fundo azul claro). */
-function LibrasOptativaNode() {
+/** Card de Libras — na trilha modular: Conhecimento; na disciplinar: Disciplina. */
+function LibrasOptativaNode({ kindLabel = 'Conhecimento' }: { kindLabel?: string }) {
   return (
     <div
       className="w-[168px] min-w-[150px] max-w-[180px] rounded-xl px-2.5 py-2 border border-sky-300/80 bg-sky-100 shadow-sm shadow-sky-200/50"
       data-map-libras="true"
-      title="Disciplina Optativa — não contabiliza na CH total do curso"
+      title={`${kindLabel} optativo(a) — não contabiliza na CH total do curso`}
     >
       <div className="flex items-start gap-2">
         <div className="mt-0.5 w-6 h-6 rounded-md flex items-center justify-center shrink-0 bg-sky-200/80 text-sky-900">
@@ -239,7 +240,7 @@ function LibrasOptativaNode() {
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-1.5">
             <p className="text-[9px] font-semibold uppercase tracking-wide break-words text-sky-800/80">
-              Disciplina Optativa
+              {kindLabel}
             </p>
             <span className="text-[9px] font-bold tabular-nums shrink-0 whitespace-nowrap text-sky-900">
               {LIBRAS_OPTATIVA_HOURS}h
@@ -396,7 +397,7 @@ function ModuleChain({
   lastModuleRef?: React.Ref<HTMLDivElement>;
   nomenclature?: AppSettings['pedagogicalNomenclature'];
   hideMeetings?: boolean;
-  /** Exibe Libras (Optativa) à esquerda do 1º módulo, sem conector. */
+  /** Exibe Libras (Optativa) após o último módulo, sem conector. */
   showLibrasOptativa?: boolean;
 }) {
   const [collapsedByModule, setCollapsedByModule] = useState<
@@ -413,16 +414,16 @@ function ModuleChain({
     .filter(Boolean)
     .join(' ');
 
-  const showLibrasLead = !!showLibrasOptativa;
-  const leadCols = showLibrasLead ? 2 : 0; // card + folga (sem seta)
+  const showLibrasTrail = !!showLibrasOptativa;
 
   const colTemplate = [
-    ...(showLibrasLead ? (['188px', '12px'] as string[]) : []),
     ...modules.map((_, i) => (i < modules.length - 1 ? '188px auto' : '188px')),
+    ...(showLibrasTrail ? (['12px', '188px'] as string[]) : []),
   ].join(' ');
 
-  const moduleCol = (idx: number) => leadCols + idx * 2 + 1;
-  const connectorCol = (idx: number) => leadCols + idx * 2 + 2;
+  const moduleCol = (idx: number) => idx * 2 + 1;
+  const connectorCol = (idx: number) => idx * 2 + 2;
+  const librasCol = modules.length * 2 + 1;
 
   const softLayer = (visible: boolean) =>
     `transition-[opacity,filter,transform] duration-300 ease-out ${
@@ -491,17 +492,6 @@ function ModuleChain({
         );
       })}
 
-      {/* Libras — início do mapa, à esquerda do 1º módulo, sem seta */}
-      {showLibrasLead && (
-        <div
-          className="flex items-center justify-center px-1"
-          style={{ gridColumn: 1, gridRow: moduleRow }}
-          data-map-layer="libras"
-        >
-          <LibrasOptativaNode />
-        </div>
-      )}
-
       {/* Linha — módulos alinhados + conectores */}
       {modules.map((mod, idx) => {
         const isFirst = idx === 0;
@@ -555,6 +545,17 @@ function ModuleChain({
           </React.Fragment>
         );
       })}
+
+      {/* Libras — final do mapa, à direita do último módulo, sem seta */}
+      {showLibrasTrail && (
+        <div
+          className="flex items-center justify-center px-1"
+          style={{ gridColumn: librasCol, gridRow: moduleRow }}
+          data-map-layer="libras"
+        >
+          <LibrasOptativaNode kindLabel={librasOptativaKindLabel('modular')} />
+        </div>
+      )}
 
       {/* Linha — saberes (omitida se a camada global estiver desligada) */}
       {showBottom &&
@@ -979,13 +980,16 @@ function ModularCurriculumMap({
   const trunkEndRef = useRef<HTMLDivElement>(null);
   const upperStartRef = useRef<HTMLDivElement>(null);
   const lowerStartRef = useRef<HTMLDivElement>(null);
+  const emphasesColRef = useRef<HTMLDivElement>(null);
   const [forkPaths, setForkPaths] = useState<{ upper?: string; lower?: string }>({});
+  const [librasPos, setLibrasPos] = useState<{ top: number; left: number } | null>(null);
 
   const redrawFork = useCallback(() => {
     const canvas = canvasRef.current;
     const from = trunkEndRef.current;
     if (!canvas || !from) {
       setForkPaths({});
+      setLibrasPos(null);
       return;
     }
     const c = canvas.getBoundingClientRect();
@@ -1007,7 +1011,17 @@ function ModularCurriculumMap({
       next.lower = elbowPath(x1, y1, x2, y2);
     }
     setForkPaths(next);
-  }, []);
+
+    // Libras: mesma altura do último módulo do tronco, à direita das ênfases
+    if (showLibrasOptativa && hasFork) {
+      const emph = emphasesColRef.current?.getBoundingClientRect();
+      const left = (emph ? emph.right : f.right) - c.left + 28;
+      const top = f.top + f.height / 2 - c.top;
+      setLibrasPos({ top, left });
+    } else {
+      setLibrasPos(null);
+    }
+  }, [showLibrasOptativa, hasFork]);
 
   useLayoutEffect(() => {
     redrawFork();
@@ -1019,6 +1033,7 @@ function ModularCurriculumMap({
     if (trunkEndRef.current) ro.observe(trunkEndRef.current);
     if (upperStartRef.current) ro.observe(upperStartRef.current);
     if (lowerStartRef.current) ro.observe(lowerStartRef.current);
+    if (emphasesColRef.current) ro.observe(emphasesColRef.current);
 
     window.addEventListener('resize', redrawFork);
     return () => {
@@ -1032,6 +1047,7 @@ function ModularCurriculumMap({
     lowerBranch,
     showConhecimentos,
     showSaberes,
+    showLibrasOptativa,
   ]);
 
   return (
@@ -1104,9 +1120,10 @@ function ModularCurriculumMap({
               style={{
                 gridTemplateColumns: 'auto auto',
                 gridTemplateRows: 'auto auto auto',
+                paddingRight: showLibrasOptativa ? 200 : undefined,
               }}
             >
-              {/* Tronco — módulos alinhados entre si */}
+              {/* Tronco — módulos alinhados entre si (sem Libras: ela vai após as ênfases) */}
               <div className="row-span-3 flex items-center self-center">
                 <ModuleChain
                   modules={displayTrunk}
@@ -1114,66 +1131,88 @@ function ModularCurriculumMap({
                   showSaberes={showSaberes}
                   nomenclature={nomenclature}
                   hideMeetings={hideMeetings}
-                  showLibrasOptativa={showLibrasOptativa}
+                  showLibrasOptativa={false}
                   lastModuleRef={trunkEndRef}
                 />
               </div>
 
-              {/* Trilha A — direita / cima; título ABAIXO do conteúdo (perto da bifurcação) */}
-              <div className="row-start-1 col-start-2 flex flex-col items-center">
-                {upperBranch && (
-                  <>
-                    <ModuleChain
-                      modules={upperBranch.modules}
-                      showConhecimentos={showConhecimentos}
-                      showSaberes={showSaberes}
-                      nomenclature={nomenclature}
-                      hideMeetings={hideMeetings}
-                      firstModuleRef={upperStartRef}
-                    />
-                    <BranchLaneLabel
-                      lane="cima"
-                      name={`${formatBranchLabel(upperBranch.key)} — ${upperBranch.name}`}
-                    />
-                  </>
-                )}
+              {/* Coluna das ênfases (medida para posicionar Libras à direita) */}
+              <div
+                ref={emphasesColRef}
+                className="row-span-3 col-start-2 grid gap-y-8 items-center"
+                style={{ gridTemplateRows: 'auto auto auto' }}
+              >
+                <div className="flex flex-col items-center">
+                  {upperBranch && (
+                    <>
+                      <ModuleChain
+                        modules={upperBranch.modules}
+                        showConhecimentos={showConhecimentos}
+                        showSaberes={showSaberes}
+                        nomenclature={nomenclature}
+                        hideMeetings={hideMeetings}
+                        firstModuleRef={upperStartRef}
+                      />
+                      <BranchLaneLabel
+                        lane="cima"
+                        name={`${formatBranchLabel(upperBranch.key)} — ${upperBranch.name}`}
+                      />
+                    </>
+                  )}
+                </div>
+
+                <div className="h-4" />
+
+                <div className="flex flex-col items-center">
+                  {lowerBranch && (
+                    <>
+                      <BranchLaneLabel
+                        lane="baixo"
+                        name={`${formatBranchLabel(lowerBranch.key)} — ${lowerBranch.name}`}
+                      />
+                      <ModuleChain
+                        modules={lowerBranch.modules}
+                        showConhecimentos={showConhecimentos}
+                        showSaberes={showSaberes}
+                        nomenclature={nomenclature}
+                        hideMeetings={hideMeetings}
+                        firstModuleRef={lowerStartRef}
+                      />
+                    </>
+                  )}
+                  {extraBranches.map((br) => (
+                    <div key={br.key} className="mt-6 flex flex-col items-center">
+                      <BranchLaneLabel
+                        lane="baixo"
+                        name={`${formatBranchLabel(br.key)} — ${br.name}`}
+                      />
+                      <ModuleChain
+                        modules={br.modules}
+                        showConhecimentos={showConhecimentos}
+                        showSaberes={showSaberes}
+                        nomenclature={nomenclature}
+                        hideMeetings={hideMeetings}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
+            </div>
+          )}
 
-              <div className="row-start-2 col-start-2 h-4" />
-
-              {/* Ênfase inferior — direita / baixo; título ACIMA do conteúdo (perto da bifurcação) */}
-              <div className="row-start-3 col-start-2 flex flex-col items-center">
-                {lowerBranch && (
-                  <>
-                    <BranchLaneLabel
-                      lane="baixo"
-                      name={`${formatBranchLabel(lowerBranch.key)} — ${lowerBranch.name}`}
-                    />
-                    <ModuleChain
-                      modules={lowerBranch.modules}
-                      showConhecimentos={showConhecimentos}
-                      showSaberes={showSaberes}
-                      nomenclature={nomenclature}
-                      hideMeetings={hideMeetings}
-                      firstModuleRef={lowerStartRef}
-                    />
-                  </>
-                )}
-                {extraBranches.map((br) => (
-                  <div key={br.key} className="mt-6 flex flex-col items-center">
-                    <BranchLaneLabel
-                      lane="baixo"
-                      name={`${formatBranchLabel(br.key)} — ${br.name}`}
-                    />
-                    <ModuleChain
-                      modules={br.modules}
-                      showConhecimentos={showConhecimentos}
-                      showSaberes={showSaberes}
-                      nomenclature={nomenclature}
-                      hideMeetings={hideMeetings}
-                    />
-                  </div>
-                ))}
+          {/* Libras após ênfases, alinhada ao centro vertical do último módulo do tronco */}
+          {hasFork && showLibrasOptativa && librasPos && (
+            <div
+              className="absolute z-10 pointer-events-none"
+              style={{
+                left: librasPos.left,
+                top: librasPos.top,
+                transform: 'translateY(-50%)',
+              }}
+              data-map-layer="libras"
+            >
+              <div className="pointer-events-auto">
+                <LibrasOptativaNode kindLabel={librasOptativaKindLabel('modular')} />
               </div>
             </div>
           )}

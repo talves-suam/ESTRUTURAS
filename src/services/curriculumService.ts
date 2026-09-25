@@ -457,7 +457,7 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
 
   // Atividades Complementares (não inventar 100h se o campo estiver vazio)
   const complementaryHours = Number(structure.complementaryTotalHours) || 0;
-  const compMod = structure.complementaryModality || 'assincrono';
+  const compMod = structure.complementaryModality || 'presencial';
   if (complementaryHours > 0) {
     totalHours += complementaryHours;
     if (compMod === 'presencial') {

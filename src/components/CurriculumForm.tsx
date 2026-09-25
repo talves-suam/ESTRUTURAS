@@ -22,7 +22,7 @@ import {
   aspectShortLabel,
 } from '../types/curriculum';
 import { getSaberesLabels, defaultSaberCategory } from '../utils/nomenclature';
-import { toRoman, fromRoman, formatModuleName, normalizeModuleTitle, formatBranchLabel } from '../utils/roman';
+import { toRoman, fromRoman, formatModuleName, normalizeTitleCase, formatBranchLabel } from '../utils/roman';
 import { summarizeCourseDcns, generateCourseCodeFromName, courseSelectOptions, resolveCourseByNameAndModality, courseBaseName, stripAcademicCoursePrefix, findCourseByNameAndModality, findCourseTemplateByName, formatCineBrasilLabel, dcnsToRefString } from '../utils/courseBatch';
 import type { RequirementLevel } from '../types/curriculum';
 import {
@@ -90,6 +90,12 @@ interface CurriculumFormProps {
   onSave: (structure: CurriculumStructure) => Promise<void>;
   onCancel: () => void;
   onAddCourse: (newCourse: Course) => Promise<void>;
+  /** Persiste DCNs e propaga nome de exibição para a mesma DCN em outros cursos/estruturas. */
+  onPersistDcns?: (payload: {
+    courseId?: string;
+    structureId?: string;
+    dcns: DcnDocument[];
+  }) => Promise<void>;
 }
 
 type SplitFlags = { hasLaboratory: boolean; hasClinical: boolean };
@@ -287,6 +293,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
   onSave,
   onCancel,
   onAddCourse,
+  onPersistDcns,
 }) => {
   const isZabala = settings.pedagogicalNomenclature === 'zabala';
   const chaLabels = getSaberesLabels(settings.pedagogicalNomenclature);
@@ -381,7 +388,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     initialData?.complementaryTotalHours ?? 0
   );
   const [complementaryModality, setComplementaryModality] = useState<DeliveryModalityFlag>(
-    initialData?.complementaryModality ?? 'assincrono'
+    initialData?.complementaryModality ?? 'presencial'
   );
   const [extensionTotalHours, setExtensionTotalHours] = useState<number>(
     initialData?.extensionTotalHours ?? 0
@@ -400,14 +407,28 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
 
   // Periods (for disciplinar) — nova estrutura começa vazia (dados do curso vêm da planilha)
   const [periods, setPeriods] = useState<PeriodData[]>(
-    initialData?.periods || []
+    (initialData?.periods || []).map((p) => ({
+      ...p,
+      disciplines: (p.disciplines || []).map((d) => ({
+        ...d,
+        name: normalizeTitleCase(d.name),
+      })),
+    }))
   );
 
   // Modules (for modular)
   const [modules, setModules] = useState<ModuleData[]>(
     (initialData?.modules || []).map((m) => ({
       ...m,
-      title: normalizeModuleTitle(m.title),
+      title: normalizeTitleCase(m.title),
+      knowledges: (m.knowledges || []).map((k) => ({
+        ...k,
+        name: normalizeTitleCase(k.name),
+      })),
+      disciplines: (m.disciplines || []).map((d) => ({
+        ...d,
+        name: normalizeTitleCase(d.name),
+      })),
       competences: normalizeModuleCompetences(m),
       competence: undefined,
     }))
@@ -466,7 +487,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setMinInternshipHours(undefined);
     setComplementaryRequirement('Não Informado');
     setComplementaryTotalHours(0);
-    setComplementaryModality('assincrono');
+    setComplementaryModality('presencial');
     setExtensionTotalHours(0);
     setExtensionModality('presencial');
     setFinalPaperRequirement('Não Informado');
@@ -501,7 +522,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       setMinInternshipHours(selected.minInternshipHours);
       setComplementaryRequirement(selected.complementaryRequirement || 'Não Informado');
       setComplementaryTotalHours(selected.complementaryTotalHours ?? 0);
-      setComplementaryModality(selected.complementaryModality ?? 'assincrono');
+      setComplementaryModality(selected.complementaryModality ?? 'presencial');
       setExtensionTotalHours(selected.extensionTotalHours ?? 0);
       setExtensionModality(selected.extensionModality ?? 'presencial');
     } else {
@@ -646,11 +667,27 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       // Matriz / organização do arquivo
       setStructureType(parsed.structureType);
       setStatus('Em Elaboração');
-      setPeriods(parsed.periods || []);
+      setPeriods(
+        (parsed.periods || []).map((p) => ({
+          ...p,
+          disciplines: (p.disciplines || []).map((d) => ({
+            ...d,
+            name: normalizeTitleCase(d.name),
+          })),
+        }))
+      );
       setModules(
         (parsed.modules || []).map((m) => ({
           ...m,
-          title: normalizeModuleTitle(m.title),
+          title: normalizeTitleCase(m.title),
+          knowledges: (m.knowledges || []).map((k) => ({
+            ...k,
+            name: normalizeTitleCase(k.name),
+          })),
+          disciplines: (m.disciplines || []).map((d) => ({
+            ...d,
+            name: normalizeTitleCase(d.name),
+          })),
         }))
       );
       if (parsed.hasLaboratory) setHasLaboratory(true);
@@ -824,6 +861,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         const bd = getDisciplineChBreakdown(knowledgeAsDiscipline(k, flags));
         return {
           ...k,
+          name: normalizeTitleCase(k.name),
           hasLaboratory,
           hasClinical,
           // Mantém hours alinhado à soma das colunas de modalidade
@@ -834,6 +872,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
         const bd = getDisciplineChBreakdown({ ...d, hasLaboratory, hasClinical });
         return {
           ...d,
+          name: normalizeTitleCase(d.name),
           hasLaboratory,
           hasClinical,
           hours: Number(bd.total) || Number(d.hours) || 0,
@@ -848,7 +887,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       });
       return {
         ...synced,
-        title: normalizeModuleTitle(synced.title),
+        title: normalizeTitleCase(synced.title),
         hours: sumModuleComponentHours({ ...synced, knowledges, disciplines }),
       };
     });
@@ -912,6 +951,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             ...p,
             disciplines: p.disciplines.map((d) => ({
               ...d,
+              name: normalizeTitleCase(d.name),
               hasLaboratory,
               hasClinical,
             })),
@@ -2070,6 +2110,10 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                 onChange={(e) => setHasLibrasOptativa(e.target.checked)}
               />
               Incluir Libras (Optativa) — 20h
+              <span className="text-slate-500 font-normal">
+                {' '}
+                ({structureType === 'modular' ? 'Conhecimento' : 'Disciplina'})
+              </span>
             </label>
             <p className="text-[10px] text-slate-500 pl-6">
               Aparece no resumo de carga horária e no mapa da trilha. Não contabiliza na CH total do curso.
@@ -2400,6 +2444,16 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                               updated[pIdx].disciplines[dIdx].name = e.target.value;
                               setPeriods(updated);
                             }}
+                            onBlur={(e) => {
+                              const normalized = normalizeTitleCase(e.target.value);
+                              if (normalized === periods[pIdx]?.disciplines[dIdx]?.name) return;
+                              const updated = [...periods];
+                              updated[pIdx].disciplines[dIdx] = {
+                                ...updated[pIdx].disciplines[dIdx],
+                                name: normalized,
+                              };
+                              setPeriods(updated);
+                            }}
                             placeholder="Nova disciplina"
                             className="w-full px-2 py-1 border rounded text-xs"
                           />
@@ -2657,7 +2711,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                             setModules(updated);
                           }}
                           onBlur={(e) => {
-                            const normalized = normalizeModuleTitle(e.target.value);
+                            const normalized = normalizeTitleCase(e.target.value);
                             if (normalized === modules[mIdx]?.title) return;
                             const updated = [...modules];
                             updated[mIdx] = { ...updated[mIdx], title: normalized };
@@ -3114,6 +3168,22 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                                             setModules(updated);
                                           }
                                         }}
+                                        onBlur={(e) => {
+                                          const normalized = normalizeTitleCase(e.target.value);
+                                          if (
+                                            normalized ===
+                                            modules[mIdx]?.knowledges?.[kIdx]?.name
+                                          )
+                                            return;
+                                          const updated = [...modules];
+                                          if (updated[mIdx].knowledges) {
+                                            updated[mIdx].knowledges[kIdx] = {
+                                              ...updated[mIdx].knowledges[kIdx],
+                                              name: normalized,
+                                            };
+                                            setModules(updated);
+                                          }
+                                        }}
                                         placeholder="Novo conhecimento aplicado"
                                         className="w-full min-w-[160px] px-1.5 py-1 border border-transparent hover:border-slate-200 focus:border-[#002B49] rounded text-xs font-medium text-slate-900 bg-transparent leading-snug resize-none"
                                       />
@@ -3516,12 +3586,22 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
             if (updatedDcns.length > 0) {
               setDcnRef(dcnsToRefString(updatedDcns));
             }
+            await onPersistDcns?.({
+              courseId: cId,
+              structureId: initialData?.id,
+              dcns: updatedDcns,
+            });
           }}
           onUpdateStructureDcns={async (sId, updatedDcns) => {
             setStructureDcns(updatedDcns);
             if (updatedDcns.length > 0) {
               setDcnRef(dcnsToRefString(updatedDcns));
             }
+            await onPersistDcns?.({
+              courseId: selectedCourseId || currentCourse?.id,
+              structureId: sId,
+              dcns: updatedDcns,
+            });
           }}
         />
       )}

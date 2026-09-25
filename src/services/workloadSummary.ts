@@ -25,6 +25,13 @@ export interface WorkloadSummaryRow {
 export const LIBRAS_OPTATIVA_HOURS = 20;
 export const LIBRAS_OPTATIVA_LABEL = 'Libras (Optativa)';
 
+/** Rótulo do tipo do componente Libras conforme a organização curricular. */
+export function librasOptativaKindLabel(
+  structureType: CurriculumStructure['structureType'] | undefined
+): string {
+  return structureType === 'modular' ? 'Conhecimento' : 'Disciplina';
+}
+
 function collectDisciplines(structure: CurriculumStructure): Discipline[] {
   if (structure.structureType === 'disciplinar' && structure.periods) {
     return structure.periods
@@ -126,7 +133,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
       ? extensionDeclared
       : 0;
 
-  const complementaryMod = structure.complementaryModality || 'assincrono';
+  const complementaryMod = structure.complementaryModality || 'presencial';
   if (complementary > 0) {
     if (complementaryMod === 'presencial') {
       theoretical += complementary;
@@ -243,7 +250,7 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
       ? [
           {
             id: 'libras',
-            label: LIBRAS_OPTATIVA_LABEL,
+            label: `${librasOptativaKindLabel(structure.structureType)} — ${LIBRAS_OPTATIVA_LABEL}`,
             shortLabel: LIBRAS_OPTATIVA_LABEL,
             hours: LIBRAS_OPTATIVA_HOURS,
             percent: 0,

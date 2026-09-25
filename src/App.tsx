@@ -12,7 +12,7 @@ import { CurriculumForm } from './components/CurriculumForm';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
 import { BillingAlertBanner } from './components/BillingAlertBanner';
-import { CurriculumStructure, Course, AppSettings } from './types/curriculum';
+import { CurriculumStructure, Course, AppSettings, DcnDocument } from './types/curriculum';
 import { useAuth } from './auth/AuthProvider';
 import {
   FIREBASE_CHANGED_EVENT,
@@ -38,7 +38,14 @@ import {
   pushLocalCacheToServer,
   testFirestoreConnection,
 } from './services/curriculumService';
-import { ensureCourseForStructure, courseBaseName, dcnsToRefString, structureWithCourseDcns } from './utils/courseBatch';
+import {
+  ensureCourseForStructure,
+  courseBaseName,
+  dcnsToRefString,
+  structureWithCourseDcns,
+  buildDcnDisplayNameMap,
+  applyDcnDisplayNames,
+} from './utils/courseBatch';
 import { 
   CheckCircle2, 
   AlertCircle, 
@@ -276,22 +283,51 @@ function AuthenticatedApp() {
     updatedCourses: Course[],
     options?: { allowEmptyWipe?: boolean }
   ) => {
-    const saved = await saveAllCoursesToFirestore(updatedCourses, options);
+    // Nomes de exibição das DCNs valem globalmente (mesma URL/resolução em qualquer curso).
+    const displayMap = new Map<string, { title: string; resolutionNumber: string }>();
+    updatedCourses.forEach((c) => {
+      buildDcnDisplayNameMap(c.dcns).forEach((v, k) => displayMap.set(k, v));
+    });
+    const coursesWithGlobalNames = updatedCourses.map((c) => {
+      const nextDcns = applyDcnDisplayNames(c.dcns, displayMap);
+      if (!nextDcns || nextDcns === c.dcns) return c;
+      return {
+        ...c,
+        dcns: nextDcns,
+        activeDcn: dcnsToRefString(nextDcns) || c.activeDcn,
+      };
+    });
+
+    const saved = await saveAllCoursesToFirestore(coursesWithGlobalNames, options);
     setCourses(saved);
 
-    // Propaga DCNs/nomes alterados no curso para as estruturas vinculadas
+    // Propaga DCNs/nomes para todas as estruturas (curso vinculado + mesma DCN em outros cursos)
     const byId = new Map(saved.map((c) => [c.id, c]));
     const patched = structures.map((s) => {
       const course = s.courseId ? byId.get(s.courseId) : undefined;
-      if (!course?.dcns || course.dcns.length === 0) return s;
-      const nextRef = dcnsToRefString(course.dcns);
+      let nextDcns = s.dcns;
+      let fromCourse = false;
+      if (course?.dcns && course.dcns.length > 0) {
+        nextDcns = course.dcns;
+        fromCourse = true;
+      } else {
+        nextDcns = applyDcnDisplayNames(s.dcns, displayMap);
+      }
+      const nextRef = nextDcns?.length
+        ? dcnsToRefString(nextDcns)
+        : s.dcnRef;
       const unchanged =
-        (nextRef || s.dcnRef) === (s.dcnRef || '') &&
-        JSON.stringify(s.dcns || []) === JSON.stringify(course.dcns);
+        !fromCourse &&
+        nextDcns === s.dcns &&
+        (nextRef || '') === (s.dcnRef || '');
       if (unchanged) return s;
+      const sameJson =
+        JSON.stringify(s.dcns || []) === JSON.stringify(nextDcns || []) &&
+        (nextRef || s.dcnRef) === (s.dcnRef || '');
+      if (sameJson) return s;
       return {
         ...s,
-        dcns: course.dcns,
+        dcns: nextDcns,
         dcnRef: nextRef || s.dcnRef,
       };
     });
@@ -303,6 +339,75 @@ function AuthenticatedApp() {
         if (next && next !== selectedStructure) setSelectedStructure(next);
       }
       await Promise.all(toSave.map((s) => saveStructureToFirestore(s)));
+    }
+  };
+
+  /** Persiste DCNs e propaga o nome de exibição para todos os cursos/estruturas com a mesma DCN. */
+  const handlePersistDcns = async (payload: {
+    courseId?: string;
+    structureId?: string;
+    dcns: DcnDocument[];
+  }) => {
+    const { courseId, structureId, dcns: updatedDcns } = payload;
+    const displayMap = buildDcnDisplayNameMap(updatedDcns);
+    const nextRef = dcnsToRefString(updatedDcns);
+
+    const nextCourses = courses.map((c) => {
+      if (courseId && c.id === courseId) {
+        return {
+          ...c,
+          dcns: updatedDcns,
+          activeDcn: nextRef || c.activeDcn,
+          dcnLink: updatedDcns.map((d) => d.pdfUrl).filter(Boolean).join(' | ') || c.dcnLink,
+        };
+      }
+      const patched = applyDcnDisplayNames(c.dcns, displayMap);
+      if (!patched || patched === c.dcns) return c;
+      return {
+        ...c,
+        dcns: patched,
+        activeDcn: dcnsToRefString(patched) || c.activeDcn,
+      };
+    });
+
+    const coursesChanged = nextCourses.some((c, i) => c !== courses[i]);
+    if (coursesChanged) {
+      const saved = await saveAllCoursesToFirestore(nextCourses);
+      setCourses(saved);
+    }
+
+    const nextStructures = structures.map((s) => {
+      if (structureId && s.id === structureId) {
+        return { ...s, dcns: updatedDcns, dcnRef: nextRef || s.dcnRef };
+      }
+      if (courseId && s.courseId === courseId) {
+        return { ...s, dcns: updatedDcns, dcnRef: nextRef || s.dcnRef };
+      }
+      const patched = applyDcnDisplayNames(s.dcns, displayMap);
+      if (!patched || patched === s.dcns) return s;
+      return {
+        ...s,
+        dcns: patched,
+        dcnRef: dcnsToRefString(patched) || s.dcnRef,
+      };
+    });
+
+    const structuresChanged = nextStructures.some((s, i) => s !== structures[i]);
+    if (structuresChanged) {
+      setStructures(nextStructures);
+      if (selectedStructure) {
+        const next = nextStructures.find((x) => x.id === selectedStructure.id);
+        if (next) setSelectedStructure(next);
+      }
+      if (editingStructure) {
+        const next = nextStructures.find((x) => x.id === editingStructure.id);
+        if (next) setEditingStructure(next);
+      }
+      await Promise.all(
+        nextStructures
+          .filter((s, i) => s !== structures[i])
+          .map((s) => saveStructureToFirestore(s))
+      );
     }
   };
 
@@ -565,6 +670,7 @@ function AuthenticatedApp() {
                   setCurrentViewMode('list');
                 }}
                 onAddCourse={handleAddCourse}
+                onPersistDcns={handlePersistDcns}
               />
             )}
 

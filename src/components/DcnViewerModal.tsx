@@ -277,8 +277,8 @@ export const DcnViewerModal: React.FC<DcnViewerModalProps> = ({
     await persistDcns(updated);
     setIsRenaming(false);
     cancelRenameDcn();
-    setSuccessMessage('Nome da DCN atualizado.');
-    setTimeout(() => setSuccessMessage(null), 2500);
+    setSuccessMessage('Nome da DCN atualizado em todos os cursos e estruturas que usam este documento.');
+    setTimeout(() => setSuccessMessage(null), 3500);
   };
 
   const handleDeleteDcn = async (id: string) => {

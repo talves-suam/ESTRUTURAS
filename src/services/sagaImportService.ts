@@ -752,7 +752,7 @@ function parseDisciplineLine(
   return {
     id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     code,
-    name,
+    name: normalizeModuleTitle(name),
     type: type || 'Obrigatória',
     credits: credits ?? 0,
     hours: hours ?? 0,
@@ -1428,7 +1428,7 @@ export function parseEstruturaCurricularSheet(
     const knowId = `know-${stamp}`;
     const know: KnowledgeItem = {
       id: knowId,
-      name,
+      name: normalizeModuleTitle(name),
       category: 'conhecimento',
       hours: hours || presential + asyncH,
       modalityDelivery,

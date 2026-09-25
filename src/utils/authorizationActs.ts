@@ -14,8 +14,9 @@ export function createCampusAuthorizationAct(
     id:
       partial?.id ||
       `ato-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    unitName: (partial?.unitName || '').trim(),
-    act: (partial?.act || '').trim(),
+    // Não usar trim aqui: o editor normaliza a cada tecla e trim impede espaços ao digitar.
+    unitName: String(partial?.unitName ?? ''),
+    act: String(partial?.act ?? ''),
   };
 }
 
@@ -64,7 +65,7 @@ export function normalizeAuthorizationActs(
   }
 
   const active = acts.find((a) => a.id === activeId);
-  const mirror = (active?.act || legacy || '').trim();
+  const mirror = String(active?.act || legacy || '').trim();
 
   return {
     authorizationActs: acts,

@@ -11,6 +11,8 @@ import {
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { showsModuleMeetings } from '../services/workloadSummary';
 
+const CARD_W = 'w-[168px]';
+
 function sortModuleChain(list: ModuleData[]): ModuleData[] {
   if (list.length <= 1) return list;
   const ids = new Set(list.map((m) => m.id));
@@ -65,19 +67,23 @@ function pairModules(chain: ModuleData[]): Array<{ left?: ModuleData; right?: Mo
 
 type Dir = 'ltr' | 'rtl';
 
-const LINE = 'bg-[#002B49]/45';
+const LINE = 'bg-[#002B49]/40';
 
-function MapLabel({
+function CardText({
   children,
   className = '',
+  align = 'left',
 }: {
   children: React.ReactNode;
   className?: string;
+  align?: 'left' | 'center';
 }) {
   return (
     <p
-      className={`font-bold leading-snug text-left whitespace-normal ${className}`}
-      style={{ wordBreak: 'normal', overflowWrap: 'normal', hyphens: 'none' }}
+      className={`font-bold leading-snug whitespace-normal ${
+        align === 'center' ? 'text-center' : 'text-left'
+      } ${className}`}
+      style={{ wordBreak: 'normal', overflowWrap: 'break-word', hyphens: 'none' }}
     >
       {children}
     </p>
@@ -98,7 +104,6 @@ function SideBracket({
 }) {
   const items = React.Children.toArray(children).filter(Boolean);
   if (items.length === 0) return null;
-
   const reverse = side === 'left';
 
   if (items.length === 1) {
@@ -140,7 +145,6 @@ function SideBracket({
   );
 }
 
-/** Pai + bracket (LTR: pai|filhos · RTL: filhos|pai). */
 function BranchFrom({
   parent,
   children,
@@ -172,9 +176,6 @@ function BranchFrom({
           ? 'opacity-0 pointer-events-none blur-[1px] scale-[0.985]'
           : 'opacity-100'
       } ${bodyAttrs?.className || ''}`}
-      style={{
-        ...((bodyAttrs?.style as React.CSSProperties) || {}),
-      }}
     >
       {dir === 'ltr' ? (
         <>
@@ -207,6 +208,7 @@ function BranchFrom({
   );
 }
 
+/** Perfil — envelope 168px, papel quente, detalhe azul. */
 const ProfileBox: React.FC<{
   aspect: GraduateProfileAspect;
   index: number;
@@ -214,13 +216,17 @@ const ProfileBox: React.FC<{
   const title = aspect.title?.trim() || aspectShortLabel(aspect, index);
   return (
     <div
-      className="rounded-lg bg-[#4a7fa3] px-3.5 py-2 shadow-sm w-max min-w-[8.5rem] max-w-[18rem]"
+      className={`relative ${CARD_W} rounded-xl px-3 py-2.5 text-center shadow-sm border border-[#c4b5a0]/55 bg-gradient-to-b from-[#fffbf5] to-[#f3ebe0]`}
       data-map-role="perfil"
+      title={aspect.text || title}
     >
-      <MapLabel className="flex items-start gap-2 text-[11px] text-white">
-        <span className="mt-1 w-1.5 h-1.5 rounded-full bg-white/90 shrink-0" aria-hidden />
-        <span>{title}</span>
-      </MapLabel>
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#002B49]" />
+      <p className="text-[9px] font-bold uppercase tracking-wider text-[#5a6b78] mb-1">
+        Perfil
+      </p>
+      <CardText align="center" className="text-[12px] text-[#2c3a42] line-clamp-4">
+        {title}
+      </CardText>
     </div>
   );
 };
@@ -245,15 +251,22 @@ function CompetenceBox({
         e.stopPropagation();
         onToggle?.();
       }}
-      className={`rounded-lg bg-[#2a5f87] px-3.5 py-2.5 shadow-sm w-max min-w-[10rem] max-w-[22rem] text-left cursor-pointer hover:brightness-110 transition-[filter,box-shadow] duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6B00]/60 ${
-        collapsed ? 'ring-1 ring-white/25' : ''
+      className={`relative ${CARD_W} rounded-xl px-3 py-2.5 text-center shadow-md shadow-[#002B49]/25 cursor-pointer transition-[filter,box-shadow,transform] duration-200 hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c45a1a]/50 bg-[#002B49] ${
+        collapsed ? 'ring-1 ring-[#c45a1a]/45' : ''
       }`}
     >
-      <MapLabel className="text-[12px] text-white">{text}</MapLabel>
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#c45a1a]" />
+      <p className="text-[9px] font-bold uppercase tracking-wider text-blue-200/85 mb-1">
+        Competência
+      </p>
+      <CardText align="center" className="text-[12px] text-white line-clamp-4">
+        {text}
+      </CardText>
     </button>
   );
 }
 
+/** Envelope 168px — laranja institucional sóbrio. */
 function ModuleBox({
   mod,
   hideMeetings,
@@ -276,20 +289,24 @@ function ModuleBox({
         e.stopPropagation();
         onToggle?.();
       }}
-      className="relative rounded-xl bg-[#002B49] px-4 py-3 shadow-md shadow-[#002B49]/20 w-max min-w-[11rem] max-w-[20rem] text-left cursor-pointer hover:brightness-110 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6B00]/60"
+      className={`relative z-10 ${CARD_W} rounded-xl bg-gradient-to-b from-[#c45a1a] to-[#a84a14] text-center shadow-md shadow-[#8a3c10]/30 cursor-pointer hover:brightness-110 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#002B49]/50 ${
+        collapsed ? 'ring-1 ring-[#002B49]/40' : ''
+      }`}
     >
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00]" />
-      {mod.branch && (
-        <span className="inline-block mb-1 text-[10px] font-bold text-amber-300 border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 rounded-full">
-          {formatBranchLabel(mod.branch)}
-        </span>
-      )}
-      <MapLabel className="text-[13px] text-white">
-        {formatModuleName(mod.number, mod.title, mod.branch)}
-      </MapLabel>
-      <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
-        {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
-      </p>
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#002B49] pointer-events-none" />
+      <div className="relative z-10 px-3 py-2.5">
+        {mod.branch && (
+          <span className="inline-block mb-1 text-[9px] font-bold text-[#ffe0c8] tracking-wide">
+            {formatBranchLabel(mod.branch)}
+          </span>
+        )}
+        <CardText align="center" className="text-[12px] text-white line-clamp-3">
+          {formatModuleName(mod.number, mod.title, mod.branch)}
+        </CardText>
+        <p className="text-[10px] text-orange-100/85 mt-1 font-medium leading-snug">
+          {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
+        </p>
+      </div>
     </button>
   );
 }
@@ -324,17 +341,73 @@ const CompetenceBranch: React.FC<{
       }
     >
       {linked.length === 0 ? (
-        <span className="text-[10px] text-slate-400 italic px-1">Sem perfil</span>
+        <span className="text-[10px] text-slate-400 italic px-1 w-[168px] text-center">
+          Sem perfil
+        </span>
       ) : (
-        linked.map(({ asp, i }) => (
-          <ProfileBox key={asp.id} aspect={asp} index={i} />
-        ))
+        linked.map(({ asp, i }) => <ProfileBox key={asp.id} aspect={asp} index={i} />)
       )}
     </BranchFrom>
   );
 };
 
-const ModuleCompetenceTree: React.FC<{
+const ModuleCompetenceBranches: React.FC<{
+  mod: ModuleData;
+  aspects: GraduateProfileAspect[];
+  aspectIndex: Map<string, number>;
+  dir: Dir;
+  bodyHidden: boolean;
+}> = ({ mod, aspects, aspectIndex, dir, bodyHidden }) => {
+  const comps = normalizeModuleCompetences(mod);
+  const items =
+    comps.length === 0
+      ? [
+          <span key="empty" className="text-[11px] text-slate-400 italic px-1">
+            Sem competências
+          </span>,
+        ]
+      : comps.map((c) => (
+          <CompetenceBranch
+            key={c.id}
+            competence={c}
+            aspects={aspects}
+            aspectIndex={aspectIndex}
+            dir={dir}
+          />
+        ));
+
+  const bracket = (
+    <SideBracket side={dir === 'ltr' ? 'right' : 'left'}>{items}</SideBracket>
+  );
+  const stem = <div className={`w-5 h-px shrink-0 ${LINE}`} />;
+
+  return (
+    <div
+      data-map-collapse="module-body"
+      aria-hidden={bodyHidden}
+      className={`flex items-center transition-[opacity,filter,transform] duration-300 ease-out ${
+        bodyHidden
+          ? 'opacity-0 pointer-events-none blur-[1px] scale-[0.985]'
+          : 'opacity-100'
+      }`}
+    >
+      {dir === 'ltr' ? (
+        <>
+          {stem}
+          {bracket}
+        </>
+      ) : (
+        <>
+          {bracket}
+          {stem}
+        </>
+      )}
+    </div>
+  );
+};
+
+/** Lado LTR/RTL: módulo em coluna fixa + ramos, alinhados ao centro vertical do par. */
+const ModuleCompetenceSide: React.FC<{
   mod: ModuleData;
   aspects: GraduateProfileAspect[];
   aspectIndex: Map<string, number>;
@@ -342,56 +415,88 @@ const ModuleCompetenceTree: React.FC<{
   hideMeetings?: boolean;
 }> = ({ mod, aspects, aspectIndex, dir, hideMeetings }) => {
   const [bodyHidden, setBodyHidden] = useState(false);
-  const comps = normalizeModuleCompetences(mod);
-
-  if (comps.length === 0) {
-    return (
-      <BranchFrom
-        dir={dir}
-        bodyHidden={bodyHidden}
-        bodyAttrs={{ 'data-map-collapse': 'module-body' } as React.HTMLAttributes<HTMLDivElement>}
-        parent={
-          <ModuleBox
-            mod={mod}
-            hideMeetings={hideMeetings}
-            collapsed={bodyHidden}
-            onToggle={() => setBodyHidden((v) => !v)}
-          />
-        }
-      >
-        <span className="text-[11px] text-slate-400 italic px-1">Sem competências</span>
-      </BranchFrom>
-    );
-  }
-
-  return (
-    <BranchFrom
+  const box = (
+    <ModuleBox
+      mod={mod}
+      hideMeetings={hideMeetings}
+      collapsed={bodyHidden}
+      onToggle={() => setBodyHidden((v) => !v)}
+    />
+  );
+  const branches = (
+    <ModuleCompetenceBranches
+      mod={mod}
+      aspects={aspects}
+      aspectIndex={aspectIndex}
       dir={dir}
       bodyHidden={bodyHidden}
-      bodyAttrs={{ 'data-map-collapse': 'module-body' } as React.HTMLAttributes<HTMLDivElement>}
-      parent={
-        <ModuleBox
-          mod={mod}
-          hideMeetings={hideMeetings}
-          collapsed={bodyHidden}
-          onToggle={() => setBodyHidden((v) => !v)}
-        />
-      }
-    >
-      {comps.map((c) => (
-        <CompetenceBranch
-          key={c.id}
-          competence={c}
-          aspects={aspects}
-          aspectIndex={aspectIndex}
-          dir={dir}
-        />
-      ))}
-    </BranchFrom>
+    />
+  );
+
+  if (dir === 'ltr') {
+    return (
+      <>
+        <div className="flex items-center justify-center self-center">{box}</div>
+        <div className="flex items-center justify-start min-w-0 self-center">{branches}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="flex items-center justify-end min-w-0 self-center">{branches}</div>
+      <div className="flex items-center justify-center self-center">{box}</div>
+    </>
   );
 };
 
-/** Linhas espelhadas: ímpar LTR | espaço | par RTL. */
+/** Uma linha espelhada: módulos nas colunas externas (alinhados entre pares e entre si). */
+const MirroredModulePair: React.FC<{
+  left?: ModuleData;
+  right?: ModuleData;
+  aspects: GraduateProfileAspect[];
+  aspectIndex: Map<string, number>;
+  hideMeetings?: boolean;
+}> = ({ left, right, aspects, aspectIndex, hideMeetings }) => (
+  <div
+    className="grid w-full items-center"
+    style={{
+      gridTemplateColumns: '168px minmax(min-content, 1fr) 2.5rem minmax(min-content, 1fr) 168px',
+    }}
+    data-map-pair="1"
+  >
+    {left ? (
+      <ModuleCompetenceSide
+        mod={left}
+        aspects={aspects}
+        aspectIndex={aspectIndex}
+        dir="ltr"
+        hideMeetings={hideMeetings}
+      />
+    ) : (
+      <>
+        <div />
+        <div />
+      </>
+    )}
+    <div className="w-10 justify-self-center" aria-hidden />
+    {right ? (
+      <ModuleCompetenceSide
+        mod={right}
+        aspects={aspects}
+        aspectIndex={aspectIndex}
+        dir="rtl"
+        hideMeetings={hideMeetings}
+      />
+    ) : (
+      <>
+        <div />
+        <div />
+      </>
+    )}
+  </div>
+);
+
+/** Linhas espelhadas: ímpar LTR | espaço | par RTL. Módulos sempre alinhados. */
 const MirroredModuleRows: React.FC<{
   chain: ModuleData[];
   aspects: GraduateProfileAspect[];
@@ -403,42 +508,22 @@ const MirroredModuleRows: React.FC<{
   const pairs = pairModules(chain);
 
   return (
-    <div className="space-y-3">
+    <div className="w-max max-w-none min-w-full space-y-3">
       {label && (
-        <p className="text-[12px] font-bold uppercase tracking-wider text-[#002B49]/70 px-1">
+        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#002B49]/70 px-1 text-center">
           {label}
         </p>
       )}
-      <div className="flex flex-col gap-14">
+      <div className="flex flex-col gap-14 items-stretch">
         {pairs.map((pair, idx) => (
-          <div
+          <MirroredModulePair
             key={pair.left?.id || pair.right?.id || idx}
-            className="inline-flex w-max max-w-none items-start"
-          >
-            <div className="flex shrink-0 justify-end pr-5">
-              {pair.left && (
-                <ModuleCompetenceTree
-                  mod={pair.left}
-                  aspects={aspects}
-                  aspectIndex={aspectIndex}
-                  dir="ltr"
-                  hideMeetings={hideMeetings}
-                />
-              )}
-            </div>
-            <div className="w-10 shrink-0" aria-hidden />
-            <div className="flex shrink-0 justify-start pl-5">
-              {pair.right && (
-                <ModuleCompetenceTree
-                  mod={pair.right}
-                  aspects={aspects}
-                  aspectIndex={aspectIndex}
-                  dir="rtl"
-                  hideMeetings={hideMeetings}
-                />
-              )}
-            </div>
-          </div>
+            left={pair.left}
+            right={pair.right}
+            aspects={aspects}
+            aspectIndex={aspectIndex}
+            hideMeetings={hideMeetings}
+          />
         ))}
       </div>
     </div>
@@ -447,13 +532,13 @@ const MirroredModuleRows: React.FC<{
 
 export function CompetencesMapLegend() {
   const items = [
-    { color: 'bg-[#002B49]', label: 'Módulo' },
-    { color: 'bg-[#2a5f87]', label: 'Competência' },
-    { color: 'bg-[#4a7fa3]', label: 'Perfil do Egresso' },
+    { color: 'bg-[#c45a1a]', label: 'Módulo' },
+    { color: 'bg-[#002B49]', label: 'Competência' },
+    { color: 'bg-[#f3ebe0] border border-[#c4b5a0]/60', label: 'Perfil do Egresso' },
   ];
   return (
     <div
-      className="absolute bottom-3 left-3 z-30 flex flex-row flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-[#002B49]/10 bg-white/95 backdrop-blur-sm px-2.5 py-1.5 shadow-sm pointer-events-auto max-w-[calc(100%-1.5rem)]"
+      className="absolute bottom-3 left-3 z-30 flex flex-row flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-[#002B49]/12 bg-white/95 backdrop-blur-sm px-2.5 py-1.5 shadow-sm pointer-events-auto max-w-[calc(100%-1.5rem)]"
       data-map-legend="competences"
     >
       {items.map((item) => (
@@ -487,6 +572,20 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
   const { trunk, branches } = useMemo(() => partitionBranches(modules), [modules]);
   const hideMeetings = !showsModuleMeetings(structure);
 
+  /** Mesmo número de módulo em cada ênfase, lado a lado (VIII com VIII, IX com IX…). */
+  const emphasisSteps = useMemo(() => {
+    if (branches.length === 0) return [];
+    const numbers = Array.from(
+      new Set(branches.flatMap((b) => b.modules.map((m) => m.number)))
+    ).sort((a, b) => a - b);
+    return numbers.map((num) => ({
+      number: num,
+      modules: branches
+        .map((b) => b.modules.find((m) => m.number === num))
+        .filter((m): m is ModuleData => !!m),
+    }));
+  }, [branches]);
+
   if (modules.length === 0) {
     return (
       <div className="text-center text-slate-400 text-sm py-20">
@@ -496,7 +595,14 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
   }
 
   return (
-    <div className="relative w-max min-w-full space-y-12 pb-2 pt-2" data-map-canvas="competences">
+    <div
+      className="relative w-full space-y-12 pb-2 pt-3 px-1 flex flex-col items-center"
+      data-map-canvas="competences"
+      style={{
+        backgroundImage:
+          'radial-gradient(ellipse 75% 50% at 15% 5%, rgba(168,196,176,0.12), transparent 55%), radial-gradient(ellipse 65% 45% at 92% 95%, rgba(255,107,0,0.06), transparent 50%), radial-gradient(ellipse 50% 40% at 55% 40%, rgba(0,43,73,0.03), transparent 60%)',
+      }}
+    >
       <MirroredModuleRows
         chain={trunk}
         aspects={aspects}
@@ -504,16 +610,71 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
         hideMeetings={hideMeetings}
         label={trunk.length > 0 && branches.length > 0 ? 'Tronco comum' : undefined}
       />
-      {branches.map((b) => (
-        <MirroredModuleRows
-          key={b.key}
-          chain={b.modules}
-          aspects={aspects}
-          aspectIndex={aspectIndex}
-          hideMeetings={hideMeetings}
-          label={formatBranchLabel(b.key)}
-        />
-      ))}
+      {emphasisSteps.length > 0 && (
+        <div className="w-max max-w-none min-w-full space-y-3">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#002B49]/70 px-1 text-center">
+            Ênfases
+          </p>
+          <div className="flex flex-col gap-14 items-stretch">
+            {emphasisSteps.map((step) => {
+              if (step.modules.length >= 2) {
+                const [left, right, ...rest] = step.modules;
+                return (
+                  <div key={`enf-${step.number}`} className="space-y-10">
+                    <MirroredModulePair
+                      left={left}
+                      right={right}
+                      aspects={aspects}
+                      aspectIndex={aspectIndex}
+                      hideMeetings={hideMeetings}
+                    />
+                    {rest.length > 0 && (
+                      <div className="flex flex-wrap items-center justify-center gap-10">
+                        {rest.map((mod) => (
+                          <div
+                            key={mod.id}
+                            className="inline-grid items-center"
+                            style={{ gridTemplateColumns: '168px auto' }}
+                          >
+                            <ModuleCompetenceSide
+                              mod={mod}
+                              aspects={aspects}
+                              aspectIndex={aspectIndex}
+                              dir="ltr"
+                              hideMeetings={hideMeetings}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              const only = step.modules[0];
+              if (!only) return null;
+              return (
+                <div
+                  key={`enf-${step.number}`}
+                  className="flex justify-center"
+                >
+                  <div
+                    className="inline-grid items-center"
+                    style={{ gridTemplateColumns: '168px auto' }}
+                  >
+                    <ModuleCompetenceSide
+                      mod={only}
+                      aspects={aspects}
+                      aspectIndex={aspectIndex}
+                      dir="ltr"
+                      hideMeetings={hideMeetings}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

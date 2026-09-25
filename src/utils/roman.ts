@@ -91,11 +91,15 @@ const MODULE_TITLE_SMALL_WORDS = new Set([
 ]);
 
 /**
- * Título de módulo em formato legível: primeira letra de cada palavra maiúscula.
- * Corrige textos vindos de PDF/planilha em CAIXA ALTA.
+ * Título legível: primeira letra de cada palavra maiúscula; artigos/preposições
+ * (e, de, da, do…) em minúsculo — exceto no início.
+ * Números romanos (I, II, VIII, IX…) permanecem em maiúsculas.
+ * Corrige textos em CAIXA ALTA (PDF/planilha/SAGA).
  * Ex.: "IDENTIDADE VISUAL E CULTURA" → "Identidade Visual e Cultura"
+ * Ex.: "EXTENSÃO VIII" → "Extensão VIII"
+ * Usado em módulos, disciplinas e conhecimentos.
  */
-export function normalizeModuleTitle(title?: string | null): string {
+export function normalizeTitleCase(title?: string | null): string {
   const raw = String(title || '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -109,6 +113,9 @@ export function normalizeModuleTitle(title?: string | null): string {
         .split('-')
         .map((chunk, chunkIndex) => {
           if (!chunk) return chunk;
+          if (isRomanNumeralToken(chunk)) {
+            return chunk.toLocaleUpperCase('pt-BR');
+          }
           const lower = chunk.toLocaleLowerCase('pt-BR');
           const keepSmall =
             wordIndex > 0 && chunkIndex === 0 && MODULE_TITLE_SMALL_WORDS.has(lower);
@@ -119,6 +126,17 @@ export function normalizeModuleTitle(title?: string | null): string {
     })
     .join(' ');
 }
+
+/** Token que é só número romano (I–MMM… até o uso curricular típico). */
+function isRomanNumeralToken(token: string): boolean {
+  const t = String(token || '').trim();
+  if (!t || t.length > 15) return false;
+  // Aceita romano “puro”; rejeita misturas (ex.: "VIIIa")
+  return /^(?=[MDCLXVI])M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/i.test(t);
+}
+
+/** @deprecated Preferir `normalizeTitleCase` — mantido por compatibilidade. */
+export const normalizeModuleTitle = normalizeTitleCase;
 
 /**
  * Nome completo do módulo para UI e relatórios.
@@ -132,7 +150,7 @@ export function formatModuleName(
   prefix = 'Módulo'
 ): string {
   const modLabel = formatModuleLabel(number, undefined, prefix);
-  const cleanTitle = normalizeModuleTitle(title);
+  const cleanTitle = normalizeTitleCase(title);
   const enfase = formatBranchLabel(branch);
   if (enfase && cleanTitle) return `${enfase} - ${modLabel} - ${cleanTitle}`;
   if (enfase) return `${enfase} - ${modLabel}`;

@@ -820,6 +820,58 @@ export function dcnsToRefString(dcns: DcnDocument[]): string {
   return label === '—' ? '' : label;
 }
 
+/** Chave estável para reconhecer a “mesma” DCN em cursos/estruturas diferentes. */
+export function dcnIdentityKey(dcn: Pick<DcnDocument, 'id' | 'pdfUrl' | 'resolutionNumber'>): string {
+  const url = normalizeGoogleDriveUrl(String(dcn.pdfUrl || ''))
+    .toLowerCase()
+    .trim();
+  if (url) return `url:${url}`;
+  const res = String(dcn.resolutionNumber || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (res) return `res:${res}`;
+  return `id:${String(dcn.id || '').trim()}`;
+}
+
+/** Mapa identidade → nome de exibição (title + resolution) a partir de uma lista fonte. */
+export function buildDcnDisplayNameMap(
+  dcns: DcnDocument[] | null | undefined
+): Map<string, { title: string; resolutionNumber: string }> {
+  const map = new Map<string, { title: string; resolutionNumber: string }>();
+  (dcns || []).forEach((d) => {
+    const key = dcnIdentityKey(d);
+    if (!key || key === 'id:') return;
+    map.set(key, {
+      title: String(d.title || '').trim(),
+      resolutionNumber: String(d.resolutionNumber || '').trim(),
+    });
+  });
+  return map;
+}
+
+/**
+ * Aplica nomes de exibição da fonte às DCNs do alvo (mesma URL / resolução / id).
+ * Retorna a lista original se nada mudou.
+ */
+export function applyDcnDisplayNames(
+  targetDcns: DcnDocument[] | null | undefined,
+  displayByKey: Map<string, { title: string; resolutionNumber: string }>
+): DcnDocument[] | undefined {
+  if (!targetDcns?.length || displayByKey.size === 0) return targetDcns || undefined;
+  let changed = false;
+  const next = targetDcns.map((d) => {
+    const patch = displayByKey.get(dcnIdentityKey(d));
+    if (!patch) return d;
+    const title = patch.title || d.title;
+    const resolutionNumber = patch.resolutionNumber || d.resolutionNumber;
+    if (d.title === title && d.resolutionNumber === resolutionNumber) return d;
+    changed = true;
+    return { ...d, title, resolutionNumber };
+  });
+  return changed ? next : targetDcns;
+}
+
 /** Preferência: DCNs (e nomes) do curso vinculado, para o cabeçalho oficial. */
 export function structureWithCourseDcns(
   structure: CurriculumStructure,

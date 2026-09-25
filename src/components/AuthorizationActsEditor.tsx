@@ -31,11 +31,11 @@ export const AuthorizationActsEditor: React.FC<AuthorizationActsEditorProps> = (
   const active = normalized.activeAuthorizationActId;
 
   const emit = (nextActs: CampusAuthorizationAct[], nextActive: string) => {
-    const n = normalizeAuthorizationActs({
-      authorizationActs: nextActs,
-      activeAuthorizationActId: nextActive,
-    });
-    onChange(n.authorizationActs, n.activeAuthorizationActId);
+    // Não passar por normalize completo a cada tecla (só garante id ativo válido).
+    const ids = new Set(nextActs.map((a) => a.id));
+    const active =
+      nextActive && ids.has(nextActive) ? nextActive : nextActs[0]?.id || '';
+    onChange(nextActs, active);
   };
 
   return (
