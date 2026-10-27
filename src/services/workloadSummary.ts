@@ -105,6 +105,9 @@ export function buildWorkloadSummary(structure: CurriculumStructure): {
   let componentsTotal = 0;
 
   disciplines.forEach((disc) => {
+    // Optativa aparece na estrutura, mas não entra no quadro de totais
+    if (disc.type === 'Optativa') return;
+
     const bd = getDisciplineChBreakdown(disc);
     const hours = bd.total;
     componentsTotal += hours;

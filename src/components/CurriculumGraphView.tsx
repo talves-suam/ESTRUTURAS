@@ -15,7 +15,7 @@ import {
   PeriodData,
   isFilledComponentCode,
 } from '../types/curriculum';
-import { getModularComponents } from '../utils/modularComponents';
+import { getModularComponents, sumModuleComponentHours } from '../utils/modularComponents';
 import {
   Table as TableIcon,
   FileText,
@@ -357,7 +357,9 @@ function ModuleNode({
           {formatModuleName(mod.number, mod.title, mod.branch)}
         </p>
         <p className="text-[10px] text-blue-200/80 mt-1 font-medium leading-snug">
-          {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
+          {hideMeetings
+            ? `${sumModuleComponentHours(mod)}h`
+            : `${sumModuleComponentHours(mod)}h · ${mod.meetings ?? 0} encontros`}
         </p>
       </div>
     </div>

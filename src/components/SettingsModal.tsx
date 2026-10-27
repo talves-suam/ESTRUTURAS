@@ -40,6 +40,7 @@ import {
   summarizeCourseDcns,
   dcnsToRefString,
 } from '../utils/courseBatch';
+import type { CourseBatchApplyMode } from '../utils/courseBatch';
 import {
   normalizeAuthorizationActs,
   summarizeAuthorizationActs,
@@ -117,6 +118,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [saveMsgType, setSaveMsgType] = useState<'ok' | 'err'>('ok');
   const [saving, setSaving] = useState(false);
+  const [pendingImportRows, setPendingImportRows] = useState<string[][] | null>(null);
   const topSaveRef = useRef<HTMLDivElement>(null);
   const [backupText, setBackupText] = useState('');
   const batchFileInputRef = useRef<HTMLInputElement>(null);
@@ -137,23 +139,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [settings]);
 
   // Sincroniza lista editável com o App (load inicial / após Salvar).
-  // Não sobrescreve se o usuário ainda tem edição local mais rica sem salvar.
+  // Não sobrescreve edições locais; não ressuscita cursos após limpar.
   useEffect(() => {
-    if (coursesCleared) return;
+    if (coursesCleared) {
+      // Mantém tabela vazia até o App confirmar wipe (courses === [])
+      if (courses.length === 0) {
+        setEditableCourses([]);
+        setCoursesCleared(false);
+      }
+      return;
+    }
     setEditableCourses((prev) => {
-      if (courses.length === 0) return prev;
+      // Wipe confirmado no App
+      if (courses.length === 0) return [];
+
       if (prev.length === 0) return courses;
 
       const sumCh = (list: Course[]) =>
         list.reduce((s, c) => s + (Number(c.minTotalHours) || 0), 0);
       const prevCh = sumCh(prev);
       const nextCh = sumCh(courses);
+      const prevIds = prev.map((c) => c.id).join('|');
+      const nextIds = courses.map((c) => c.id).join('|');
+
+      // Lista do App mudou de identidade (replace / import) → adota
+      if (prevIds !== nextIds) return courses;
 
       // App trouxe lista salva (mesmo tamanho ou CH maior) → usa a do App
       if (nextCh > prevCh) return courses;
       if (nextCh === prevCh && courses.length !== prev.length) return courses;
-      // Remount após navegar: se for a mesma “geração” de dados, ok manter prev;
-      // se App tem menos itens (replace) com CH ok, troca
       if (courses.length < prev.length && nextCh > 0 && nextCh >= prevCh * 0.5) {
         return courses;
       }
@@ -201,20 +215,88 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
   };
 
-  const applyBatchResult = (result: ReturnType<typeof applyCourseBatchRows>) => {
+  const persistCourses = async (
+    next: Course[],
+    options?: { allowEmptyWipe?: boolean }
+  ) => {
+    await onBatchUpdateCourses(next, options);
+    setEditableCourses(next);
+    if (next.length === 0) {
+      setCoursesCleared(true);
+    } else {
+      setCoursesCleared(false);
+    }
+  };
+
+  const applyBatchResult = async (
+    result: ReturnType<typeof applyCourseBatchRows>,
+    mode: CourseBatchApplyMode
+  ) => {
     const dcnCount = result.courses.reduce((n, c) => n + (c.dcns?.length || 0), 0);
-    setCoursesCleared(false);
-    setEditableCourses(result.courses);
-    setSaveSuccessMsg(
-      `${result.matchedCount} atualizado(s)${result.createdCount ? `, ${result.createdCount} novo(s)` : ''}. ${dcnCount} DCN(s) vinculadas no total. Clique em Salvar Alterações.`
-    );
-    setTimeout(() => setSaveSuccessMsg(null), 7000);
+    setSaving(true);
+    try {
+      await persistCourses(result.courses, {
+        allowEmptyWipe: mode === 'replace' && result.courses.length === 0,
+      });
+      setSaveMsgType('ok');
+      const parts: string[] = [];
+      if (mode === 'replace') {
+        parts.push(`Lista substituída: ${result.courses.length} curso(s)`);
+      } else if (mode === 'addOnly') {
+        parts.push(
+          `${result.createdCount} novo(s) incluído(s)${
+            result.skippedCount ? `, ${result.skippedCount} já existente(s) ignorado(s)` : ''
+          }`
+        );
+      } else {
+        parts.push(
+          `${result.matchedCount} atualizado(s)${
+            result.createdCount ? `, ${result.createdCount} novo(s)` : ''
+          }`
+        );
+      }
+      parts.push(`${dcnCount} DCN(s) vinculadas.`);
+      setSaveSuccessMsg(parts.join(' '));
+      onNotify?.(parts.join(' '), 'success');
+      setTimeout(() => setSaveSuccessMsg(null), 7000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao salvar cursos.';
+      setSaveMsgType('err');
+      setSaveSuccessMsg(message);
+      onNotify?.(message, 'error');
+      setTimeout(() => setSaveSuccessMsg(null), 8000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const requestImportChoice = (rows: string[][]) => {
+    if (rows.length === 0) return;
+    if (editableCourses.length === 0) {
+      void applyBatchResult(applyCourseBatchRows([], rows, { mode: 'replace' }), 'replace');
+      return;
+    }
+    setPendingImportRows(rows);
+  };
+
+  const handleImportChoice = (mode: CourseBatchApplyMode) => {
+    if (!pendingImportRows) return;
+    const rows = pendingImportRows;
+    setPendingImportRows(null);
+    if (mode === 'replace') {
+      void applyBatchResult(applyCourseBatchRows([], rows, { mode: 'replace' }), 'replace');
+    } else {
+      void applyBatchResult(
+        applyCourseBatchRows(editableCourses, rows, { mode: 'addOnly' }),
+        'addOnly'
+      );
+    }
   };
 
   const handleProcessCsv = () => {
     const rows = parseCourseBatchText(csvText);
     if (rows.length === 0) return;
-    applyBatchResult(applyCourseBatchRows(editableCourses, rows));
+    requestImportChoice(rows);
   };
 
   const handleImportBatchFile = async (file: File | null) => {
@@ -222,27 +304,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const rows = await readCourseBatchFile(file);
       if (rows.length === 0) {
+        setSaveMsgType('err');
         setSaveSuccessMsg(
           'Nenhuma linha de curso encontrada. Use a planilha “Dados para o Gestor” (coluna CURSO / CH Mínima) — não a matriz de estrutura curricular.'
         );
         setTimeout(() => setSaveSuccessMsg(null), 7000);
         return;
       }
-
-      const replace =
-        editableCourses.length === 0 ||
-        window.confirm(
-          `Importar ${rows.length} linha(s) do arquivo e SUBSTITUIR a lista atual (${editableCourses.length} curso(s))? ` +
-            'Isso remove nomes errados (ex.: módulos/disciplinas) e aplica CH, coordenação e demais campos do Excel.'
-        );
-
-      if (!replace && editableCourses.length > 0) {
-        applyBatchResult(applyCourseBatchRows(editableCourses, rows, { replace: false }));
-      } else {
-        applyBatchResult(applyCourseBatchRows([], rows, { replace: true }));
-      }
+      requestImportChoice(rows);
     } catch (err) {
       console.error(err);
+      setSaveMsgType('err');
       setSaveSuccessMsg('Falha ao ler o arquivo. Use .xlsx, .xls ou .csv.');
       setTimeout(() => setSaveSuccessMsg(null), 5000);
     } finally {
@@ -250,31 +322,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleDeleteCourse = (courseId: string) => {
+  const handleDeleteCourse = async (courseId: string) => {
     const course = editableCourses.find((c) => c.id === courseId);
     if (!course) return;
     if (!window.confirm(`Remover o curso "${course.name}" da lista cadastrada?`)) return;
-    setEditableCourses((prev) => prev.filter((c) => c.id !== courseId));
+    const next = editableCourses.filter((c) => c.id !== courseId);
     if (selectedDcnCourse?.id === courseId) setSelectedDcnCourse(null);
     if (selectedActsCourse?.id === courseId) setSelectedActsCourse(null);
-    setSaveSuccessMsg(`Curso "${course.name}" removido. Clique em Salvar para confirmar.`);
-    setTimeout(() => setSaveSuccessMsg(null), 5000);
+    setSaving(true);
+    try {
+      await persistCourses(next, { allowEmptyWipe: next.length === 0 });
+      setSaveMsgType('ok');
+      setSaveSuccessMsg(`Curso "${course.name}" removido.`);
+      setTimeout(() => setSaveSuccessMsg(null), 5000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao remover curso.';
+      setSaveMsgType('err');
+      setSaveSuccessMsg(message);
+      setTimeout(() => setSaveSuccessMsg(null), 8000);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleClearAllCourses = () => {
+  const handleClearAllCourses = async () => {
     if (editableCourses.length === 0) return;
     if (
       !window.confirm(
-        `Apagar todos os ${editableCourses.length} curso(s) cadastrados? Esta ação só será permanente após Salvar.`
+        `Apagar todos os ${editableCourses.length} curso(s) cadastrados? A lista será removida agora do navegador e do servidor.`
       )
     ) {
       return;
     }
+    setSaving(true);
     setCoursesCleared(true);
     setEditableCourses([]);
     setSelectedDcnCourse(null);
-    setSaveSuccessMsg('Lista de cursos limpa. Clique em Salvar para confirmar.');
-    setTimeout(() => setSaveSuccessMsg(null), 5000);
+    setSelectedActsCourse(null);
+    try {
+      await onBatchUpdateCourses([], { allowEmptyWipe: true });
+      setSaveMsgType('ok');
+      setSaveSuccessMsg('Todos os cursos foram apagados.');
+      onNotify?.('Todos os cursos foram apagados.', 'success');
+      setTimeout(() => setSaveSuccessMsg(null), 5000);
+    } catch (err) {
+      setCoursesCleared(false);
+      setEditableCourses(courses);
+      const message = err instanceof Error ? err.message : 'Falha ao apagar cursos.';
+      setSaveMsgType('err');
+      setSaveSuccessMsg(message);
+      onNotify?.(message, 'error');
+      setTimeout(() => setSaveSuccessMsg(null), 8000);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const buildSettingsDraft = (nomen: PedagogicalNomenclature = nomenclature): AppSettings => ({
@@ -811,15 +912,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <button
                 type="button"
                 onClick={() => batchFileInputRef.current?.click()}
-                className="px-3 py-2 rounded-lg bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-bold flex items-center gap-1.5"
+                disabled={saving}
+                className="px-3 py-2 rounded-lg bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-60"
               >
                 <Upload className="w-3.5 h-3.5" />
                 Importar Excel
               </button>
               <button
                 type="button"
-                onClick={handleClearAllCourses}
-                disabled={editableCourses.length === 0}
+                onClick={() => void handleClearAllCourses()}
+                disabled={editableCourses.length === 0 || saving}
                 className="px-3 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold border border-rose-200 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -852,7 +954,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <button
                 type="button"
                 onClick={handleProcessCsv}
-                className="px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shrink-0 self-start"
+                disabled={saving || !csvText.trim()}
+                className="px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shrink-0 self-start disabled:opacity-60"
               >
                 Aplicar
               </button>
@@ -1111,8 +1214,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <td className="px-2.5 py-1.5 text-center">
                       <button
                         type="button"
-                        onClick={() => handleDeleteCourse(c.id)}
-                        className="inline-flex items-center justify-center p-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700"
+                        onClick={() => void handleDeleteCourse(c.id)}
+                        disabled={saving}
+                        className="inline-flex items-center justify-center p-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 disabled:opacity-50"
                         title={`Apagar ${c.name}`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1152,6 +1256,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Escolha: substituir lista ou incluir só cursos novos */}
+      {pendingImportRows && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md p-5 space-y-4">
+            <div>
+              <h3 className="text-sm font-black text-[#002B49]">Como importar a planilha?</h3>
+              <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                A planilha tem <strong>{pendingImportRows.length}</strong> linha(s) e a lista atual
+                tem <strong>{editableCourses.length}</strong> curso(s).
+              </p>
+            </div>
+            <div className="space-y-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleImportChoice('replace')}
+                className="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold text-left disabled:opacity-60"
+              >
+                Substituir tudo
+                <span className="block font-medium text-rose-100 mt-0.5">
+                  Apaga a lista atual e grava somente o que está na planilha.
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleImportChoice('addOnly')}
+                className="w-full px-4 py-3 rounded-xl bg-[#002B49] hover:bg-[#003a63] text-white text-xs font-bold text-left disabled:opacity-60"
+              >
+                Incluir só o que for diferente
+                <span className="block font-medium text-blue-100 mt-0.5">
+                  Mantém os cursos já salvos e adiciona apenas os que ainda não existem
+                  (mesmo nome + modalidade + grau).
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setPendingImportRows(null)}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal atos autorizativos por unidade */}
       {selectedActsCourse && (

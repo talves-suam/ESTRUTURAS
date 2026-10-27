@@ -965,10 +965,13 @@ export function cellToString(value: unknown): string {
   return String(value).trim();
 }
 
+export type CourseBatchApplyMode = 'replace' | 'merge' | 'addOnly';
+
 export interface CourseBatchApplyResult {
   courses: Course[];
   matchedCount: number;
   createdCount: number;
+  skippedCount: number;
 }
 
 function courseBatchMatchIndex(
@@ -999,11 +1002,14 @@ function stampCourseNow<T extends Course>(course: T): T {
 export function applyCourseBatchRows(
   existing: Course[],
   dataRows: string[][],
-  opts?: { replace?: boolean }
+  opts?: { replace?: boolean; mode?: CourseBatchApplyMode }
 ): CourseBatchApplyResult {
-  const updated: Course[] = opts?.replace ? [] : [...existing];
+  const mode: CourseBatchApplyMode =
+    opts?.mode ?? (opts?.replace ? 'replace' : 'merge');
+  const updated: Course[] = mode === 'replace' ? [] : [...existing];
   let matchedCount = 0;
   let createdCount = 0;
+  let skippedCount = 0;
 
   for (const parts of dataRows) {
     const [
@@ -1067,6 +1073,11 @@ export function applyCourseBatchRows(
       }
 
       if (courseIndex !== -1) {
+        // Incluir só o que for diferente: ignora cursos já cadastrados
+        if (mode === 'addOnly') {
+          skippedCount++;
+          continue;
+        }
         const current = { ...updated[courseIndex] };
         current.name = nameRaw;
         current.modality = modality;
@@ -1169,7 +1180,7 @@ export function applyCourseBatchRows(
     }
   }
 
-  return { courses: updated, matchedCount, createdCount };
+  return { courses: updated, matchedCount, createdCount, skippedCount };
 }
 
 /** Converte texto colado (CSV/TSV/; ) em linhas de dados. */

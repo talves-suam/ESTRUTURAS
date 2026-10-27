@@ -251,7 +251,7 @@ function splitNameAndNumbers(
   if (!m) return null;
   const name = m[1].replace(/\s+/g, ' ').trim();
   if (!name || name.length < 2) return null;
-  if (/^(subtotal|total|presencial|conhecimento|te[oó]rico|pr[aá]tico)/i.test(name)) {
+  if (/^(subtotais?|totais?|presencial|conhecimento|te[oó]rico|pr[aá]tico)/i.test(name)) {
     return null;
   }
   const nums = m[2]
@@ -334,7 +334,7 @@ function parseThematicModuleHeader(line: string): string | null {
   const withFlag = raw.match(/^(.+?)\s*\|\s*Compartilh/i);
   if (withFlag) {
     const title = withFlag[1].replace(/\s+/g, ' ').trim().replace(/[:.\-–—]+$/, '').trim();
-    if (title.length >= 3 && !/^(subtotal|total|resumo)$/i.test(title)) return title;
+    if (title.length >= 3 && !/^(subtotais?|totais?|resumo)$/i.test(title)) return title;
   }
   return null;
 }
@@ -621,14 +621,23 @@ function coalesceMatrixLines(lines: string[]): string[] {
  */
 function parseMatrixComponentLine(line: string): Discipline | null {
   const skipped =
-    /^(subtotal|total|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome|estrutura|relat[oó]rio|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]|pr[aá]t|consolida|legendas)/i;
+    /^(subtotais?|totais?|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome|estrutura|relat[oó]rio|presencial|a dist[aâ]ncia|componente|conhecimento|te[oó]|pr[aá]t|consolida|legendas)/i;
   if (skipped.test(line)) return null;
 
   const split = splitNameAndNumbers(line);
   if (!split) return null;
 
-  const { name, nums } = split;
+  let { name, nums } = split;
   if (/^m[oó]dulo\b/i.test(name)) return null;
+  if (isTotalsRowName(name)) return null;
+
+  const typeFromName = name.match(/\b(Obrigat[oó]ria|Eletiva|Optativa)\b/i);
+  let type: Discipline['type'] = 'Obrigatória';
+  if (typeFromName) {
+    const t = typeFromName[1].toLowerCase();
+    type = t.startsWith('elet') ? 'Eletiva' : t.startsWith('opt') ? 'Optativa' : 'Obrigatória';
+    name = name.replace(/\b(Obrigat[oó]ria|Eletiva|Optativa)\b/gi, '').replace(/\s+/g, ' ').trim();
+  }
 
   const mapped = mapTrailingHours(nums);
   if (mapped.hours <= 0) return null;
@@ -647,7 +656,7 @@ function parseMatrixComponentLine(line: string): Discipline | null {
     id: `disc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     code: '',
     name,
-    type: 'Obrigatória',
+    type,
     credits: 0,
     hours,
     modalityDelivery,
@@ -705,7 +714,7 @@ function parseDisciplineLine(
   if (fromMatrix) return fromMatrix;
 
   const skipped =
-    /^(subtotal|total|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome da disciplina|estrutura curricular|relat[oó]rio)/i;
+    /^(subtotais?|totais?|carga hor[aá]ria|cr[eé]ditos|c[oó]digo|nome da disciplina|estrutura curricular|relat[oó]rio)/i;
   if (skipped.test(line)) return null;
 
   const match = line.match(
@@ -1048,7 +1057,9 @@ function parseModular(
         chAsync: disc.chAsync,
         type: flags.type,
       });
-      current.hours += disc.hours || 0;
+      if (flags.type !== 'Optativa') {
+        current.hours += disc.hours || 0;
+      }
     }
   }
 
@@ -1107,6 +1118,30 @@ function sheetCellNumber(raw: string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Linha de fechamento da matriz (Totais / Total / Subtotal) — não é UC. */
+function isTotalsRowName(name: string): boolean {
+  return /^(sub-?\s*totais?|totais?)(\b|$)/i.test(String(name || '').trim());
+}
+
+/** Célula da coluna Tipo (Obrigatória / Eletiva / Optativa). */
+function parseDisciplineTypeLabel(raw: string | undefined): Discipline['type'] | null {
+  const t = String(raw || '').trim().toLowerCase();
+  if (!t) return null;
+  if (/^optativa$/.test(t)) return 'Optativa';
+  if (/^eletiva$/.test(t)) return 'Eletiva';
+  if (/^obrigat[oó]ria$/.test(t)) return 'Obrigatória';
+  return null;
+}
+
+/** Quantas colunas manter no layout Código | Nome | [Tipo] | 6 CH | Total. */
+function sheetRowColumnLimit(cells: string[]): number {
+  if (isUnidadeCurricularCode(cells[0] || '') && cells[1] && parseDisciplineTypeLabel(cells[2])) {
+    return 10;
+  }
+  if (parseDisciplineTypeLabel(cells[1])) return 10;
+  return 9;
+}
+
 /** Normaliza linhas curtas do PDF/Word para o layout 8 colunas da planilha. */
 function splitCellLines(value: string): string[] {
   return String(value || '')
@@ -1144,18 +1179,18 @@ function normalizeImportedMatrix(rows: string[][]): string[][] {
     ) {
       return [c0];
     }
-    // Código | Unidade Curricular | CH… (9 colunas: 6 partes + total)
+    // Código | Unidade Curricular | [Tipo] | CH… (9 ou 10 colunas: 6 partes + total)
     if (isUnidadeCurricularCode(c0) && cells[1]) {
-      return cells.slice(0, 9);
+      return cells.slice(0, sheetRowColumnLimit(cells));
     }
     // Nome em col1 (ex.: EXTENSÃO) com CH a partir da col2
     if (!c0 && cells[1] && cells.length >= 8) {
-      return cells.slice(0, 9);
+      return cells.slice(0, sheetRowColumnLimit(['', ...cells.slice(1)]));
     }
     if (parseThematicModuleHeader(c0)) {
       return [c0];
     }
-    if (cells.length >= 8) return cells.slice(0, 9);
+    if (cells.length >= 8) return cells.slice(0, sheetRowColumnLimit(cells));
     const name = c0;
     const numericCells = cells
       .slice(1)
@@ -1173,7 +1208,8 @@ function normalizeImportedMatrix(rows: string[][]): string[][] {
 function isSheetSkipRow(name: string): boolean {
   const n = name.trim();
   if (!n) return true;
-  if (/^(conhecimento|conhecimentos|carga\s+hor[aá]ria|presencial|a\s+dist[aâ]ncia|te[oó]rico|pr[aá]tico|te[oó]rico-pr[aá]tico|total|subtotal|resumo|c[oó]digo|unidade\s+curricular)$/i.test(n)) {
+  if (isTotalsRowName(n)) return true;
+  if (/^(conhecimento|conhecimentos|carga\s+hor[aá]ria|presencial|a\s+dist[aâ]ncia|te[oó]rico|pr[aá]tico|te[oó]rico-pr[aá]tico|tipo|resumo|c[oó]digo|unidade\s+curricular)$/i.test(n)) {
     return true;
   }
   if (/^componentes$/i.test(n)) return true;
@@ -1183,26 +1219,30 @@ function isSheetSkipRow(name: string): boolean {
   return false;
 }
 
-function classifyKnowledgeFlags(name: string): {
+function classifyKnowledgeFlags(
+  name: string,
+  sheetType?: Discipline['type'] | null
+): {
   isExtension?: boolean;
   isInternship?: boolean;
   isFinalPaper?: boolean;
   type: Discipline['type'];
 } {
+  const type = sheetType || 'Obrigatória';
   if (/^extens[aã]o\b/i.test(name)) {
-    return { isExtension: true, type: 'Obrigatória' };
+    return { isExtension: true, type };
   }
   if (/^est[aá]gio\b/i.test(name)) {
-    return { isInternship: true, type: 'Obrigatória' };
+    return { isInternship: true, type };
   }
   if (
     /\btrabalho de conclus/i.test(name) ||
     /\btcc\b/i.test(name) ||
     /\bpr[eé]\s*projeto\b/i.test(name)
   ) {
-    return { isFinalPaper: true, type: 'Obrigatória' };
+    return { isFinalPaper: true, type };
   }
-  return { type: 'Obrigatória' };
+  return { type };
 }
 
 /**
@@ -1253,14 +1293,31 @@ export function parseEstruturaCurricularSheet(
     const cells = row.map((c) => String(c ?? '').trim());
     let name = cells[0] || '';
     let hourOffset = 1;
+    let sheetType: Discipline['type'] | null = null;
 
-    // Layout UC: Código | Nome | CH…  (ou nome só na col1, ex. EXTENSÃO)
+    // Layout UC: Código | Nome | [Tipo] | CH…  (ou nome só na col1, ex. EXTENSÃO)
     if (isUnidadeCurricularCode(cells[0] || '') && cells[1]) {
       name = cells[1];
       hourOffset = 2;
+      const tipo = parseDisciplineTypeLabel(cells[2]);
+      if (tipo) {
+        sheetType = tipo;
+        hourOffset = 3;
+      }
     } else if (!cells[0] && cells[1]) {
       name = cells[1];
       hourOffset = 2;
+      const tipo = parseDisciplineTypeLabel(cells[2]);
+      if (tipo) {
+        sheetType = tipo;
+        hourOffset = 3;
+      }
+    } else {
+      const tipo = parseDisciplineTypeLabel(cells[1]);
+      if (tipo) {
+        sheetType = tipo;
+        hourOffset = 2;
+      }
     }
 
     if (!name && !cells.some(Boolean)) continue;
@@ -1370,7 +1427,7 @@ export function parseEstruturaCurricularSheet(
       if (h > 0) hints.complementaryHours = h;
       continue;
     }
-    if (/^total$/i.test(name) && !current) {
+    if (isTotalsRowName(name) && !current) {
       const h =
         sheetCellNumber(cells[hourOffset + 6]) ||
         sheetCellNumber(cells[hourOffset]) ||
@@ -1382,7 +1439,7 @@ export function parseEstruturaCurricularSheet(
 
     if (!current) continue;
     if (isSheetSkipRow(name)) continue;
-    if (/^subtotal$/i.test(name) || /^total$/i.test(name)) continue;
+    if (isTotalsRowName(name)) continue;
     // Cabeçalho "Código | Unidade Curricular" no meio da matriz
     if (/^c[oó]digo$/i.test(cells[0] || '') || /^unidade\s+curricular$/i.test(name)) continue;
     // Linhas de resumo que vazaram sem o cabeçalho “Carga Horária”
@@ -1416,7 +1473,7 @@ export function parseEstruturaCurricularSheet(
 
     if (hours <= 0 && presential <= 0 && asyncH <= 0) continue;
 
-    const flags = classifyKnowledgeFlags(name);
+    const flags = classifyKnowledgeFlags(name, sheetType);
 
     let modalityDelivery: DeliveryModalityFlag = 'presencial';
     if (presential > 0 && asyncH === 0) modalityDelivery = 'presencial';
@@ -1443,7 +1500,10 @@ export function parseEstruturaCurricularSheet(
 
     current.knowledges = current.knowledges || [];
     current.knowledges.push(know);
-    current.hours = (current.hours || 0) + (know.hours || 0);
+    // Optativa entra na lista, mas não soma à CH do módulo
+    if (flags.type !== 'Optativa') {
+      current.hours = (current.hours || 0) + (know.hours || 0);
+    }
 
     if (!know.hours) withoutHours++;
   }
@@ -1456,7 +1516,10 @@ export function parseEstruturaCurricularSheet(
     return (a.branch || '').localeCompare(b.branch || '', 'pt-BR');
   });
   modules.forEach((m) => {
-    m.hours = (m.knowledges || []).reduce((a, k) => a + (k.hours || 0), 0);
+    m.hours = (m.knowledges || []).reduce(
+      (a, k) => (k.type === 'Optativa' ? a : a + (k.hours || 0)),
+      0
+    );
   });
   linkModularParents(modules);
 

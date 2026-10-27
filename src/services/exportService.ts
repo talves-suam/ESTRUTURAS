@@ -28,7 +28,12 @@ import {
 } from './workloadSummary';
 import { getSaberesLabels, labelForCategory, matchesSaberesColumn } from '../utils/nomenclature';
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
-import { getModularComponents } from '../utils/modularComponents';
+import {
+  countsTowardModuleHours,
+  getCountableModularComponents,
+  getModularComponents,
+  sumModuleComponentHours,
+} from '../utils/modularComponents';
 import { getReportNotes, renderReportNotesPageHtml } from './reportNotes';
 import {
   getPpcSummaryContent,
@@ -1182,13 +1187,15 @@ export function exportToPDF(
         }
         const bd = getDisciplineChBreakdown(disc);
         const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
-        pTheo += bd.theoretical;
-        pLab += bd.laboratory;
-        pClin += bd.clinical;
-        pPres += bd.presential;
-        pSyncMed += syncMed;
-        pAsync += bd.async;
-        pTot += bd.total;
+        if (countsTowardModuleHours(disc.type)) {
+          pTheo += bd.theoretical;
+          pLab += bd.laboratory;
+          pClin += bd.clinical;
+          pPres += bd.presential;
+          pSyncMed += syncMed;
+          pAsync += bd.async;
+          pTot += bd.total;
+        }
 
         doc.setDrawColor(240, 240, 240);
         doc.line(margin, y + 4.2, margin + contentWidth, y + 4.2);
@@ -1249,8 +1256,9 @@ export function exportToPDF(
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10.5);
       doc.setTextColor(255, 255, 255);
+      const modHours = sumModuleComponentHours(mod);
       const modTitle = `${formatModuleName(mod.number, mod.title, mod.branch)} (${
-        structure.hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`
+        structure.hideMeetings ? `${modHours}h` : `${modHours}h · ${mod.meetings ?? 0} encontros`
       })`;
       doc.text(modTitle, margin + contentWidth / 2, y + 4.2, { align: 'center' });
       y += 6;
@@ -1295,12 +1303,14 @@ export function exportToPDF(
           }
           const bd = getDisciplineChBreakdown(d);
           const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
-          mTheo += bd.theoretical;
-          mLab += bd.laboratory;
-          mClin += bd.clinical;
-          mPres += bd.presential;
-          mSyncMed += syncMed;
-          mAsync += bd.async;
+          if (countsTowardModuleHours(d.type)) {
+            mTheo += bd.theoretical;
+            mLab += bd.laboratory;
+            mClin += bd.clinical;
+            mPres += bd.presential;
+            mSyncMed += syncMed;
+            mAsync += bd.async;
+          }
 
           doc.text(d.name.substring(0, 58), margin + 2, y + 3.2);
           doc.text(d.type.substring(0, 12), margin + 110, y + 3.2);
@@ -1867,16 +1877,17 @@ export async function generateInteractiveHtml(
               </tbody>
               <tfoot class="bg-slate-50 border-t border-slate-200 text-[15px] font-bold">
                 ${(() => {
-                  const pPres = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
-                  const pTheo = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
-                  const pLab = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
-                  const pClin = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).clinical, 0);
-                  const pSyncMed = period.disciplines.reduce((acc, d) => {
+                  const countedPeriod = period.disciplines.filter((d) => countsTowardModuleHours(d.type));
+                  const pPres = countedPeriod.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
+                  const pTheo = countedPeriod.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
+                  const pLab = countedPeriod.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
+                  const pClin = countedPeriod.reduce((acc, d) => acc + getDisciplineChBreakdown(d).clinical, 0);
+                  const pSyncMed = countedPeriod.reduce((acc, d) => {
                     const bd = getDisciplineChBreakdown(d);
                     return acc + bd.syncMediated + (bd.sync || 0);
                   }, 0);
-                  const pAsync = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
-                  const pTot = period.disciplines.reduce((acc, d) => acc + getDisciplineChBreakdown(d).total, 0);
+                  const pAsync = countedPeriod.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
+                  const pTot = countedPeriod.reduce((acc, d) => acc + getDisciplineChBreakdown(d).total, 0);
                   return usePresentialSplit
                     ? `
                 <tr>
@@ -1917,7 +1928,7 @@ export async function generateInteractiveHtml(
             </div>
             <h3 class="font-bold text-[19px] text-white text-center">${formatModuleName(mod.number, mod.title, mod.branch)}</h3>
             <div class="flex items-center gap-3 justify-self-end">
-              <span class="text-[17px] font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${mod.hours}h</span>
+              <span class="text-[17px] font-extrabold text-[#FF6B00] bg-white px-3 py-1 rounded shadow-sm">${sumModuleComponentHours(mod)}h</span>
               ${
                 !structure.hideMeetings
                   ? `<span class="text-[17px] font-extrabold text-[#002B49] bg-white px-3 py-1 rounded shadow-sm">${mod.meetings ?? 0} encontros</span>`
@@ -1993,15 +2004,16 @@ export async function generateInteractiveHtml(
               !structure.hideKnowledgesInReport && getModularComponents(mod).length > 0
                 ? (() => {
                     const discs = getModularComponents(mod);
-                    const mPres = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
-                    const mTheo = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
-                    const mLab = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
-                    const mClin = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).clinical, 0);
-                    const mSyncMed = discs.reduce((acc, d) => {
+                    const counted = getCountableModularComponents(mod);
+                    const mPres = counted.reduce((acc, d) => acc + getDisciplineChBreakdown(d).presential, 0);
+                    const mTheo = counted.reduce((acc, d) => acc + getDisciplineChBreakdown(d).theoretical, 0);
+                    const mLab = counted.reduce((acc, d) => acc + getDisciplineChBreakdown(d).laboratory, 0);
+                    const mClin = counted.reduce((acc, d) => acc + getDisciplineChBreakdown(d).clinical, 0);
+                    const mSyncMed = counted.reduce((acc, d) => {
                       const bd = getDisciplineChBreakdown(d);
                       return acc + bd.syncMediated + (bd.sync || 0);
                     }, 0);
-                    const mAsync = discs.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
+                    const mAsync = counted.reduce((acc, d) => acc + getDisciplineChBreakdown(d).async, 0);
                     return `<h4 class="text-[15px] font-bold text-slate-500 mb-3 flex items-center gap-2">
               <svg class="w-4 h-4 text-[#002B49] shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path stroke-linecap="round" stroke-linejoin="round" d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
               Conhecimentos do Módulo

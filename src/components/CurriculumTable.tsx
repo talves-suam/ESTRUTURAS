@@ -43,7 +43,7 @@ import { PpcSummaryPreview } from './PpcSummaryPreview';
 import { ModuleCompetencesTableCards } from './ModuleCompetencesTableCards';
 import { getSaberesLabels, matchesSaberesColumn } from '../utils/nomenclature';
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
-import { getModularComponents } from '../utils/modularComponents';
+import { getModularComponents, sumModuleComponentHours } from '../utils/modularComponents';
 import {
   showsModuleMeetings,
   buildModuleMeetingsSummary,
@@ -690,16 +690,17 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                         </tbody>
                         <tfoot className="bg-slate-50 border-t border-slate-200 text-[15px] font-bold text-slate-700">
                           {(() => {
-                            const pPres = period.disciplines.reduce((acc, d) => acc + chOf(d).presential, 0);
-                            const pTheo = period.disciplines.reduce((acc, d) => acc + chOf(d).theoretical, 0);
-                            const pLab = period.disciplines.reduce((acc, d) => acc + chOf(d).laboratory, 0);
-                            const pClin = period.disciplines.reduce((acc, d) => acc + chOf(d).clinical, 0);
-                            const pSyncMed = period.disciplines.reduce((acc, d) => {
+                            const counted = period.disciplines.filter((d) => d.type !== 'Optativa');
+                            const pPres = counted.reduce((acc, d) => acc + chOf(d).presential, 0);
+                            const pTheo = counted.reduce((acc, d) => acc + chOf(d).theoretical, 0);
+                            const pLab = counted.reduce((acc, d) => acc + chOf(d).laboratory, 0);
+                            const pClin = counted.reduce((acc, d) => acc + chOf(d).clinical, 0);
+                            const pSyncMed = counted.reduce((acc, d) => {
                               const bd = chOf(d);
                               return acc + bd.syncMediated + (bd.sync || 0);
                             }, 0);
-                            const pAsync = period.disciplines.reduce((acc, d) => acc + chOf(d).async, 0);
-                            const pTot = period.disciplines.reduce((acc, d) => acc + chOf(d).total, 0);
+                            const pAsync = counted.reduce((acc, d) => acc + chOf(d).async, 0);
+                            const pTot = counted.reduce((acc, d) => acc + chOf(d).total, 0);
                             return (
                               <tr>
                                 <td colSpan={showCodeCol ? 4 : 3} className="px-3 py-2.5 text-slate-600 text-right">
@@ -782,7 +783,7 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                           <div className="text-right">
                             <span className="text-[15px] text-blue-200 block">Carga Horária:</span>
                             <span className="text-[17px] font-black text-[#FF6B00] bg-white/10 px-2.5 py-0.5 rounded">
-                              {mod.hours}h
+                              {sumModuleComponentHours(mod)}h
                             </span>
                           </div>
                           {showsModuleMeetings(structure) && (
@@ -899,15 +900,16 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                             </tbody>
                             <tfoot className="bg-slate-100/90 border-t border-slate-200 text-[15px] font-bold text-slate-700">
                               {(() => {
-                                const mPres = components.reduce((acc, d) => acc + chOf(d).presential, 0);
-                                const mTheo = components.reduce((acc, d) => acc + chOf(d).theoretical, 0);
-                                const mLab = components.reduce((acc, d) => acc + chOf(d).laboratory, 0);
-                                const mClin = components.reduce((acc, d) => acc + chOf(d).clinical, 0);
-                                const mSyncMed = components.reduce((acc, d) => {
+                                const counted = components.filter((d) => d.type !== 'Optativa');
+                                const mPres = counted.reduce((acc, d) => acc + chOf(d).presential, 0);
+                                const mTheo = counted.reduce((acc, d) => acc + chOf(d).theoretical, 0);
+                                const mLab = counted.reduce((acc, d) => acc + chOf(d).laboratory, 0);
+                                const mClin = counted.reduce((acc, d) => acc + chOf(d).clinical, 0);
+                                const mSyncMed = counted.reduce((acc, d) => {
                                   const bd = chOf(d);
                                   return acc + bd.syncMediated + (bd.sync || 0);
                                 }, 0);
-                                const mAsync = components.reduce((acc, d) => acc + chOf(d).async, 0);
+                                const mAsync = counted.reduce((acc, d) => acc + chOf(d).async, 0);
                                 return (
                                   <tr>
                                     <td colSpan={2} className="px-3 py-2.5 text-slate-600 text-right">

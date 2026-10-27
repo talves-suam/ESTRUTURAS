@@ -23,6 +23,24 @@ const LOCAL_STORAGE_STRUCTURES_KEY = 'unisuam_curriculum_structures';
 const LOCAL_STORAGE_COURSES_KEY = 'unisuam_curriculum_courses';
 const LOCAL_STORAGE_SETTINGS_KEY = 'unisuam_app_settings';
 
+/**
+ * Enquanto um save autoritativo de cursos está em andamento (wipe/replace),
+ * o snapshot do Firestore não deve remesclhar o cache local — isso trazia
+ * de volta cursos apagados no meio das deleções.
+ */
+let coursesAuthoritativeSaveDepth = 0;
+
+function beginCoursesAuthoritativeSave(): () => void {
+  coursesAuthoritativeSaveDepth += 1;
+  return () => {
+    coursesAuthoritativeSaveDepth = Math.max(0, coursesAuthoritativeSaveDepth - 1);
+  };
+}
+
+function isCoursesAuthoritativeSave(): boolean {
+  return coursesAuthoritativeSaveDepth > 0;
+}
+
 function canUseFirestore(): boolean {
   return isFirebaseConfigured && db !== null;
 }
@@ -332,6 +350,12 @@ export function subscribeCurriculumData(handlers: {
       trackFirestoreOp('read', Math.max(snapshot.docChanges().length, 1));
       const local = readLocalList<Course>(LOCAL_STORAGE_COURSES_KEY);
 
+      // Save completo (apagar/substituir): confia no local já gravado como lista final
+      if (isCoursesAuthoritativeSave()) {
+        handlers.onCourses(local);
+        return;
+      }
+
       // Remoto vazio + local com dados → sobe o local; NUNCA sobrescreve o cache com []
       if (items.length === 0 && local.length > 0) {
         if (!offeredLocalCourses) {
@@ -377,15 +401,16 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
         const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
         const hours = bd.total;
         const credits = Number(disc.credits) || 0;
+        const isOptional = disc.type === 'Optativa';
+
+        // Optativa: exibe na lista, mas não entra nos totais do período/curso
+        if (isOptional) return;
+
         totalHours += hours;
         totalCredits += credits;
         pHours += hours;
         pCredits += credits;
-
-        const isOptional = disc.type === 'Optativa';
-        if (!isOptional) {
-          coreHours += hours;
-        }
+        coreHours += hours;
 
         // Presencial = contato direto / presencial regulatório
         presentialHours += bd.presential;
@@ -415,17 +440,18 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
         const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
         const hours = bd.total;
         const credits = Number(disc.credits) || 0;
+        const isOptional = disc.type === 'Optativa';
+
+        // Optativa: permanece no módulo para exibição, sem somar CH
+        if (isOptional) return;
+
         modHours += hours;
 
         // CH do módulo (mapa/UI) sempre; totais do curso só tronco + uma ênfase.
         if (!countsTowardCourse) return;
 
         totalCredits += credits;
-
-        const isOptional = disc.type === 'Optativa';
-        if (!isOptional) {
-          coreHours += hours;
-        }
+        coreHours += hours;
 
         presentialHours += bd.presential;
         eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
@@ -834,28 +860,36 @@ export const saveAllCoursesToFirestore = async (
     return [];
   }
 
-  localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(courses));
-  if (canUseFirestore()) {
-    try {
-      const existing = await getDocs(collection(db!, COURSES_COLLECTION));
-      trackFirestoreOp('read', Math.max(existing.size, 1));
-      const keepIds = new Set(courses.map((c) => c.id));
-      for (const snap of existing.docs) {
-        if (!keepIds.has(snap.id)) {
-          await deleteDoc(snap.ref);
+  const endAuthoritative = beginCoursesAuthoritativeSave();
+  try {
+    // Grava o alvo no cache ANTES das deleções — o snapshot confia nisso durante o save
+    localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(courses));
+    if (canUseFirestore()) {
+      try {
+        const existing = await getDocs(collection(db!, COURSES_COLLECTION));
+        trackFirestoreOp('read', Math.max(existing.size, 1));
+        const keepIds = new Set(courses.map((c) => c.id));
+        for (const snap of existing.docs) {
+          if (!keepIds.has(snap.id)) {
+            await deleteDoc(snap.ref);
+            trackFirestoreOp('write', 1);
+          }
+        }
+        for (const c of courses) {
+          await setDoc(doc(db!, COURSES_COLLECTION, c.id), toFirestorePayload(c), { merge: true });
           trackFirestoreOp('write', 1);
         }
+      } catch (e) {
+        console.warn('Error saving all courses to firestore', e);
+        throw new Error(firestoreErrorMessage(e));
       }
-      for (const c of courses) {
-        await setDoc(doc(db!, COURSES_COLLECTION, c.id), toFirestorePayload(c), { merge: true });
-        trackFirestoreOp('write', 1);
-      }
-    } catch (e) {
-      console.warn('Error saving all courses to firestore', e);
-      throw new Error(firestoreErrorMessage(e));
     }
+    // Garante cache final (caso algum snapshot intermediário tenha interferido)
+    localStorage.setItem(LOCAL_STORAGE_COURSES_KEY, JSON.stringify(courses));
+    return courses;
+  } finally {
+    endAuthoritative();
   }
-  return courses;
 };
 export const getSettingsFromFirestore = getAppSettings;
 export const saveSettingsToFirestore = saveAppSettings;

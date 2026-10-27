@@ -3,6 +3,7 @@ import {
 } from '../types/curriculum';
 import { captureElementAsPngDataUrl } from './exportService';
 import { formatModuleName, toRoman, formatBranchLabel } from '../utils/roman';
+import { sumModuleComponentHours } from '../utils/modularComponents';
 
 export interface PpcSection {
   id: string;
@@ -41,7 +42,7 @@ export function listPpcSections(structure: CurriculumStructure): PpcSection[] {
         id: mod.id,
         slug: `Modulo_${toRoman(mod.number)}${mod.branch || ''}_${slugPart(mod.title)}`,
         title: formatModuleName(mod.number, mod.title, mod.branch),
-        meta: `${mod.hours}h${branch}`,
+        meta: `${sumModuleComponentHours(mod)}h${branch}`,
         kind: 'module',
       });
     });

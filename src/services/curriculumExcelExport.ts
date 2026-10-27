@@ -15,7 +15,11 @@ import { getSaberesLabels, labelForCategory } from '../utils/nomenclature';
 import { formatModuleName, toRoman, formatBranchLabel } from '../utils/roman';
 import { formatDcnsDisplayLabel } from '../utils/courseBatch';
 import { getActiveAuthorizationActLabel } from '../utils/authorizationActs';
-import { getModularComponents } from '../utils/modularComponents';
+import {
+  countsTowardModuleHours,
+  getModularComponents,
+  sumModuleComponentHours,
+} from '../utils/modularComponents';
 import logoUnisuamUrl from '../assets/logo-unisuam.png';
 
 const C = {
@@ -191,7 +195,7 @@ async function buildCurriculumIdentificationSheet(
     ? (structure.modules || []).map((mod) => ({
         label: formatModuleName(mod.number, mod.title),
         components: getModuleComponents(mod, structure),
-        fallbackHours: mod.hours,
+        fallbackHours: sumModuleComponentHours(mod),
       }))
     : (structure.periods || []).map((period) => ({
         label: `${period.number}º Período`,
@@ -206,9 +210,10 @@ async function buildCurriculumIdentificationSheet(
     ? (structure.modules || []).map((m) => {
         const comps = getModuleCompetences(m);
         const pubBase = comps[0] || m.title;
+        const mHours = sumModuleComponentHours(m);
         return {
           period: toRoman(m.number),
-          pub: `${pubBase.slice(0, 42)}${m.hours ? ` — ${m.hours}H` : ''}`,
+          pub: `${pubBase.slice(0, 42)}${mHours ? ` — ${mHours}H` : ''}`,
         };
       })
     : (structure.periods || []).map((p) => ({
@@ -329,14 +334,16 @@ async function buildCurriculumIdentificationSheet(
       for (const disc of block.components) {
         const bd = getDisciplineChBreakdown(disc);
         const syncMed = (bd.syncMediated || 0) + (bd.sync || 0);
-        sums.credits += Number(disc.credits) || 0;
-        sums.theoretical += bd.theoretical;
-        sums.laboratory += bd.laboratory;
-        sums.clinical += bd.clinical;
-        sums.presential += bd.presential;
-        sums.syncMediated += syncMed;
-        sums.async += bd.async;
-        sums.total += bd.total;
+        if (countsTowardModuleHours(disc.type)) {
+          sums.credits += Number(disc.credits) || 0;
+          sums.theoretical += bd.theoretical;
+          sums.laboratory += bd.laboratory;
+          sums.clinical += bd.clinical;
+          sums.presential += bd.presential;
+          sums.syncMediated += syncMed;
+          sums.async += bd.async;
+          sums.total += bd.total;
+        }
 
         const midValues = (() => {
           const presentialVals = useSplit

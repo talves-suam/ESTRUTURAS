@@ -1,10 +1,16 @@
 import type { Discipline, KnowledgeItem, ModuleData } from '../types/curriculum';
+import { getDisciplineChBreakdown } from '../types/curriculum';
 
 /**
  * Em estrutura modular o formulário edita `knowledges`.
  * Importação SAGA e a tabela/totais historicamente usavam `disciplines`.
  * Quando há conhecimentos, eles são a fonte da verdade — disciplinas espelham essa lista.
  */
+
+/** Optativa aparece na lista com a própria CH, mas não entra em nenhuma soma. */
+export function countsTowardModuleHours(type: string | undefined): boolean {
+  return type !== 'Optativa';
+}
 export function knowledgeToDiscipline(
   know: KnowledgeItem,
   existing?: Discipline
@@ -56,16 +62,47 @@ export function getModularComponents(mod: ModuleData): Discipline[] {
   return [...(mod.disciplines || [])];
 }
 
+/** Componentes que entram na CH do módulo (exclui Optativa). */
+export function getCountableModularComponents(mod: ModuleData): Discipline[] {
+  return getModularComponents(mod).filter((d) => countsTowardModuleHours(d.type));
+}
+
+/**
+ * CH do módulo = soma das modalidades dos componentes contáveis.
+ * Optativa não entra — só é exibida com a própria CH.
+ */
+export function sumModuleComponentHours(
+  mod: ModuleData,
+  flags?: { hasLaboratory?: boolean; hasClinical?: boolean }
+): number {
+  const components = getCountableModularComponents(mod);
+  if (components.length === 0) {
+    // Sem componentes contáveis: não usa hours stale se só houver optativas
+    const all = getModularComponents(mod);
+    if (all.length > 0) return 0;
+    return Number(mod.hours) || 0;
+  }
+  return components.reduce((acc, d) => {
+    const bd = getDisciplineChBreakdown({
+      ...d,
+      hasLaboratory: flags?.hasLaboratory ?? d.hasLaboratory,
+      hasClinical: flags?.hasClinical ?? d.hasClinical,
+    });
+    return acc + (Number(bd.total) || 0);
+  }, 0);
+}
+
 /** Mantém disciplines alinhadas aos knowledges (após editar no formulário). */
 export function syncModuleKnowledgesToDisciplines(mod: ModuleData): ModuleData {
   const knowledges = mod.knowledges || [];
   if (knowledges.length === 0) {
+    const hours = sumModuleComponentHours(mod);
     return {
       ...mod,
-      hours: (mod.disciplines || []).reduce((acc, d) => acc + (Number(d.hours) || 0), 0) || mod.hours,
+      hours: hours || (getModularComponents(mod).length > 0 ? 0 : mod.hours),
     };
   }
   const disciplines = getModularComponents(mod);
-  const hours = knowledges.reduce((acc, k) => acc + (Number(k.hours) || 0), 0);
+  const hours = sumModuleComponentHours({ ...mod, knowledges, disciplines });
   return { ...mod, knowledges, disciplines, hours };
 }

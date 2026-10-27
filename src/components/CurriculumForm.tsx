@@ -62,7 +62,10 @@ import {
 import { calculateStructureTotals } from '../services/curriculumService';
 import { getWorkloadBranchKey, listBranchKeys } from '../utils/modularBranches';
 import { DcnViewerModal } from './DcnViewerModal';
-import { syncModuleKnowledgesToDisciplines } from '../utils/modularComponents';
+import {
+  sumModuleComponentHours,
+  syncModuleKnowledgesToDisciplines,
+} from '../utils/modularComponents';
 import { WorkloadSummaryCard } from './WorkloadSummaryCard';
 import { ModuleMeetingsSummaryCard } from './ModuleMeetingsSummaryCard';
 import {
@@ -829,29 +832,9 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
     setNewCourseAuthorizationAct('');
   };
 
-  /** CH do módulo = soma Presencial + Síncrona + Assíncrona dos componentes (nunca hours stale). */
-  const sumModuleComponentHours = (mod: ModuleData): number => {
-    const flags: SplitFlags = { hasLaboratory, hasClinical };
-    const knows = mod.knowledges || [];
-    if (knows.length > 0) {
-      return knows.reduce((acc, k) => {
-        const bd = getDisciplineChBreakdown(knowledgeAsDiscipline(k, flags));
-        return acc + (Number(bd.total) || 0);
-      }, 0);
-    }
-    const discs = mod.disciplines || [];
-    if (discs.length > 0) {
-      return discs.reduce((acc, d) => {
-        const bd = getDisciplineChBreakdown({
-          ...d,
-          hasLaboratory,
-          hasClinical,
-        });
-        return acc + (Number(bd.total) || 0);
-      }, 0);
-    }
-    return Number(mod.hours) || 0;
-  };
+  /** CH do módulo (Optativa não entra — só apresenta a própria CH). */
+  const sumModuleHours = (mod: ModuleData): number =>
+    sumModuleComponentHours(mod, { hasLaboratory, hasClinical });
 
   /** Espelha knowledges → disciplines para a tabela/totais não perderem itens manuais. */
   const withSyncedModules = (list: ModuleData[]): ModuleData[] =>
@@ -888,7 +871,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
       return {
         ...synced,
         title: normalizeTitleCase(synced.title),
-        hours: sumModuleComponentHours({ ...synced, knowledges, disciplines }),
+        hours: sumModuleHours({ ...synced, knowledges, disciplines }),
       };
     });
 
@@ -2472,7 +2455,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           >
                             <option value="Obrigatória">Obrigatória</option>
                             <option value="Eletiva">Eletiva</option>
-                            <option value="Optativa">Opcional (Não conta CH mínima)</option>
+                            <option value="Optativa">Optativa</option>
                           </select>
                         </div>
 
@@ -2631,7 +2614,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                       <div className="flex items-center gap-1 text-xs" title="Soma automática das CH dos conhecimentos">
                         <span>CH Módulo:</span>
                         <span className="min-w-[2.5rem] px-1.5 py-0.5 text-slate-900 bg-white/95 rounded font-black text-center text-xs tabular-nums">
-                          {sumModuleComponentHours(mod)}
+                          {sumModuleHours(mod)}
                         </span>
                         <span>h</span>
                       </div>
@@ -3291,9 +3274,11 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                           {(mod.knowledges || []).length > 0 && (
                             <tfoot className="bg-slate-100/90 border-t border-slate-200 text-xs font-bold text-slate-700">
                               {(() => {
-                                const items = (mod.knowledges || []).map((k) =>
-                                  getDisciplineChBreakdown(knowledgeAsDiscipline(k, splitFlags))
-                                );
+                                const items = (mod.knowledges || [])
+                                  .filter((k) => k.type !== 'Optativa')
+                                  .map((k) =>
+                                    getDisciplineChBreakdown(knowledgeAsDiscipline(k, splitFlags))
+                                  );
                                 const mPres = items.reduce((acc, bd) => acc + bd.presential, 0);
                                 const mTheo = items.reduce((acc, bd) => acc + bd.theoretical, 0);
                                 const mLab = items.reduce((acc, bd) => acc + bd.laboratory, 0);
@@ -3517,8 +3502,7 @@ export const CurriculumForm: React.FC<CurriculumFormProps> = ({
                     <span className="font-bold mt-0.5 text-rose-600">▪</span>
                     <div>
                       <strong className="block font-bold">Carga Horária Mínima Obrigatória Não Atingida:</strong>
-                      A CH efetiva do núcleo obrigatório/eletivo (<strong className="text-rose-950 font-bold">{calculated.calculatedCoreHours || calculated.calculatedTotalHours}h</strong>) está abaixo da CH mínima exigida pelo curso (<strong className="text-rose-950 font-bold">{requiredTotalHours}h</strong>). 
-                      <span className="block text-[11px] text-rose-700 mt-1">Nota: Disciplinas optativas somam à CH total, mas não contam para a CH mínima legal do curso.</span>
+                      A CH efetiva do núcleo obrigatório/eletivo (<strong className="text-rose-950 font-bold">{calculated.calculatedCoreHours || calculated.calculatedTotalHours}h</strong>) está abaixo da CH mínima exigida pelo curso (<strong className="text-rose-950 font-bold">{requiredTotalHours}h</strong>).
                     </div>
                   </li>
                 )}

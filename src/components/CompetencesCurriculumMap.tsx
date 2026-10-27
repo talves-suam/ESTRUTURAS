@@ -10,6 +10,7 @@ import {
 } from '../types/curriculum';
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { showsModuleMeetings } from '../services/workloadSummary';
+import { sumModuleComponentHours } from '../utils/modularComponents';
 
 const CARD_W = 'w-[168px]';
 
@@ -304,7 +305,9 @@ function ModuleBox({
           {formatModuleName(mod.number, mod.title, mod.branch)}
         </CardText>
         <p className="text-[10px] text-orange-100/85 mt-1 font-medium leading-snug">
-          {hideMeetings ? `${mod.hours}h` : `${mod.hours}h · ${mod.meetings ?? 0} encontros`}
+          {hideMeetings
+            ? `${sumModuleComponentHours(mod)}h`
+            : `${sumModuleComponentHours(mod)}h · ${mod.meetings ?? 0} encontros`}
         </p>
       </div>
     </button>
