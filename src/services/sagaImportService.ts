@@ -2,6 +2,7 @@ import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import * as XLSX from 'xlsx';
 import {
+  ConcurrentComponent,
   CurriculumStructure,
   Discipline,
   DeliveryModalityFlag,
@@ -17,6 +18,11 @@ import {
   parseModuleHeaderLine,
   linkModularParents,
 } from '../utils/modularBranches';
+import {
+  assignDefaultConcurrentModules,
+  createConcurrentComponent,
+  parseConcurrentSectionHeader,
+} from '../utils/concurrentComponents';
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -782,16 +788,23 @@ function romanOrDigitToNumber(token: string): number {
   return map[t] || 0;
 }
 
-function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules?: ModuleData[]): CurriculumStructure {
+function emptyStructure(
+  params: SagaParseParams,
+  periods?: PeriodData[],
+  modules?: ModuleData[],
+  concurrentComponents?: ConcurrentComponent[]
+): CurriculumStructure {
   const safePeriods = periods || [];
   const safeModules = (modules || []).map((m) => ({
     ...m,
     title: normalizeModuleTitle(m.title),
   }));
+  const safeConcurrent = concurrentComponents || [];
+  const concurrentHours = safeConcurrent.reduce((acc, c) => acc + (Number(c.hours) || 0), 0);
   const totalHours =
-    params.structureType === 'modular'
+    (params.structureType === 'modular'
       ? safeModules.reduce((acc, m) => acc + (m.hours || 0), 0)
-      : safePeriods.reduce((acc, p) => acc + (p.totalHours || 0), 0);
+      : safePeriods.reduce((acc, p) => acc + (p.totalHours || 0), 0)) + concurrentHours;
   const totalCredits =
     params.structureType === 'modular'
       ? 0
@@ -833,6 +846,10 @@ function emptyStructure(params: SagaParseParams, periods?: PeriodData[], modules
     totalCredits,
     periods: params.structureType === 'disciplinar' ? safePeriods : undefined,
     modules: params.structureType === 'modular' ? safeModules : undefined,
+    concurrentComponents:
+      params.structureType === 'modular' && safeConcurrent.length > 0
+        ? safeConcurrent
+        : undefined,
     institutionName: 'UNISUAM - Centro Universitário Augusto Motta',
     campusName: '',
     createdAt: new Date().toISOString(),
@@ -1262,7 +1279,9 @@ export function parseEstruturaCurricularSheet(
   const hints = extractSagaHeaderHints(flatText);
   const warnings: string[] = [];
   const modules: ModuleData[] = [];
+  const concurrentComponents: ConcurrentComponent[] = [];
   let current: ModuleData | null = null;
+  let currentConcurrent: ConcurrentComponent | null = null;
   let withoutHours = 0;
   let stamp = Date.now();
   const seenModuleKeys = new Set<string>();
@@ -1273,12 +1292,25 @@ export function parseEstruturaCurricularSheet(
     { isExtension?: boolean; isInternship?: boolean; isFinalPaper?: boolean }
   >();
 
+  const pushConcurrent = () => {
+    if (!currentConcurrent) return;
+    if ((currentConcurrent.hours || 0) > 0 || currentConcurrent.name) {
+      concurrentComponents.push(currentConcurrent);
+    }
+    currentConcurrent = null;
+  };
+
   const pushCurrent = () => {
+    pushConcurrent();
     if (!current) return;
     current = syncModuleKnowledgesToDisciplines(current);
     for (const know of current.knowledges || []) {
       const f = specialFlags.get(know.id);
       if (!f) continue;
+      if (f.isExtension) know.isExtension = true;
+      if (f.isInternship || f.isFinalPaper) {
+        /* flags de estágio/TCC no conhecimento via tipo/bloco concomitante */
+      }
       const disc = (current.disciplines || []).find((d) => d.id === know.id);
       if (!disc) continue;
       if (f.isExtension) disc.isExtension = true;
@@ -1322,12 +1354,9 @@ export function parseEstruturaCurricularSheet(
 
     if (!name && !cells.some(Boolean)) continue;
 
-    // Segundo cabeçalho de título = cópia da matriz na mesma aba
-    if (/^estrutura\s+curricular\b/i.test(name) && modules.length > 0) {
+    // Segundo título / rodapé “Estrutura Curricular” — encerra (evita ler metadados finais)
+    if (/^estrutura\s+curricular\b/i.test(name) && (modules.length > 0 || concurrentComponents.length > 0)) {
       pushCurrent();
-      warnings.push(
-        'A planilha parece conter a matriz em duplicata. Importamos apenas a primeira ocorrência.'
-      );
       break;
     }
 
@@ -1336,6 +1365,23 @@ export function parseEstruturaCurricularSheet(
       pushCurrent();
       activeBranch = enfase.branch;
       activeBranchName = normalizeModuleTitle(enfase.branchName);
+      continue;
+    }
+
+    // Blocos finais fora dos módulos (Estágio / Projeto Final) — título próprio, sem “Módulo N”
+    const concurrentHeader = parseConcurrentSectionHeader(cells[0] || name);
+    if (concurrentHeader && modules.length > 0) {
+      pushCurrent();
+      stamp += 1;
+      currentConcurrent = createConcurrentComponent({
+        id: `conc-${stamp}`,
+        title: normalizeModuleTitle(concurrentHeader.title),
+        kind: concurrentHeader.kind,
+        name: normalizeModuleTitle(concurrentHeader.title),
+        type: 'Obrigatória',
+        hours: 0,
+        concurrentWithModuleNumbers: [],
+      });
       continue;
     }
 
@@ -1427,7 +1473,7 @@ export function parseEstruturaCurricularSheet(
       if (h > 0) hints.complementaryHours = h;
       continue;
     }
-    if (isTotalsRowName(name) && !current) {
+    if (isTotalsRowName(name) && !current && !currentConcurrent) {
       const h =
         sheetCellNumber(cells[hourOffset + 6]) ||
         sheetCellNumber(cells[hourOffset]) ||
@@ -1437,7 +1483,7 @@ export function parseEstruturaCurricularSheet(
       continue;
     }
 
-    if (!current) continue;
+    if (!current && !currentConcurrent) continue;
     if (isSheetSkipRow(name)) continue;
     if (isTotalsRowName(name)) continue;
     // Cabeçalho "Código | Unidade Curricular" no meio da matriz
@@ -1446,6 +1492,7 @@ export function parseEstruturaCurricularSheet(
     if (
       /^(encontros|ead|a\s+dist[aâ]ncia)$/i.test(name) ||
       (/^est[aá]gio\s+supervisionado$/i.test(name) &&
+        !currentConcurrent &&
         sheetCellNumber(cells[hourOffset + 1]) > 0 &&
         sheetCellNumber(cells[hourOffset + 1]) < 1)
     ) {
@@ -1481,6 +1528,32 @@ export function parseEstruturaCurricularSheet(
     else if (presential > 0) modalityDelivery = 'presencial';
     else modalityDelivery = 'assincrono';
 
+    // UC dentro de bloco concomitante (Estágio / Projeto Final)
+    if (currentConcurrent) {
+      const code =
+        isUnidadeCurricularCode(cells[0] || '') ? String(cells[0]).trim().toUpperCase() : '';
+      currentConcurrent = {
+        ...currentConcurrent,
+        code: code || currentConcurrent.code,
+        name: normalizeModuleTitle(name) || currentConcurrent.name,
+        type: flags.type || currentConcurrent.type,
+        hours: hours || presential + asyncH,
+        modalityDelivery,
+        chPresential: presential || undefined,
+        chAsync: asyncH || undefined,
+        kind:
+          flags.isInternship
+            ? 'internship'
+            : flags.isFinalPaper
+              ? 'finalPaper'
+              : currentConcurrent.kind,
+      };
+      if (!currentConcurrent.hours) withoutHours++;
+      continue;
+    }
+
+    if (!current) continue;
+
     stamp += 1;
     const knowId = `know-${stamp}`;
     const know: KnowledgeItem = {
@@ -1496,6 +1569,9 @@ export function parseEstruturaCurricularSheet(
 
     if (flags.isExtension || flags.isInternship || flags.isFinalPaper) {
       specialFlags.set(knowId, flags);
+    }
+    if (flags.isExtension) {
+      know.isExtension = true;
     }
 
     current.knowledges = current.knowledges || [];
@@ -1523,6 +1599,15 @@ export function parseEstruturaCurricularSheet(
   });
   linkModularParents(modules);
 
+  const finalizedConcurrent = assignDefaultConcurrentModules(concurrentComponents, modules);
+  if (finalizedConcurrent.length > 0) {
+    warnings.push(
+      `Componentes concomitantes detectados (${finalizedConcurrent
+        .map((c) => c.title)
+        .join(', ')}): fora dos módulos; CH conta no curso. Ajuste os módulos concomitantes se necessário.`
+    );
+  }
+
   if (activeBranch || modules.some((m) => m.branch)) {
     const keys = [...new Set(modules.map((m) => m.branch).filter(Boolean))];
     warnings.push(
@@ -1543,10 +1628,9 @@ export function parseEstruturaCurricularSheet(
 
   hints.structureType = 'modular';
 
-  const disciplines = modules.reduce(
-    (acc, m) => acc + (m.knowledges?.length || m.disciplines?.length || 0),
-    0
-  );
+  const disciplines =
+    modules.reduce((acc, m) => acc + (m.knowledges?.length || m.disciplines?.length || 0), 0) +
+    finalizedConcurrent.length;
 
   if (modules.length === 0) {
     warnings.push('Nenhum módulo foi identificado na planilha de estrutura curricular.');
@@ -1555,7 +1639,7 @@ export function parseEstruturaCurricularSheet(
     warnings.push('Nenhum conhecimento/componente foi identificado nos módulos.');
   }
 
-  const structure = emptyStructure(resolvedParams, [], modules);
+  const structure = emptyStructure(resolvedParams, [], modules, finalizedConcurrent);
   if (hints.complementaryHours) {
     structure.complementaryTotalHours = hints.complementaryHours;
   }

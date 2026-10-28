@@ -4,6 +4,7 @@ import {
   ModuleData,
   GraduateProfileAspect,
   ModuleCompetenceItem,
+  ConcurrentComponent,
   getGraduateProfileAspects,
   normalizeModuleCompetences,
   aspectShortLabel,
@@ -11,6 +12,11 @@ import {
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { showsModuleMeetings } from '../services/workloadSummary';
 import { sumModuleComponentHours } from '../utils/modularComponents';
+import {
+  concurrentAsModuleData,
+  formatConcurrentWithCaption,
+  getConcurrentChBreakdown,
+} from '../utils/concurrentComponents';
 
 const CARD_W = 'w-[168px]';
 
@@ -314,6 +320,93 @@ function ModuleBox({
   );
 }
 
+/** Envelope âmbar — componente concomitante no mapa de competências. */
+function ConcurrentBox({
+  item,
+  modules,
+  onToggle,
+  collapsed,
+}: {
+  item: ConcurrentComponent;
+  modules: ModuleData[];
+  onToggle?: () => void;
+  collapsed?: boolean;
+}) {
+  const bd = getConcurrentChBreakdown(item);
+  return (
+    <button
+      type="button"
+      data-map-toggle="concurrent"
+      data-map-role="concomitante"
+      aria-expanded={!collapsed}
+      title={collapsed ? 'Mostrar competências e perfis' : 'Ocultar competências e perfis'}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle?.();
+      }}
+      className={`relative z-10 ${CARD_W} rounded-xl bg-gradient-to-b from-amber-500 to-orange-600 text-center shadow-md shadow-amber-900/25 cursor-pointer hover:brightness-110 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#002B49]/50 ${
+        collapsed ? 'ring-1 ring-[#002B49]/40' : ''
+      }`}
+    >
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#002B49] pointer-events-none" />
+      <div className="relative z-10 px-3 py-2.5">
+        <p className="text-[9px] font-bold uppercase tracking-wider text-amber-100/90 mb-1">
+          Concomitante
+        </p>
+        <CardText align="center" className="text-[12px] text-white line-clamp-3">
+          {item.title}
+        </CardText>
+        <p className="text-[10px] text-amber-50/90 mt-1 font-medium leading-snug">{bd.total}h</p>
+        <p className="text-[8px] text-amber-100/80 mt-1 leading-snug line-clamp-2">
+          {formatConcurrentWithCaption(item.concurrentWithModuleNumbers || [], modules)}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+const ConcurrentCompetenceSide: React.FC<{
+  item: ConcurrentComponent;
+  modules: ModuleData[];
+  aspects: GraduateProfileAspect[];
+  aspectIndex: Map<string, number>;
+  dir: Dir;
+}> = ({ item, modules, aspects, aspectIndex, dir }) => {
+  const [bodyHidden, setBodyHidden] = useState(false);
+  const asMod = concurrentAsModuleData(item);
+  const box = (
+    <ConcurrentBox
+      item={item}
+      modules={modules}
+      collapsed={bodyHidden}
+      onToggle={() => setBodyHidden((v) => !v)}
+    />
+  );
+  const branches = (
+    <ModuleCompetenceBranches
+      mod={asMod}
+      aspects={aspects}
+      aspectIndex={aspectIndex}
+      dir={dir}
+      bodyHidden={bodyHidden}
+    />
+  );
+  if (dir === 'ltr') {
+    return (
+      <>
+        <div className="flex items-center justify-center self-center">{box}</div>
+        <div className="flex items-center justify-start min-w-0 self-center">{branches}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="flex items-center justify-end min-w-0 self-center">{branches}</div>
+      <div className="flex items-center justify-center self-center">{box}</div>
+    </>
+  );
+};
+
 type LinkedProfile = { asp: GraduateProfileAspect; i: number };
 
 const CompetenceBranch: React.FC<{
@@ -536,6 +629,7 @@ const MirroredModuleRows: React.FC<{
 export function CompetencesMapLegend() {
   const items = [
     { color: 'bg-[#c45a1a]', label: 'Módulo' },
+    { color: 'bg-amber-500', label: 'Concomitante' },
     { color: 'bg-[#002B49]', label: 'Competência' },
     { color: 'bg-[#f3ebe0] border border-[#c4b5a0]/60', label: 'Perfil do Egresso' },
   ];
@@ -567,6 +661,7 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
   structure,
 }) => {
   const modules = structure.modules || [];
+  const concurrent = structure.concurrentComponents || [];
   const aspects = useMemo(() => getGraduateProfileAspects(structure), [structure]);
   const aspectIndex = useMemo(
     () => new Map(aspects.map((a, i) => [a.id, i])),
@@ -580,7 +675,7 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
     if (branches.length === 0) return [];
     const numbers = Array.from(
       new Set(branches.flatMap((b) => b.modules.map((m) => m.number)))
-    ).sort((a, b) => a - b);
+    ).sort((a, b) => Number(a) - Number(b));
     return numbers.map((num) => ({
       number: num,
       modules: branches
@@ -675,6 +770,65 @@ export const CompetencesCurriculumMap: React.FC<CompetencesCurriculumMapProps> =
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+      {concurrent.length > 0 && (
+        <div className="w-max max-w-none min-w-full space-y-3">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800/80 px-1 text-center">
+            Componentes concomitantes
+          </p>
+          <div className="flex flex-col gap-14 items-stretch">
+            {(() => {
+              const pairs: Array<{
+                left?: ConcurrentComponent;
+                right?: ConcurrentComponent;
+              }> = [];
+              for (let i = 0; i < concurrent.length; i += 2) {
+                pairs.push({ left: concurrent[i], right: concurrent[i + 1] });
+              }
+              return pairs.map((pair, idx) => (
+                <div
+                  key={pair.left?.id || pair.right?.id || idx}
+                  className="grid w-full items-center"
+                  style={{
+                    gridTemplateColumns:
+                      '168px minmax(min-content, 1fr) 2.5rem minmax(min-content, 1fr) 168px',
+                  }}
+                  data-map-pair="concurrent"
+                >
+                  {pair.left ? (
+                    <ConcurrentCompetenceSide
+                      item={pair.left}
+                      modules={modules}
+                      aspects={aspects}
+                      aspectIndex={aspectIndex}
+                      dir="ltr"
+                    />
+                  ) : (
+                    <>
+                      <div />
+                      <div />
+                    </>
+                  )}
+                  <div className="w-10 justify-self-center" aria-hidden />
+                  {pair.right ? (
+                    <ConcurrentCompetenceSide
+                      item={pair.right}
+                      modules={modules}
+                      aspects={aspects}
+                      aspectIndex={aspectIndex}
+                      dir="rtl"
+                    />
+                  ) : (
+                    <>
+                      <div />
+                      <div />
+                    </>
+                  )}
+                </div>
+              ));
+            })()}
           </div>
         </div>
       )}

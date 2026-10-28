@@ -8,6 +8,7 @@ import {
 import { getModularComponents } from '../utils/modularComponents';
 import { moduleCountsTowardStructureTotals } from '../utils/modularBranches';
 import { formatModuleName, toRoman, formatBranchLabel } from '../utils/roman';
+import { concurrentToDiscipline } from '../utils/concurrentComponents';
 
 export interface WorkloadSummaryRow {
   id: string;
@@ -40,10 +41,14 @@ function collectDisciplines(structure: CurriculumStructure): Discipline[] {
   }
   if (structure.structureType === 'modular' && structure.modules) {
     const modules = structure.modules;
-    return modules
+    const fromModules = modules
       .filter((m) => moduleCountsTowardStructureTotals(m, modules))
       .flatMap((m) => getModularComponents(m))
       .map((d) => withStructurePresentialFlags(d, structure));
+    const fromConcurrent = (structure.concurrentComponents || []).map((c) =>
+      withStructurePresentialFlags(concurrentToDiscipline(c), structure)
+    );
+    return [...fromModules, ...fromConcurrent];
   }
   return [];
 }

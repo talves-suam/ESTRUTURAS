@@ -481,6 +481,34 @@ export function calculateStructureTotals(structure: CurriculumStructure): Curric
     });
   }
 
+  // Componentes concomitantes (Estágio / Projeto Final fora dos módulos)
+  (structure.concurrentComponents || []).forEach((c) => {
+    if (c.type === 'Optativa') return;
+    const disc = {
+      id: c.id,
+      code: c.code || '',
+      name: c.name || c.title,
+      type: c.type || ('Obrigatória' as const),
+      credits: 0,
+      hours: Number(c.hours) || 0,
+      modalityDelivery: c.modalityDelivery || ('presencial' as const),
+      chPresential: c.chPresential,
+      chSyncMediated: c.chSyncMediated,
+      chAsync: c.chAsync,
+      isInternship: c.kind === 'internship' || undefined,
+      isFinalPaper: c.kind === 'finalPaper' || undefined,
+    };
+    const bd = getDisciplineChBreakdown(withStructurePresentialFlags(disc, structure));
+    const hours = bd.total;
+    totalHours += hours;
+    coreHours += hours;
+    presentialHours += bd.presential;
+    eadHours += bd.syncMediated + bd.async + (bd.sync || 0);
+    if (c.kind === 'internship' || disc.isInternship) {
+      internshipHours += hours;
+    }
+  });
+
   // Atividades Complementares (não inventar 100h se o campo estiver vazio)
   const complementaryHours = Number(structure.complementaryTotalHours) || 0;
   const compMod = structure.complementaryModality || 'presencial';

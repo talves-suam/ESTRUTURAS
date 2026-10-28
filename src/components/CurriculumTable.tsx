@@ -45,6 +45,10 @@ import { getSaberesLabels, matchesSaberesColumn } from '../utils/nomenclature';
 import { formatModuleName, formatBranchLabel } from '../utils/roman';
 import { getModularComponents, sumModuleComponentHours } from '../utils/modularComponents';
 import {
+  formatConcurrentWithCaption,
+  getConcurrentChBreakdown,
+} from '../utils/concurrentComponents';
+import {
   showsModuleMeetings,
   buildModuleMeetingsSummary,
   summaryPairGridClass,
@@ -1007,6 +1011,49 @@ export const CurriculumTable: React.FC<CurriculumTableProps> = ({
                     </div>
                   );
                 })}
+
+                {(structure.concurrentComponents || []).length > 0 && (
+                  <div className="space-y-3 mt-2">
+                    {(structure.concurrentComponents || []).map((c) => {
+                      const bd = getConcurrentChBreakdown(c);
+                      return (
+                        <div
+                          key={c.id}
+                          className="bg-white rounded-xl border border-amber-200 ring-1 ring-amber-100 shadow-sm overflow-hidden"
+                        >
+                          <div className="bg-amber-700 text-white px-5 py-3 flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <h4 className="font-bold text-[17px] text-white">{c.title}</h4>
+                              <p className="text-[12px] text-amber-100 mt-0.5">
+                                {formatConcurrentWithCaption(
+                                  c.concurrentWithModuleNumbers || [],
+                                  structure.modules
+                                )}
+                              </p>
+                            </div>
+                            <span className="text-[17px] font-black text-white bg-white/15 px-3 py-1 rounded">
+                              {bd.total}h
+                            </span>
+                          </div>
+                          <div className="px-5 py-3 text-[14px] text-slate-700 flex flex-wrap gap-4">
+                            <span>
+                              <strong className="text-slate-500 font-semibold">Presencial:</strong>{' '}
+                              {bd.presential}h
+                            </span>
+                            <span>
+                              <strong className="text-slate-500 font-semibold">Sínc.-Mediado:</strong>{' '}
+                              {bd.syncMediated + (bd.sync || 0)}h
+                            </span>
+                            <span>
+                              <strong className="text-slate-500 font-semibold">Assíncrono:</strong>{' '}
+                              {bd.async}h
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </>

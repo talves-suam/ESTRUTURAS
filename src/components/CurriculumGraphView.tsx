@@ -16,6 +16,8 @@ import {
   isFilledComponentCode,
 } from '../types/curriculum';
 import { getModularComponents, sumModuleComponentHours } from '../utils/modularComponents';
+import { getConcurrentChBreakdown } from '../utils/concurrentComponents';
+import type { ConcurrentComponent } from '../types/curriculum';
 import {
   Table as TableIcon,
   FileText,
@@ -46,7 +48,7 @@ import {
   librasOptativaKindLabel,
 } from '../services/workloadSummary';
 import { labelForCategory } from '../utils/nomenclature';
-import { formatModuleName, formatBranchLabel } from '../utils/roman';
+import { formatModuleName, formatBranchLabel, toRoman } from '../utils/roman';
 
 type GraphMapMode = 'pedagogical' | 'competences';
 
@@ -269,6 +271,74 @@ function Stem({ direction }: { direction: 'up' | 'down' }) {
   );
 }
 
+function concurrentShortLabel(c: ConcurrentComponent): string {
+  const t = (c.title || c.name || '').trim();
+  if (!t) return 'Concomitante';
+  if (/est[aá]gio/i.test(t)) return 'Estágio';
+  if (/tcc|projeto|trabalho final|gradua/i.test(t)) return 'TCC';
+  return t.length > 14 ? `${t.slice(0, 13)}…` : t;
+}
+
+/** Card lateral — fora da coluna de saberes, alinhado a Libras. */
+function ConcurrentSideCard({
+  item,
+  showSaberes,
+  nomenclature = 'cha',
+}: {
+  item: ConcurrentComponent;
+  showSaberes?: boolean;
+  nomenclature?: AppSettings['pedagogicalNomenclature'];
+}) {
+  const bd = getConcurrentChBreakdown(item);
+  const nums = [...(item.concurrentWithModuleNumbers || [])].sort((a, b) => a - b);
+  const saberes = item.competencies || [];
+  return (
+    <div
+      className="w-[188px] rounded-xl border border-amber-400/80 bg-gradient-to-br from-amber-50 to-orange-50 px-2.5 py-2 shadow-sm"
+      data-map-layer="concomitantes"
+      title="Componente cursado concomitantemente com um dos módulos marcados"
+    >
+      <p className="text-[9px] font-bold uppercase tracking-wide text-amber-800/85">
+        Concomitante
+      </p>
+      <div className="flex items-start justify-between gap-1.5 mt-0.5">
+        <p className="text-[12px] font-bold text-[#002B49] leading-snug">{item.title}</p>
+        <span className="text-[11px] font-black tabular-nums text-[#FF6B00] shrink-0">
+          {bd.total}h
+        </span>
+      </div>
+      {nums.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <span className="text-[8px] font-semibold uppercase tracking-wide text-amber-900/60">
+            com
+          </span>
+          {nums.map((n) => (
+            <span
+              key={n}
+              className="inline-flex items-center justify-center min-w-[1.4rem] px-1 py-0.5 rounded-md bg-[#002B49] text-[9px] font-black text-amber-100 tabular-nums"
+            >
+              {toRoman(n)}
+            </span>
+          ))}
+        </div>
+      )}
+      {showSaberes && saberes.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1.5 border-t border-amber-200/80 pt-1.5">
+          {saberes.map((s) => (
+            <ItemNode
+              key={s.id}
+              kind="saber"
+              label={labelForCategory(s.category, nomenclature)}
+              name={s.name}
+              category={s.category}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModuleNode({
   mod,
   nodeRef,
@@ -277,6 +347,7 @@ function ModuleNode({
   collapsedSaberes,
   onToggleConhecimentos,
   onToggleSaberes,
+  concurrentLinks = [],
 }: {
   mod: ModuleData;
   nodeRef?: React.Ref<HTMLElement>;
@@ -285,10 +356,13 @@ function ModuleNode({
   collapsedSaberes?: boolean;
   onToggleConhecimentos?: () => void;
   onToggleSaberes?: () => void;
+  /** Rótulos curtos dos concomitantes ligados a este módulo. */
+  concurrentLinks?: string[];
 }) {
   const anyCollapsed =
     (!!onToggleConhecimentos && !!collapsedConhecimentos) ||
     (!!onToggleSaberes && !!collapsedSaberes);
+  const hasConcurrent = concurrentLinks.length > 0;
 
   return (
     <div
@@ -296,7 +370,11 @@ function ModuleNode({
       data-module-anchor
       data-module-id={mod.id}
       className={`relative z-10 w-[168px] rounded-xl bg-[#002B49] text-center shadow-md shadow-[#002B49]/25 transition-[filter,box-shadow] duration-200 ${
-        anyCollapsed ? 'ring-1 ring-[#FF6B00]/50' : ''
+        hasConcurrent
+          ? 'ring-2 ring-amber-400 ring-offset-1 ring-offset-white'
+          : anyCollapsed
+          ? 'ring-1 ring-[#FF6B00]/50'
+          : ''
       }`}
     >
       <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-1 rounded-full bg-[#FF6B00] pointer-events-none z-30" />
@@ -361,6 +439,18 @@ function ModuleNode({
             ? `${sumModuleComponentHours(mod)}h`
             : `${sumModuleComponentHours(mod)}h · ${mod.meetings ?? 0} encontros`}
         </p>
+        {hasConcurrent && (
+          <div className="mt-1.5 flex flex-wrap justify-center gap-1">
+            {concurrentLinks.map((label) => (
+              <span
+                key={label}
+                className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-400 text-[8px] font-black uppercase tracking-wide text-[#002B49]"
+              >
+                ↔ {label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -391,6 +481,9 @@ function ModuleChain({
   nomenclature = 'cha',
   hideMeetings = false,
   showLibrasOptativa = false,
+  concurrentComponents = [],
+  /** Se false, só destaca módulos; cards ficam no painel externo (ex.: abaixo de Libras na bifurcação). */
+  showConcurrentCards = true,
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
@@ -401,12 +494,20 @@ function ModuleChain({
   hideMeetings?: boolean;
   /** Exibe Libras (Optativa) após o último módulo, sem conector. */
   showLibrasOptativa?: boolean;
+  /** Concomitantes ligados visualmente aos módulos desta cadeia. */
+  concurrentComponents?: ConcurrentComponent[];
+  showConcurrentCards?: boolean;
 }) {
   const [collapsedByModule, setCollapsedByModule] = useState<
     Record<string, { conhecimentos?: boolean; saberes?: boolean }>
   >({});
 
   if (modules.length === 0) return null;
+
+  const chainNumbers = new Set(modules.map((m) => m.number));
+  const linkedConcurrent = (concurrentComponents || []).filter((c) =>
+    (c.concurrentWithModuleNumbers || []).some((n) => chainNumbers.has(n))
+  );
 
   const showTop = showConhecimentos;
   const showBottom = showSaberes;
@@ -417,15 +518,22 @@ function ModuleChain({
     .join(' ');
 
   const showLibrasTrail = !!showLibrasOptativa;
+  const showSideRail =
+    showLibrasTrail || (showConcurrentCards && linkedConcurrent.length > 0);
 
   const colTemplate = [
     ...modules.map((_, i) => (i < modules.length - 1 ? '188px auto' : '188px')),
-    ...(showLibrasTrail ? (['12px', '188px'] as string[]) : []),
+    ...(showSideRail ? (['16px', '188px'] as string[]) : []),
   ].join(' ');
 
   const moduleCol = (idx: number) => idx * 2 + 1;
   const connectorCol = (idx: number) => idx * 2 + 2;
-  const librasCol = modules.length * 2 + 1;
+  const sideCol = modules.length * 2 + 1;
+
+  const linksForModule = (modNumber: number) =>
+    linkedConcurrent
+      .filter((c) => (c.concurrentWithModuleNumbers || []).includes(modNumber))
+      .map(concurrentShortLabel);
 
   const softLayer = (visible: boolean) =>
     `transition-[opacity,filter,transform] duration-300 ease-out ${
@@ -533,6 +641,7 @@ function ModuleChain({
                 onToggleSaberes={
                   showBottom ? () => toggleLayer(mod.id, 'saberes') : undefined
                 }
+                concurrentLinks={linksForModule(mod.number)}
               />
             </div>
             {idx < modules.length - 1 && (
@@ -548,14 +657,30 @@ function ModuleChain({
         );
       })}
 
-      {/* Libras — final do mapa, à direita do último módulo, sem seta */}
-      {showLibrasTrail && (
+      {/* Trilho lateral: Libras + concomitantes (não compete com saberes dos módulos) */}
+      {showSideRail && (
         <div
-          className="flex items-center justify-center px-1"
-          style={{ gridColumn: librasCol, gridRow: moduleRow }}
-          data-map-layer="libras"
+          className="flex flex-col items-center gap-3 self-start px-1"
+          style={{
+            gridColumn: sideCol,
+            gridRow: `${moduleRow} / -1`,
+          }}
+          data-map-layer="side-rail"
         >
-          <LibrasOptativaNode kindLabel={librasOptativaKindLabel('modular')} />
+          {showLibrasTrail && (
+            <div data-map-layer="libras">
+              <LibrasOptativaNode kindLabel={librasOptativaKindLabel('modular')} />
+            </div>
+          )}
+          {showConcurrentCards &&
+            linkedConcurrent.map((c) => (
+              <ConcurrentSideCard
+                key={c.id}
+                item={c}
+                showSaberes={showBottom}
+                nomenclature={nomenclature}
+              />
+            ))}
         </div>
       )}
 
@@ -857,7 +982,7 @@ function TrilhaFormativaLegend({
   onToggleSaberes?: () => void;
 }) {
   const items: Array<{
-    key: 'modulos' | 'conhecimentos' | 'saberes';
+    key: 'modulos' | 'conhecimentos' | 'saberes' | 'concomitantes';
     color: string;
     label: string;
     active?: boolean;
@@ -866,6 +991,12 @@ function TrilhaFormativaLegend({
     include: boolean;
   }> = [
     { key: 'modulos', color: 'bg-[#002B49]', label: 'Módulos', include: true },
+    {
+      key: 'concomitantes',
+      color: 'bg-amber-400',
+      label: 'Concomitante',
+      include: true,
+    },
     {
       key: 'conhecimentos',
       color: 'bg-slate-400',
@@ -951,6 +1082,7 @@ function ModularCurriculumMap({
   nomenclature = 'cha',
   hideMeetings = false,
   showLibrasOptativa = false,
+  concurrentComponents = [],
 }: {
   modules: ModuleData[];
   showConhecimentos: boolean;
@@ -960,6 +1092,7 @@ function ModularCurriculumMap({
   nomenclature?: AppSettings['pedagogicalNomenclature'];
   hideMeetings?: boolean;
   showLibrasOptativa?: boolean;
+  concurrentComponents?: ConcurrentComponent[];
 }) {
   const { trunk, branches } = useMemo(() => partitionModules(modules), [modules]);
 
@@ -977,6 +1110,29 @@ function ModularCurriculumMap({
     (branches.length > 1 ? branches.find((b) => b !== upperBranch) || null : null);
   const extraBranches = branches.filter((b) => b !== upperBranch && b !== lowerBranch);
   const hasFork = branches.length > 0;
+
+  /** Cada concomitante aparece em uma única cadeia (evita duplicar nas ênfases). */
+  const concurrentOwner = useMemo(() => {
+    const map = new Map<string, string>();
+    concurrentComponents.forEach((c) => {
+      const nums = new Set(c.concurrentWithModuleNumbers || []);
+      const trunkHits = displayTrunk.filter((m) => nums.has(m.number)).length;
+      let bestKey = 'trunk';
+      let bestHits = trunkHits;
+      branches.forEach((b) => {
+        const hits = b.modules.filter((m) => nums.has(m.number)).length;
+        if (hits > bestHits) {
+          bestHits = hits;
+          bestKey = b.key;
+        }
+      });
+      if (bestHits > 0) map.set(c.id, bestKey);
+    });
+    return map;
+  }, [concurrentComponents, displayTrunk, branches]);
+
+  const concurrentFor = (owner: string) =>
+    concurrentComponents.filter((c) => concurrentOwner.get(c.id) === owner);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const trunkEndRef = useRef<HTMLDivElement>(null);
@@ -1014,8 +1170,8 @@ function ModularCurriculumMap({
     }
     setForkPaths(next);
 
-    // Libras: mesma altura do último módulo do tronco, à direita das ênfases
-    if (showLibrasOptativa && hasFork) {
+    // Painel lateral (Libras + concomitantes): à direita das ênfases, altura do tronco
+    if (hasFork && (showLibrasOptativa || concurrentComponents.length > 0)) {
       const emph = emphasesColRef.current?.getBoundingClientRect();
       const left = (emph ? emph.right : f.right) - c.left + 28;
       const top = f.top + f.height / 2 - c.top;
@@ -1023,7 +1179,7 @@ function ModularCurriculumMap({
     } else {
       setLibrasPos(null);
     }
-  }, [showLibrasOptativa, hasFork]);
+  }, [showLibrasOptativa, hasFork, concurrentComponents.length]);
 
   useLayoutEffect(() => {
     redrawFork();
@@ -1115,6 +1271,7 @@ function ModularCurriculumMap({
               nomenclature={nomenclature}
               hideMeetings={hideMeetings}
               showLibrasOptativa={showLibrasOptativa}
+              concurrentComponents={concurrentFor('trunk')}
             />
           ) : (
             <div
@@ -1122,10 +1279,11 @@ function ModularCurriculumMap({
               style={{
                 gridTemplateColumns: 'auto auto',
                 gridTemplateRows: 'auto auto auto',
-                paddingRight: showLibrasOptativa ? 200 : undefined,
+                paddingRight:
+                  showLibrasOptativa || concurrentComponents.length > 0 ? 220 : undefined,
               }}
             >
-              {/* Tronco — módulos alinhados entre si (sem Libras: ela vai após as ênfases) */}
+              {/* Tronco — módulos alinhados entre si (Libras/concomitantes no painel à direita) */}
               <div className="row-span-3 flex items-center self-center">
                 <ModuleChain
                   modules={displayTrunk}
@@ -1135,10 +1293,12 @@ function ModularCurriculumMap({
                   hideMeetings={hideMeetings}
                   showLibrasOptativa={false}
                   lastModuleRef={trunkEndRef}
+                  concurrentComponents={concurrentComponents}
+                  showConcurrentCards={false}
                 />
               </div>
 
-              {/* Coluna das ênfases (medida para posicionar Libras à direita) */}
+              {/* Coluna das ênfases (medida para posicionar painel lateral) */}
               <div
                 ref={emphasesColRef}
                 className="row-span-3 col-start-2 grid gap-y-8 items-center"
@@ -1154,6 +1314,8 @@ function ModularCurriculumMap({
                         nomenclature={nomenclature}
                         hideMeetings={hideMeetings}
                         firstModuleRef={upperStartRef}
+                        concurrentComponents={concurrentComponents}
+                        showConcurrentCards={false}
                       />
                       <BranchLaneLabel
                         lane="cima"
@@ -1179,6 +1341,8 @@ function ModularCurriculumMap({
                         nomenclature={nomenclature}
                         hideMeetings={hideMeetings}
                         firstModuleRef={lowerStartRef}
+                        concurrentComponents={concurrentComponents}
+                        showConcurrentCards={false}
                       />
                     </>
                   )}
@@ -1194,6 +1358,8 @@ function ModularCurriculumMap({
                         showSaberes={showSaberes}
                         nomenclature={nomenclature}
                         hideMeetings={hideMeetings}
+                        concurrentComponents={concurrentComponents}
+                        showConcurrentCards={false}
                       />
                     </div>
                   ))}
@@ -1202,22 +1368,36 @@ function ModularCurriculumMap({
             </div>
           )}
 
-          {/* Libras após ênfases, alinhada ao centro vertical do último módulo do tronco */}
-          {hasFork && showLibrasOptativa && librasPos && (
-            <div
-              className="absolute z-10 pointer-events-none"
-              style={{
-                left: librasPos.left,
-                top: librasPos.top,
-                transform: 'translateY(-50%)',
-              }}
-              data-map-layer="libras"
-            >
-              <div className="pointer-events-auto">
-                <LibrasOptativaNode kindLabel={librasOptativaKindLabel('modular')} />
+          {/* Painel lateral após ênfases: Libras + concomitantes empilhados */}
+          {hasFork &&
+            librasPos &&
+            (showLibrasOptativa || concurrentComponents.length > 0) && (
+              <div
+                className="absolute z-10 pointer-events-none"
+                style={{
+                  left: librasPos.left,
+                  top: librasPos.top,
+                  transform: 'translateY(-50%)',
+                }}
+                data-map-layer="side-rail"
+              >
+                <div className="pointer-events-auto flex flex-col items-center gap-3">
+                  {showLibrasOptativa && (
+                    <div data-map-layer="libras">
+                      <LibrasOptativaNode kindLabel={librasOptativaKindLabel('modular')} />
+                    </div>
+                  )}
+                  {concurrentComponents.map((c) => (
+                    <ConcurrentSideCard
+                      key={c.id}
+                      item={c}
+                      showSaberes={showSaberes}
+                      nomenclature={nomenclature}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </div>
       </PanViewport>
         <TrilhaFormativaLegend
@@ -1577,6 +1757,7 @@ export const CurriculumGraphView: React.FC<CurriculumGraphViewProps> = ({
                     nomenclature={settings.pedagogicalNomenclature}
                     hideMeetings={!!structure.hideMeetings}
                     showLibrasOptativa={!!structure.hasLibrasOptativa}
+                    concurrentComponents={structure.concurrentComponents || []}
                   />
                 </div>
                 <div

@@ -421,6 +421,10 @@ export interface KnowledgeItem {
   description?: string;
   competencyId?: string; // Opcional: vínculo com competência
   type?: Discipline['type'];
+  /** Marca manual de extensão curricular (não inferir só pelo nome). */
+  isExtension?: boolean;
+  /** Marca manual de TCC / projeto final (quando cadastrado dentro do módulo). */
+  isFinalPaper?: boolean;
 }
 
 export interface ModuleData {
@@ -446,6 +450,37 @@ export interface ModuleData {
   knowledges?: KnowledgeItem[]; // Conhecimentos com regras de Presencial, Síncrono-Mediado e Assíncrono
   summary?: string;
   flags?: ComponentDeliveryFlags;
+}
+
+/**
+ * Componente fora da sequência de módulos (ex.: Estágio, Projeto Final),
+ * cursado uma vez, em conjunto com um dos módulos permitidos.
+ * Na planilha oficial aparece ao final, com título próprio (sem “Módulo N”).
+ */
+export type ConcurrentComponentKind = 'internship' | 'finalPaper' | 'other';
+
+export interface ConcurrentComponent {
+  id: string;
+  /** Título do bloco na matriz (ex.: “Estágio Supervisionado”). */
+  title: string;
+  kind: ConcurrentComponentKind;
+  code?: string;
+  name: string;
+  type: Discipline['type'];
+  hours: number;
+  modalityDelivery?: DeliveryModalityFlag;
+  chPresential?: number;
+  chSyncMediated?: number;
+  chAsync?: number;
+  /** Números dos módulos com os quais pode ser cursado (ex.: 8, 9, 10). */
+  concurrentWithModuleNumbers: number[];
+  /**
+   * Competências pedagógicas vinculadas ao perfil do egresso
+   * (mesmo modelo dos módulos — mapa de competências).
+   */
+  competences?: ModuleCompetenceItem[];
+  /** Saberes CHA / Zabala (mesma lista dos módulos). */
+  competencies?: CompetencyCHA[];
 }
 
 /** Trecho/aspecto do Perfil do Egresso (cadastrado separadamente). */
@@ -707,6 +742,12 @@ export interface CurriculumStructure {
    * Não entra na CH total do curso.
    */
   hasLibrasOptativa?: boolean;
+
+  /**
+   * Componentes concomitantes (Estágio / Projeto Final etc.) fora dos módulos.
+   * Contam na CH do curso; não entram na CH de nenhum módulo.
+   */
+  concurrentComponents?: ConcurrentComponent[];
 
   // Totais Calculados em Tempo Real
   calculatedTotalHours: number;
